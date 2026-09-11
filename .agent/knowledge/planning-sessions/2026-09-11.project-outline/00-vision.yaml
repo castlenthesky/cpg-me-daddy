@@ -504,5 +504,6 @@ next_steps:
   - Research R1–R5 complete 2026-09-11 — reports in ./research/, distilled in 40-research.yaml (7 amendments, 7 confirmations, adopted defaults, 14 spikes).
   - Visionary to confirm AM1 (id scheme without file hash), AM3 (which analytics tools make the 12), and the packages/engine+cli+vscode layout.
   - Then: architecture design for M0 (clean graph of ast-demo), starting with spikes SP1, SP2, SP3, SP11.
+  - North-star candidates logged in 50-north-star.yaml (7 themes, 29 ideas, 3 tensions); visionary to answer NS-Q1–Q3.
   - Turn the eval harness (X10) into a concrete seeded-bug catalogue tied to ast-demo.
   - Research items R1–R4 before architecture work begins.
