@@ -467,6 +467,13 @@ decisions:
   - { id: D28, text: "TypeScript adapter covers the whole family (.ts/.tsx/.js/.jsx/.mts/.cts/.mjs/.cjs); SFCs deferred.", source: GE-Q1 }
   - { id: D29, text: "Query History (optional, off by default): humans can replay exactly which nodes/edges each agent query returned.", source: VZ-Q4 }
   - { id: D30, text: "Visualization ships as separate relocatable VS Code views; Graph view also opens as an editor tab.", source: VZ-Q2 }
+  # Research-driven (2026-09-11, see 40-research.yaml). Marked agreed-by-evidence; visionary may override.
+  - { id: D31, text: "Node ids: path:kind:qualifiedScopePath[:ordinal|:bodyHash]; NO file content hash in ids. Supersedes README design rule 1's id formula.", source: R4/AM1 }
+  - { id: D32, text: "web-tree-sitter (wasm) for daemon and VSIX; grammars typescript/tsx/javascript/python; trees cached only for open docs + LRU.", source: R4 }
+  - { id: D33, text: "@parcel/watcher as the daemon's watcher; VS Code events are hints only.", source: R1 }
+  - { id: D34, text: "SYMBOL.fqn uses SCIP descriptor grammar with scheme/package/version as properties; SCIP indexers are the golden oracle, TS compiler API is the live precise upgrade path.", source: R2/AM4/AM5 }
+  - { id: D35, text: "MCP shim is dual-era (SDK v2 serveStdio), takes --workspace explicitly, answers handshake before engine attach, exposes ≤ 12 tools.", source: R3/AM3/AM6 }
+  - { id: D36, text: "Detached CLI-owned daemon; extension attaches or spawns, never kills; FalkorDB downloaded with pinned SHA-256 manifest to a user cache; universal VSIX.", source: R5 }
 
 milestones:
   # Agreed 2026-09-11.
@@ -494,7 +501,8 @@ milestones:
 next_steps:
   - Pillar decompositions written and all per-pillar questions agreed — see 10-, 20-, 30-*.yaml.
   - Milestone ladder M0–M4 agreed.
-  - Research R1–R5 delegated 2026-09-11; findings land in ./research/ with a summary in 40-research.yaml.
-  - After research: architecture design for M0 (clean graph of ast-demo).
+  - Research R1–R5 complete 2026-09-11 — reports in ./research/, distilled in 40-research.yaml (7 amendments, 7 confirmations, adopted defaults, 14 spikes).
+  - Visionary to confirm AM1 (id scheme without file hash), AM3 (which analytics tools make the 12), and the packages/engine+cli+vscode layout.
+  - Then: architecture design for M0 (clean graph of ast-demo), starting with spikes SP1, SP2, SP3, SP11.
   - Turn the eval harness (X10) into a concrete seeded-bug catalogue tied to ast-demo.
   - Research items R1–R4 before architecture work begins.

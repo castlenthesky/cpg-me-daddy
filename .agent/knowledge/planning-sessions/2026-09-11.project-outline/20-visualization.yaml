@@ -153,7 +153,7 @@ requirements:
     - { id: VZ-FR12, text: "Views serialisable to/from a small JSON schema; export as MCP call and as Cypher.", status: draft }
     - { id: VZ-FR13, text: "Pane works when the engine is remote/attached (not spawned by this VS Code); read-only over the same IPC as the MCP shim.", status: draft }
     - { id: VZ-FR14, text: "Query History panel (VZ-UC10): list, filter by agent/tool/time, replay an entry as a view showing exactly the returned node/edge ids, with a drift indicator for nodes changed since. Off by default.", status: agreed }
-    - { id: VZ-FR15, text: "Ship as separate VS Code views (Graph, Inspector, Status, Query History) in one view container; every view is relocatable to sidebar, panel, secondary sidebar, or editor area. The Graph view also opens as an editor tab via command.", status: agreed }
+    - { id: VZ-FR15, text: "Ship as separate webview views (Graph, Inspector, Status, Query History) in one view container; users relocate them between primary sidebar, panel, and secondary sidebar (VS Code cannot place webview views in the editor area). The Graph additionally opens as an editor tab via a WebviewPanel with a serializer. Both surfaces render one extension-side store. First-run UI is self-rendered in the Status view (viewsWelcome does not work for webviews). (R5, AM2)", status: agreed-by-evidence }
   non_functional:
     - { id: VZ-NFR1, text: "Initial render of a 1-hop breadcrumb view ≤ 300 ms after cursor settles.", status: draft }
     - { id: VZ-NFR2, text: "Handles a 300-node view at 60 fps on integrated graphics; degrades to static layout above budget.", status: draft }

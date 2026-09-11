@@ -30,6 +30,18 @@ design_principles:
 # ------------------------------------------------------------------------------------------------------
 tools:
   status: draft
+  tool_budget: >
+    AMENDED by R3 (40-research.yaml AM3): expose ≤ 12 tools in v1. Cursor silently drops tools past ~40
+    active across all servers; OpenAI advises < 20 per turn. v1 set = the `must` tools below
+    (find_symbol, get_symbol, file_outline, list_files, callers_of, callees_of, importers_of/imports_of
+    merged into one `imports` tool, impact_of_change, path_between, graph_status, wait_for_ready,
+    query_cypher) + cpg://schema. `should` analytics tools (communities, hotspots, cycles, unresolved,
+    type_hierarchy) fold into one `analyze` tool with a `kind` parameter or ship in v1.x — visionary to pick.
+  protocol_note: >
+    MCP 2026-07-28 is stateless (no initialize/sessions); hosts have not caught up. Shim is dual-era via
+    @modelcontextprotocol/server v2 serveStdio. Explicit --workspace arg (cwd is not the workspace on most
+    hosts). Handshake and tools/list answered from a static manifest before engine attach (Codex 10 s
+    startup timeout). Full shim algorithm in R3 and 40-research.yaml adopted_defaults.mcp. (AM6)
   # Ordered by expected agent value. Each has: purpose, inputs, output shape, backing query, v1 priority.
   navigation:
     - id: find_symbol
