@@ -1,0 +1,257 @@
+# Pillar P1 — Graph engine
+# Decomposition of the headless engine: indexing, incremental update, cascade, catch-up, status, analytics.
+# Parent: 00-vision.yaml. IDs here are prefixed GE-. References to D#/X#/PR# point at the vision file.
+# Status vocabulary: draft (product lead wrote it from the interview) | agreed | rejected | deferred
+
+meta:
+  pillar: P1
+  session_date: 2026-09-11
+  scope_summary: >
+    A standalone process (D8) that builds a sparse CPG (PR1, D23) of a workspace into FalkorDB (D2),
+    keeps it current on every save within 2 s incl. cascade (D17), catches up after being offline (PR3, PR5),
+    exposes explicit per-node status (PR8, D21), and refreshes analytics projections off the hot path (D6).
+    Consumed by the MCP shim (P3) and the VS Code host (P2). Everything runs locally (PR7).
+
+actors:
+  - id: A1
+    name: Engine daemon
+    text: Long-lived process per workspace. Owns the watcher, parser, resolver, DiffGraph writer, DB lifecycle, analytics scheduler, event bus.
+  - id: A2
+    name: Engine CLI
+    text: "`cpg` command: index (one-shot), watch (daemon), status, mcp (shim → P3), doctor. Same code path as the daemon."
+  - id: A3
+    name: VS Code host
+    text: Spawns or attaches to the daemon; forwards editor save events as hints; subscribes to the event bus for the pane (P2).
+  - id: A4
+    name: Readers
+    text: MCP shims (P3) and the pane (P2). Read-only. Must tolerate partial and stale state (D21, D22).
+
+# ------------------------------------------------------------------------------------------------------
+v1_schema:
+  status: draft
+  principle: >
+    Sparse by design (PR1). One node per thing a developer or agent would name; no nodes for syntax.
+    Positions (line/col ranges) are properties for navigation, never part of identity (README rule 1).
+  node_labels:
+    filesystem:
+      - { label: DIRECTORY, props: [path, name, status], id_rule: "dir:<relative path>" }
+      - { label: FILE, props: [path, name, language, content_hash, interface_hash, status, version, indexed_at, loc], id_rule: "file:<relative path>" }
+    code:   # all carry :CPG plus kind label; indexed on CPG.id and CPG.file
+      - { label: MODULE, props: [name, file, range, status], note: "One per file for TS/Py; namespaces/declared modules in TS become nested MODULE." }
+      - { label: TYPE_DECL, props: [name, kind (class|interface|enum|type_alias|protocol|dataclass), file, range, exported, docstring_head, status] }
+      - { label: METHOD, props: [name, kind (function|method|constructor|getter|setter|lambda_named), signature, params_count, file, range, exported, async, docstring_head, status], note: "Free functions and methods share the label; parent edge disambiguates." }
+      - { label: PARAM, props: [name, ordinal, type_text, default, file] }
+      - { label: MEMBER, props: [name, type_text, file, range, visibility], note: "Class fields / dataclass attributes / module-level constants." }
+      - { label: CALL, props: [callee_name, receiver_text, args_count, resolved (bool), file, range, kind (call|new|decorator|await)], note: "Args/literals folded into props (README rule 3). Never a bare-name SYMBOL for unresolved (README rule 2)." }
+      - { label: IMPORT, props: [source_text, "imported_names (list)", alias, is_type_only, "resolved (bool)", file, range] }
+    identity:
+      - { label: SYMBOL, props: [fqn, kind, language], note: "Not :CPG, no file. SCIP-style. Survives per-file replace by construction (D5)." }
+    analytics:
+      - { label: COMMUNITY, props: [algorithm, run_id, size, cohesion, computed_at, label_hint], note: "label_hint is a deterministic string (e.g. top-3 member names), not an LLM label (D15)." }
+  edge_types:
+    - { type: CONTAINS, from: DIRECTORY, to: [DIRECTORY, FILE], note: "Filesystem layer only. Code nesting uses DECLARES; file membership is the `file` property." }
+    - { type: DECLARES, from: [MODULE, TYPE_DECL, METHOD], to: [TYPE_DECL, METHOD, MEMBER], note: "Lexical nesting." }
+    - { type: HAS_PARAM, from: METHOD, to: PARAM }
+    - { type: DEFINES, from: [TYPE_DECL, METHOD, MEMBER, MODULE], to: SYMBOL }
+    - { type: CALLS, from: CALL, to: SYMBOL, props: [confidence] }
+    - { type: IN_METHOD, from: CALL, to: METHOD, note: "Which method body contains the call. Enables callers_of without CFG." }
+    - { type: IMPORTS, from: IMPORT, to: SYMBOL, note: "Per imported name. Module-level wildcard/namespace imports point at the MODULE's SYMBOL." }
+    - { type: EXTENDS, from: TYPE_DECL, to: SYMBOL }
+    - { type: IMPLEMENTS, from: TYPE_DECL, to: SYMBOL }
+    - { type: MEMBER_OF, from: [FILE, METHOD, TYPE_DECL], to: COMMUNITY, props: [run_id] }
+  status_property:
+    text: >
+      Every DIRECTORY/FILE/:CPG node carries `status` ∈ {ready, indexing, stale, error} and FILE carries
+      `version` (monotonic per file). Readers filter or annotate on it (D21, PR8). Dependents marked by an
+      over-budget cascade get `status: stale` and `stale_reason: <file id that changed>`.
+    status: agreed
+  deferred_layers: [CFG (BLOCK/CONTROL_STRUCTURE/RETURN), PDG (REACHING_DEF), expression tier (IDENTIFIER/LITERAL/REF), taint sources/sinks]
+
+# ------------------------------------------------------------------------------------------------------
+use_cases:
+  - id: GE-UC1
+    title: First launch builds the whole graph
+    actor: A1
+    trigger: "`cpg index` / daemon start with no .cpg/data or a schema-version mismatch"
+    narrative: >
+      Discover include roots from cpg.config.yaml or manifests (X11). Walk the tree honouring excludes.
+      Write DIRECTORY/FILE nodes with status=indexing first so readers see coverage immediately (D22).
+      Parse files in a worker pool (tree-sitter), emit per-file DiffGraphs, write in batches. Run a
+      resolution pass (imports → SYMBOL, calls → SYMBOL). Flip FILE.status to ready per file, not at the end.
+      Schedule analytics. Emit index.complete.
+    budget: "≤ 10 min at ~100k LOC (D20)"
+    requirements: [GE-FR1, GE-FR2, GE-FR3, GE-FR10, GE-NFR1]
+    priority: must
+    status: draft
+
+  - id: GE-UC2
+    title: Save one file, graph is current in 2 s including cascade
+    actor: A1
+    trigger: filesystem change event (and/or VS Code save hint)
+    narrative: >
+      Debounce. Compare content_hash; no-op if unchanged. Set FILE.status=indexing (version+1). Incremental
+      tree-sitter reparse using the cached tree (tree.edit). Build the new per-file DiffGraph. Compute new
+      interface_hash. Replace the file's :CPG subgraph in one transaction bracketed by status markers
+      (README rule 5). If interface_hash changed → GE-UC3. Else done. Set status=ready. Emit file.updated.
+    budget: "p95 ≤ 2 s file + cascade on the scale fixture; hard ceiling 5 s (D17)"
+    requirements: [GE-FR4, GE-FR5, GE-FR6, GE-FR11, GE-NFR2]
+    priority: must
+    status: draft
+
+  - id: GE-UC3
+    title: Cascade to dependents, bounded by interface change
+    actor: A1
+    trigger: GE-UC2 detects interface_hash change
+    narrative: >
+      Compute the set of changed SYMBOLs (added/removed/signature-changed). Find dependents via
+      IMPORTS/CALLS/EXTENDS edges into those SYMBOLs only — not every importer of the file. Mark them stale
+      with stale_reason. Re-resolve each dependent (re-parse only if its cached tree is missing). If the
+      remaining work exceeds the budget, return READY for the saved file and drain the stale set in the
+      background with a visible count (D21). GC orphaned SYMBOLs bounded to touched fqns.
+    requirements: [GE-FR6, GE-FR7, GE-FR12]
+    priority: must
+    status: draft
+    references: [X12]
+
+  - id: GE-UC4
+    title: Catch up after being offline
+    actor: A1
+    trigger: daemon start with existing .cpg/data
+    narrative: >
+      Walk the tree, compare disk content_hash vs FILE.content_hash. Unchanged → skip. Changed → GE-UC2.
+      Missing on disk → delete subgraph. New on disk with a content_hash matching a deleted/missing FILE →
+      treat as move (GE-UC5). Then a resolution pass over files whose imports were unresolved.
+    requirements: [GE-FR3, GE-FR8]
+    priority: must
+    status: draft
+
+  - id: GE-UC5
+    title: Rename or move is a relocation
+    actor: A1
+    trigger: watcher rename event, or catch-up hash match
+    narrative: >
+      Update FILE.path/name and DIRECTORY CONTAINS edges. :CPG node ids are content-derived (README rule 1)
+      so they do not change. SYMBOL fqns that embed the module path DO change for TS/Py — re-derive the
+      file's DEFINES/SYMBOL set and re-point IMPORTS from dependents (bounded cascade, GE-UC3).
+    requirements: [GE-FR8, GE-FR12]
+    priority: should
+    status: draft
+    open_question: GE-Q3
+
+  - id: GE-UC6
+    title: Bulk change (git checkout / pull / install / codegen) does not stampede
+    actor: A1
+    trigger: "> bulk_threshold_files events within the debounce window, or a .git/HEAD change"
+    narrative: >
+      Switch to bulk mode: stop per-file processing, collect the changed set, run catch-up (GE-UC4) over
+      that set with the worker pool, one analytics refresh at the end. Emit index.bulk_start/bulk_complete
+      so the pane shows a progress bar and MCP status reports coverage.
+    requirements: [GE-FR9]
+    priority: must
+    status: draft
+    references: [X2]
+
+  - id: GE-UC7
+    title: Readers see explicit state, always
+    actor: A4
+    narrative: >
+      A reader can query at any time (D21). Every returned node carries status. The engine exposes a
+      status document: coverage (% files ready), counts by status, active cascades and their stale counts,
+      last event timestamps, schema version, engine version, DB health.
+    requirements: [GE-FR10, GE-FR13]
+    priority: must
+    status: draft
+
+  - id: GE-UC8
+    title: Analytics projections stay fresh off the hot path
+    actor: A1
+    trigger: idle after updates, or explicit request
+    narrative: >
+      Build projections (import graph over FILE/MODULE; call graph over METHOD via CALLS→SYMBOL←DEFINES).
+      Run community detection (Louvain/Leiden) and centrality (PageRank, betweenness, in/out degree).
+      Store results as COMMUNITY nodes + MEMBER_OF edges and centrality properties tagged with run_id.
+      Never on the save path. Invalidate only affected communities where feasible; full recompute otherwise.
+    requirements: [GE-FR14, GE-NFR3]
+    priority: should
+    status: draft
+    references: [D6, D15]
+
+  - id: GE-UC9
+    title: Configure what is indexed
+    actor: A2/A3
+    narrative: >
+      Zero-config default discovers roots from package.json workspaces / pyproject / tsconfig and excludes
+      from .gitignore plus built-ins. cpg.config.yaml overrides. `cpg doctor` prints the effective config.
+    requirements: [GE-FR1, GE-FR2]
+    priority: must
+    status: draft
+    references: [X11]
+
+  - id: GE-UC10
+    title: Daemon and DB lifecycle
+    actor: A1/A2/A3
+    narrative: >
+      One daemon per workspace, discoverable via .cpg/engine.json (pid, port, version). Second starter
+      attaches instead of spawning. Daemon spawns FalkorDB (downloaded per X14) or connects to remote/docker
+      per config. Idle shutdown after configurable minutes with no readers. Clean shutdown persists DB.
+    requirements: [GE-FR15, GE-FR16]
+    priority: must
+    status: draft
+    references: [README rule 8, X14]
+
+# ------------------------------------------------------------------------------------------------------
+requirements:
+  functional:
+    - { id: GE-FR1,  text: "Discover include roots from cpg.config.yaml, else from manifests (package.json workspaces, pyproject/uv workspaces, tsconfig references/paths), else workspace root.", status: draft }
+    - { id: GE-FR2,  text: "Exclude set = built-in defaults ∪ .gitignore ∪ config excludes. Include always wins over exclude for explicitly listed paths.", status: draft }
+    - { id: GE-FR3,  text: "Per-file content_hash (SHA-256 of bytes) stored on FILE; no reparse when unchanged.", status: draft }
+    - { id: GE-FR4,  text: "Debounced change intake (default 150 ms) with coalescing of repeated events for the same path.", status: draft }
+    - { id: GE-FR5,  text: "Incremental reparse via cached tree-sitter tree + tree.edit; fall back to full parse if cache missing or edit ranges unavailable.", status: draft }
+    - { id: GE-FR6,  text: "Per-file interface_hash = hash of exported symbol set (name, kind, signature text, re-exports). Cascade only when it changes.", status: draft }
+    - { id: GE-FR7,  text: "Cascade targets = dependents with IMPORTS/CALLS/EXTENDS/IMPLEMENTS edges into the changed SYMBOLs, not all importers of the file.", status: draft }
+    - { id: GE-FR8,  text: "Move detection: content_hash match between a disappeared and an appeared path within one catch-up or bulk window → relocation.", status: draft }
+    - { id: GE-FR9,  text: "Bulk mode triggers on > N changed files (default 50) or .git/HEAD change; suppresses per-file analytics; single refresh at end.", status: draft }
+    - { id: GE-FR10, text: "DIRECTORY/FILE nodes are written before parsing so coverage is visible during first launch (D22).", status: draft }
+    - { id: GE-FR11, text: "Per-file replace is a single transaction bracketed by FILE.status/version markers; readers can detect a torn read by version mismatch.", status: draft }
+    - { id: GE-FR12, text: "SYMBOL GC after each replace, bounded to fqns touched in that replace (README rule 2).", status: draft }
+    - { id: GE-FR13, text: "Status document available over a local IPC endpoint and via `cpg status`: coverage, counts by status, active cascades, stale counts, versions, DB health.", status: draft }
+    - { id: GE-FR14, text: "Analytics results carry run_id and computed_at; readers can tell how old a community/centrality figure is.", status: draft }
+    - { id: GE-FR15, text: "Single daemon per workspace enforced by lock file; attach-if-running semantics for CLI and host.", status: draft }
+    - { id: GE-FR16, text: "DB modes: spawned (download pinned FalkorDB, X14), remote (host/port/auth), docker. Windows: remote/docker only until native builds.", status: draft }
+    - { id: GE-FR17, text: "Event bus (local IPC) emitting: index.start/progress/complete, file.updated, cascade.start/progress/complete, analytics.complete, engine.error. Consumed by P2 and P3.", status: draft }
+    - { id: GE-FR18, text: "Schema version stamped in the graph; mismatch on start → full rebuild (PR3).", status: draft }
+    - { id: GE-FR19, text: "Language adapters behind one interface (parse, extract declarations/imports/calls, compute interface_hash, fqn rules). v1 adapters: TypeScript (incl. TSX/JS/JSX?), Python.", status: draft, open_question: GE-Q1 }
+    - { id: GE-FR20, text: "Resolution is pluggable: v1 = adapter-native resolution (tsconfig paths/module resolution for TS; package/relative import rules for Py). SCIP/LSP resolvers are a later plug-in (X3).", status: draft, open_question: GE-Q2 }
+  non_functional:
+    - { id: GE-NFR1, text: "First launch ≤ 10 min at ~100k LOC on the scale fixture, measured wall-clock on a laptop-class machine.", source: D20 }
+    - { id: GE-NFR2, text: "Save-to-ready (file + cascade) p95 ≤ 2 s, p100 ≤ 5 s on the scale fixture. Body-only edits must cascade to zero files.", source: D17 }
+    - { id: GE-NFR3, text: "Analytics never runs on the save path; a save is never delayed by a running analytics job.", source: D6 }
+    - { id: GE-NFR4, text: "Reader queries (RO_QUERY) p95 ≤ 150 ms under concurrent writes (README fallback trigger).", source: README }
+    - { id: GE-NFR5, text: "No unbounded memory growth under 1 h of continuous churn on the scale fixture.", source: README }
+    - { id: GE-NFR6, text: "Zero network egress except the pinned FalkorDB download (X14). No telemetry.", source: PR7 }
+    - { id: GE-NFR7, text: "Golden graph snapshot of ast-demo checked in; CI diff on every change to adapters or schema (X10 revision).", source: D18 }
+
+# ------------------------------------------------------------------------------------------------------
+open_questions:
+  - id: GE-Q1
+    q: "TypeScript adapter scope — does v1 include plain JavaScript, JSX/TSX, and Vue/Svelte SFC script blocks, or strictly .ts/.tsx?"
+    recommendation: ".ts/.tsx/.js/.jsx via the same tree-sitter grammar family; SFCs deferred."
+    status: open
+  - id: GE-Q2
+    q: "Resolution quality bar for v1 — is adapter-native resolution (no type checker) acceptable, knowing method calls on inferred receivers (`repo.save()`) will often be unresolved? Or is a TS type-checker-backed resolver (tsc API / SCIP) required for the 95 % bug eval?"
+    recommendation: "Ship adapter-native first, measure unresolved-call rate on ast-demo, decide before the eval is finalised. Design the resolver seam now."
+    status: open
+  - id: GE-Q3
+    q: "Should SYMBOL fqn embed the module path (SCIP does) so a move changes fqns, or use a stable per-symbol id with path as a property? Trade-off: SCIP compatibility vs cheaper moves."
+    recommendation: "Embed path (SCIP-compatible); accept that moves cascade to importers — they genuinely changed."
+    status: open
+  - id: GE-Q4
+    q: "How does the daemon learn about VS Code saves — filesystem watcher only, or also an explicit save hint from the host to skip debounce and beat the watcher?"
+    recommendation: "Both. Watcher is the source of truth (works headless); the host hint is an optimisation."
+    status: open
+  - id: GE-Q5
+    q: "Should first launch prioritise files the user has open / recently edited so the agent's likely targets are ready first?"
+    recommendation: "Yes — cheap win; host passes open editors as a priority list."
+    status: open
+
+out_of_scope_v1: [CFG, PDG, taint sources/sinks, persisted labels/annotations (X9), layer rules and violations (D16), SCIP/LSP resolvers (design the seam only), Windows native DB, remote/multi-user graph]
