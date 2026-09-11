@@ -220,8 +220,9 @@ requirements:
     - { id: GE-FR16, text: "DB modes: spawned (download pinned FalkorDB, X14), remote (host/port/auth), docker. Windows: remote/docker only until native builds.", status: draft }
     - { id: GE-FR17, text: "Event bus (local IPC) emitting: index.start/progress/complete, file.updated, cascade.start/progress/complete, analytics.complete, engine.error. Consumed by P2 and P3.", status: draft }
     - { id: GE-FR18, text: "Schema version stamped in the graph; mismatch on start → full rebuild (PR3).", status: draft }
-    - { id: GE-FR19, text: "Language adapters behind one interface (parse, extract declarations/imports/calls, compute interface_hash, fqn rules). v1 adapters: TypeScript (incl. TSX/JS/JSX?), Python.", status: draft, open_question: GE-Q1 }
-    - { id: GE-FR20, text: "Resolution is pluggable: v1 = adapter-native resolution (tsconfig paths/module resolution for TS; package/relative import rules for Py). SCIP/LSP resolvers are a later plug-in (X3).", status: draft, open_question: GE-Q2 }
+    - { id: GE-FR19, text: "Language adapters behind one interface (parse, extract declarations/imports/calls, compute interface_hash, fqn rules). v1 adapters: TypeScript family (.ts/.tsx/.js/.jsx/.mts/.cts/.mjs/.cjs), Python.", status: agreed }
+    - { id: GE-FR20, text: "Resolution is pluggable behind a Resolver interface. v1 = adapter-native (tsconfig paths/module resolution for TS; package/relative import rules for Py). Unresolved rate is a tracked CI metric on ast-demo. Type-checker/SCIP resolvers plug in later without schema change (X3).", status: agreed }
+    - { id: GE-FR21, text: "Query log: engine records every reader query (tool or raw Cypher, args, duration, partial flag) AND the ids of nodes/edges returned (bounded per entry) so the pane can replay exactly what an agent saw. Local only, optional, off by default, size-capped ring buffer.", status: draft, source: VZ-Q4 }
   non_functional:
     - { id: GE-NFR1, text: "First launch ≤ 10 min at ~100k LOC on the scale fixture, measured wall-clock on a laptop-class machine.", source: D20 }
     - { id: GE-NFR2, text: "Save-to-ready (file + cascade) p95 ≤ 2 s, p100 ≤ 5 s on the scale fixture. Body-only edits must cascade to zero files.", source: D17 }
@@ -235,12 +236,15 @@ requirements:
 open_questions:
   - id: GE-Q1
     q: "TypeScript adapter scope — does v1 include plain JavaScript, JSX/TSX, and Vue/Svelte SFC script blocks, or strictly .ts/.tsx?"
-    recommendation: ".ts/.tsx/.js/.jsx via the same tree-sitter grammar family; SFCs deferred."
-    status: open
+    answer: "The whole family: .ts/.tsx/.js/.jsx (+ .mjs/.cjs/.mts/.cts) via the same grammar family. SFCs deferred."
+    status: answered   # 2026-09-11
   - id: GE-Q2
-    q: "Resolution quality bar for v1 — is adapter-native resolution (no type checker) acceptable, knowing method calls on inferred receivers (`repo.save()`) will often be unresolved? Or is a TS type-checker-backed resolver (tsc API / SCIP) required for the 95 % bug eval?"
-    recommendation: "Ship adapter-native first, measure unresolved-call rate on ast-demo, decide before the eval is finalised. Design the resolver seam now."
-    status: open
+    q: "Resolution quality bar for v1 — is adapter-native resolution (no type checker) acceptable?"
+    answer: >
+      Adapter-native first. Measure the unresolved-call rate on ast-demo (the `unresolved` MCP tool and a
+      CI metric). Design the resolver seam now so a type-checker/SCIP resolver can plug in without a schema
+      change. Decide on an upgraded resolver only if the measured rate blocks the eval.
+    status: answered   # 2026-09-11
   - id: GE-Q3
     q: "Should SYMBOL fqn embed the module path (SCIP does) so a move changes fqns, or use a stable per-symbol id with path as a property? Trade-off: SCIP compatibility vs cheaper moves."
     recommendation: "Embed path (SCIP-compatible); accept that moves cascade to importers — they genuinely changed."

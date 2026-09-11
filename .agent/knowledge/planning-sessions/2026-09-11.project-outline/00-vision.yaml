@@ -460,9 +460,39 @@ decisions:
   - { id: D23, text: "v1 graph layers: filesystem, symbols, types, imports, calls. CFG and PDG deferred.", source: Q18 }
   - { id: D24, text: "Distribution follows extension convention: engine bundled in VSIX and published to npm; FalkorDB downloaded on first run, pinned + checksummed (X14).", source: Q19 }
   - { id: D25, text: "Privacy and local compute are design principles (PR7).", source: Q20 }
+  # Added 2026-09-11, decomposition round
+  - { id: D26, text: "Resolution: adapter-native first; unresolved rate on ast-demo is a tracked metric; resolver seam designed now for later type-checker/SCIP plug-in.", source: GE-Q2 }
+  - { id: D27, text: "Seeded-bug catalogue deferred until ast-demo has a clean, hand-audited golden graph.", source: MC-Q4 }
+  - { id: D28, text: "TypeScript adapter covers the whole family (.ts/.tsx/.js/.jsx/.mts/.cts/.mjs/.cjs); SFCs deferred.", source: GE-Q1 }
+  - { id: D29, text: "Query History (optional, off by default): humans can replay exactly which nodes/edges each agent query returned.", source: VZ-Q4 }
+  - { id: D30, text: "Visualization ships as separate relocatable VS Code views; Graph view also opens as an editor tab.", source: VZ-Q2 }
+
+milestones:
+  # Product-lead proposal derived from the decisions above. Not yet agreed.
+  - id: M0
+    name: Clean graph
+    text: "Headless engine indexes ast-demo (TS family + Py) into the v1 schema; golden snapshot checked in; every node/edge hand-audited via the Inspector or CLI dump. No incremental, no MCP yet."
+    exit: "Snapshot diff is empty and a human has signed off on it."
+  - id: M1
+    name: Live graph
+    text: "Watcher + incremental save + interface-hash cascade + catch-up + bulk mode. Status properties everywhere."
+    exit: "Body edit → ready < 2 s with zero cascade; interface edit → dependents re-resolved; offline edits caught up on restart."
+  - id: M2
+    name: Agent wedge
+    text: "stdio MCP shim with all `must` tools, cpg://schema, graph_status, wait_for_ready, guarded raw Cypher."
+    exit: "An agent orients, checks impact, edits, and verifies the graph updated (MC-UC1–3) on ast-demo with no human help."
+  - id: M3
+    name: Trust surface
+    text: "VS Code host: breadcrumb focus, neighbourhood, impact, path, inspector, status strip, Query History."
+    exit: "A human can see what the agent saw and confirm it was right."
+  - id: M4
+    name: Scale and eval
+    text: "Scale fixture; first-launch ≤ 10 min; save p95 ≤ 2 s; seeded-bug catalogue and eval harness; > 95 %."
+    exit: "D13 and D17/D20 met on the fixtures."
 
 next_steps:
-  - Decompose each pillar into use cases and requirements — see 10-graph-engine.yaml, 20-visualization.yaml, 30-mcp-server.yaml.
-  - Resolve per-pillar open questions with the visionary.
+  - Pillar decompositions written — see 10-graph-engine.yaml, 20-visualization.yaml, 30-mcp-server.yaml.
+  - Remaining per-pillar open questions (each carries a product-lead recommendation): GE-Q3, GE-Q4, GE-Q5, VZ-Q1, VZ-Q3, MC-Q1, MC-Q2, MC-Q3, MC-Q5.
+  - Agree or amend the milestone ladder M0–M4.
   - Turn the eval harness (X10) into a concrete seeded-bug catalogue tied to ast-demo.
   - Research items R1–R4 before architecture work begins.

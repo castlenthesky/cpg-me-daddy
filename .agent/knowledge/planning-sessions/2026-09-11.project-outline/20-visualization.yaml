@@ -124,6 +124,19 @@ use_cases:
     priority: could
     status: draft
 
+  - id: VZ-UC10
+    title: Query History — see exactly what the agent saw
+    actor: A1
+    narrative: >
+      Optional panel listing every reader query (tool name or raw Cypher, arguments, duration, partial
+      flag, which shim/agent). Selecting an entry replays it as a view: the exact nodes and relationships
+      that were returned, highlighted against the current graph so drift since the query is visible too.
+      Lets a human learn the graph by watching a good agent, and audit a bad one. Off by default; toggle in
+      settings. Naming TBD: "Query History" | "Agent Logs" | "Learn from the agent".
+    requirements: [VZ-FR14, GE-FR21, MC-FR14]
+    priority: should
+    status: agreed   # 2026-09-11 (VZ-Q4)
+
 requirements:
   functional:
     - { id: VZ-FR1,  text: "Resolve editor (file, line, col) → innermost :CPG node by range via one indexed query.", status: draft }
@@ -139,6 +152,8 @@ requirements:
     - { id: VZ-FR11, text: "Event-driven partial refresh with diff animation; no full re-layout on single-file updates.", status: draft }
     - { id: VZ-FR12, text: "Views serialisable to/from a small JSON schema; export as MCP call and as Cypher.", status: draft }
     - { id: VZ-FR13, text: "Pane works when the engine is remote/attached (not spawned by this VS Code); read-only over the same IPC as the MCP shim.", status: draft }
+    - { id: VZ-FR14, text: "Query History panel (VZ-UC10): list, filter by agent/tool/time, replay an entry as a view showing exactly the returned node/edge ids, with a drift indicator for nodes changed since. Off by default.", status: agreed }
+    - { id: VZ-FR15, text: "Ship as separate VS Code views (Graph, Inspector, Status, Query History) in one view container; every view is relocatable to sidebar, panel, secondary sidebar, or editor area. The Graph view also opens as an editor tab via command.", status: agreed }
   non_functional:
     - { id: VZ-NFR1, text: "Initial render of a 1-hop breadcrumb view ≤ 300 ms after cursor settles.", status: draft }
     - { id: VZ-NFR2, text: "Handles a 300-node view at 60 fps on integrated graphics; degrades to static layout above budget.", status: draft }
@@ -152,16 +167,18 @@ open_questions:
     status: open
   - id: VZ-Q2
     q: "Where does the pane live — sidebar view container (current), editor tab (more room), or both?"
-    recommendation: "Editor tab as primary (graphs need width); a compact sidebar 'breadcrumb + status' mini-view."
-    status: open
+    answer: "Both. Each pane is a separate view users can relocate wherever they please (VS Code view drag/drop). See VZ-FR15."
+    status: answered   # 2026-09-11
   - id: VZ-Q3
     q: "Should the pane expose a raw Cypher box for humans (mirrors MCP raw tool)?"
     recommendation: "Yes, behind an 'advanced' toggle; results render as a view or a table."
     status: open
   - id: VZ-Q4
     q: "Does the human need to see what an agent queried (an MCP query log in the pane) to build trust in agent-first workflows?"
-    recommendation: "Strong yes for v1.x — cheap, and directly serves 'trust surface'. Log lives in the engine, pane subscribes."
-    status: open
+    answer: >
+      Yes, as an optional feature. Working name candidates: "Query History", "Agent Logs", "Learn from the
+      agent". Each entry shows the exact nodes and relationships the query returned. See VZ-UC10, GE-FR21.
+    status: answered   # 2026-09-11
 
 north_star_views: [taint trace from source to sinks (V4), DB-write trace from an endpoint, layer-violation overlay (D16), commit-to-commit graph diff (X2)]
 out_of_scope_v1: [taint/DB-write traces, layer overlays, graph editing from the pane, multi-workspace views]
