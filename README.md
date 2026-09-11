@@ -5,7 +5,8 @@
 ## Vision
 
 Our goal is to enable developers to:
-- Visualize code dependencies and relationships in real-time
+
+- Visualize code dependencies and relationships in near-real-time
 - Navigate complex codebases through interactive graph exploration
 - Understand code impact and propagation of changes
 - Perform advanced code analysis queries across multiple languages
@@ -43,6 +44,7 @@ sudo dnf install redis libgomp
 ### Windows
 
 Install Redis using one of these methods:
+
 - [Redis for Windows](https://github.com/microsoftarchive/redis/releases)
 - [Memurai](https://www.memurai.com/) (Redis-compatible)
 - WSL2 with Linux installation
@@ -54,11 +56,13 @@ Install Redis using one of these methods:
 Access the CodeGraph configuration panel from the VS Code sidebar. The extension supports two connection modes:
 
 ### Embedded Mode (Default)
+
 Uses an embedded FalkorDB instance (`falkordblite`) that runs locally:
 
 - **Data Path**: Local directory where graph data is stored (default: `${workspaceFolder}/.codegraph`)
 
 ### Remote Mode
+
 Connects to an external FalkorDB or Redis server:
 
 - **Host**: FalkorDB server hostname (default: `localhost`)

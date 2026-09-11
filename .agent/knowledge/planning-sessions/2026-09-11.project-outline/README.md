@@ -16,7 +16,7 @@ tools re-index the whole codebase and handle incremental updates badly; this one
 ## Alignment Q&A (answers given 2026-09-11)
 
 | Question | Answer | Consequence |
-|---|---|---|
+| --- | --- | --- |
 | Is Cypher a hard requirement? | **Yes** — users and LLM agents write Cypher directly | Rules out SQLite / DuckDB / CozoDB / SurrealDB as the primary store |
 | Who reads the graph, from where? | Extension **starts a server or connects to an existing one**; extension writes; a separate-process **AI agent reads via MCP tools** | Server topology → rules out single-owner in-process engines (LadybugDB) as primary unless the extension hosts MCP itself |
 | Platforms? | **macOS + Linux now, Windows eventually** | FalkorDB Lite's bundled binaries (Linux x64, macOS arm64) are acceptable today; Windows via Docker/WSL until native builds exist |
@@ -45,7 +45,7 @@ These are database-independent, but they are what makes an incremental CPG work 
 2. **SYMBOL indirection (SCIP model)** — `(:CALL)-[:CALLS]->(:SYMBOL {fqn})<-[:DEFINES]-(:METHOD)`. SYMBOL nodes are not `:CPG` and have no `file`, so a per-file delete cannot touch them; cross-file edges survive a replace by construction. Never create bare-name SYMBOLs for unresolved dynamic calls (store `resolved:false` + `calleeName` on the CALL). GC symbols per save, bounded to touched fqns. `UNIQUE SYMBOL.fqn` constraint as a tripwire.
 3. **Two-tier schema** — *structural* tier by default (FILE, NAMESPACE_BLOCK, TYPE_DECL, METHOD, PARAM, METHOD_RETURN, MEMBER, LOCAL, BLOCK, CONTROL_STRUCTURE, RETURN, CALL, SYMBOL; args/receiver/literals folded into CALL properties; REACHING_DEF from LOCAL/PARAM to CALL/RETURN). *Expression* tier (IDENTIFIER, LITERAL, FIELD_IDENTIFIER, REF, full REACHING_DEF) is opt-in. ~450 vs ~3,000 nodes per 300-line file. Drop `SOURCE_FILE`/`CONTAINS` edges — `file` is a property.
 4. **Joern-style DiffGraph per save** → parameterized `UNWIND $rows` per label / per edge type, endpoints via indexed `MATCH (s:CPG {id})`. Readers use `GRAPH.RO_QUERY`.
-5. **Replace strategy** — brief empty window bracketed by FILE-level `status`/`version` markers (MCP server checks `status='ready'` and retries). Generation tags were considered and rejected (duplicate METHODs per fqn visible to readers; single-property indexes degrade `(id, gen)` lookups; 2× peak memory). Single-query atomic replace and MULTI/EXEC were kept as exploratory arms in the benchmark.
+5. **Replace strategy — one atomic Cypher query per save** (delete → nodes → edges → SYMBOL merge → DEFINES/CALLS → GC, chained with `WITH count(*)` barriers). The benchmark showed this works on FalkorDB 4.20, verifies, and is ~3× faster under reader load than a 23-query sequence (24 vs 68 ms p50 at 10⁶ nodes). Fallback: multi-query "empty window" bracketed by FILE-level `status`/`version` markers. Generation tags were rejected (duplicate METHODs per fqn visible to readers; single-property indexes degrade `(id, gen)` lookups; 2× peak memory).
 6. **Analytics on projections**, not the raw CPG — call graph, import graph, type graph are 10³–10⁵ nodes. In-engine `algo.*` for PageRank/betweenness/WCC; `graphology-communities-louvain` (pure JS, MIT) for Louvain/modularity over an exported projection.
 7. **The CPG is a cache** — fully rebuildable from source; per-file content hash for staleness; durability is soft.
 8. **Server lifecycle behind a `ServerManager` interface** — `Spawned` / `Remote` / `Docker` implementations; pin the engine version.
