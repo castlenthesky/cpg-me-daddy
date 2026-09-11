@@ -208,17 +208,17 @@ requirements:
 # ------------------------------------------------------------------------------------------------------
 open_questions:
   - id: MC-Q1
-    q: "Should get_symbol / file_outline return source text (read from disk by the engine) or only ranges? Source text makes the MCP self-sufficient for agents without file access, at a token cost."
-    recommendation: "Ranges by default; include_source opt-in per call."
-    status: open
+    q: "Should get_symbol / file_outline return source text or only ranges?"
+    answer: "Ranges by default; include_source opt-in per call."
+    status: agreed   # 2026-09-11
   - id: MC-Q2
-    q: "Result format — JSON only, or JSON plus a compact text rendering for hosts that display tool output to humans?"
-    recommendation: "JSON with stable keys; optional `format: text` for a compact table. Eval decides which agents use better."
-    status: open
+    q: "Result format?"
+    answer: "JSON with stable keys; optional `format: text` for a compact table. Eval decides which agents use better."
+    status: agreed   # 2026-09-11
   - id: MC-Q3
-    q: "Should raw query_cypher ship in v1 at all, given D1 (Cypher is a hard requirement) vs MC-P1 (tools first)? Risk: agents reach for it before learning the tools."
-    recommendation: "Ship it (D1), but list it last and describe it as the fallback; measure its share of calls in eval."
-    status: open
+    q: "Ship raw query_cypher in v1?"
+    answer: "Yes (D1), listed last and described as the fallback; measure its share of calls in eval."
+    status: agreed   # 2026-09-11
   - id: MC-Q4
     q: "Seeded-bug catalogue — which bug classes for v1?"
     answer: >
@@ -229,9 +229,9 @@ open_questions:
       (same name, wrong module).
     status: deferred   # 2026-09-11
   - id: MC-Q5
-    q: "Streamable HTTP (X8) — v1.x for remote agents, or defer entirely until a user asks?"
-    recommendation: "Defer; stdio covers every current host on the same machine."
-    status: open
+    q: "Streamable HTTP (X8) — v1.x or defer?"
+    answer: "Defer entirely until a user needs a remote agent; stdio covers every current host on the same machine."
+    status: agreed   # 2026-09-11
 
 north_star_tools: [taint_trace(source → sinks), db_writes_from(entry point), layer_violations, graph_diff(commit_a, commit_b), annotate/label writes (X9)]
 out_of_scope_v1: [any write tool, HTTP transport, taint, layer rules, multi-workspace federation, auth (loopback + stdio only)]

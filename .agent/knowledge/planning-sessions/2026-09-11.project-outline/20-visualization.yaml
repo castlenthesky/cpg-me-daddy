@@ -162,17 +162,17 @@ requirements:
 
 open_questions:
   - id: VZ-Q1
-    q: "Rendering stack — force-directed canvas (sigma.js / graphology, MIT) vs hierarchical/layered (ELK, dagre) vs both by view type?"
-    recommendation: "graphology + sigma for neighbourhood/community views (WebGL, scales); ELK layered layout for impact/path views where direction matters. Both MIT."
-    status: open
+    q: "Rendering stack?"
+    answer: "graphology + sigma for neighbourhood/community views (WebGL, scales); ELK layered layout for impact/path views where direction matters. Both MIT."
+    status: agreed   # 2026-09-11
   - id: VZ-Q2
     q: "Where does the pane live — sidebar view container (current), editor tab (more room), or both?"
     answer: "Both. Each pane is a separate view users can relocate wherever they please (VS Code view drag/drop). See VZ-FR15."
     status: answered   # 2026-09-11
   - id: VZ-Q3
-    q: "Should the pane expose a raw Cypher box for humans (mirrors MCP raw tool)?"
-    recommendation: "Yes, behind an 'advanced' toggle; results render as a view or a table."
-    status: open
+    q: "Should the pane expose a raw Cypher box for humans?"
+    answer: "Yes, behind an 'advanced' toggle; results render as a view or a table."
+    status: agreed   # 2026-09-11
   - id: VZ-Q4
     q: "Does the human need to see what an agent queried (an MCP query log in the pane) to build trust in agent-first workflows?"
     answer: >

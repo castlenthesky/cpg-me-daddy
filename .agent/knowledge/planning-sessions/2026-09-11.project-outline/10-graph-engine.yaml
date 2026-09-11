@@ -246,16 +246,16 @@ open_questions:
       change. Decide on an upgraded resolver only if the measured rate blocks the eval.
     status: answered   # 2026-09-11
   - id: GE-Q3
-    q: "Should SYMBOL fqn embed the module path (SCIP does) so a move changes fqns, or use a stable per-symbol id with path as a property? Trade-off: SCIP compatibility vs cheaper moves."
-    recommendation: "Embed path (SCIP-compatible); accept that moves cascade to importers — they genuinely changed."
-    status: open
+    q: "Should SYMBOL fqn embed the module path (SCIP does) so a move changes fqns, or use a stable per-symbol id with path as a property?"
+    answer: "Embed path (SCIP-compatible); moves cascade to importers — they genuinely changed."
+    status: agreed   # 2026-09-11
   - id: GE-Q4
-    q: "How does the daemon learn about VS Code saves — filesystem watcher only, or also an explicit save hint from the host to skip debounce and beat the watcher?"
-    recommendation: "Both. Watcher is the source of truth (works headless); the host hint is an optimisation."
-    status: open
+    q: "How does the daemon learn about VS Code saves?"
+    answer: "Both. Filesystem watcher is the source of truth (works headless); the host save hint is an optimisation."
+    status: agreed   # 2026-09-11
   - id: GE-Q5
-    q: "Should first launch prioritise files the user has open / recently edited so the agent's likely targets are ready first?"
-    recommendation: "Yes — cheap win; host passes open editors as a priority list."
-    status: open
+    q: "Should first launch prioritise open / recently edited files?"
+    answer: "Yes. Host passes open editors as a priority list; headless falls back to git recently-changed."
+    status: agreed   # 2026-09-11
 
 out_of_scope_v1: [CFG, PDG, taint sources/sinks, persisted labels/annotations (X9), layer rules and violations (D16), SCIP/LSP resolvers (design the seam only), Windows native DB, remote/multi-user graph]

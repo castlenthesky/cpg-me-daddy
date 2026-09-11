@@ -429,6 +429,7 @@ research_items:
   - { id: R2, text: "SCIP indexers (scip-typescript, scip-python) — incremental capability, speed, license, output size." }
   - { id: R3, text: "MCP streamable HTTP transport, auth patterns, multi-client behaviour in the current SDK." }
   - { id: R4, text: "tree-sitter incremental reparse (tree.edit) performance at file sizes seen in the target repo." }
+  - { id: R5, text: "VS Code extension mechanics: spawning/attaching a long-lived daemon, registering an MCP server definition provider, relocatable views, platform-specific binary download conventions." }
 
 decisions:
   # Carried forward from README so this file stands alone.
@@ -468,7 +469,7 @@ decisions:
   - { id: D30, text: "Visualization ships as separate relocatable VS Code views; Graph view also opens as an editor tab.", source: VZ-Q2 }
 
 milestones:
-  # Product-lead proposal derived from the decisions above. Not yet agreed.
+  # Agreed 2026-09-11.
   - id: M0
     name: Clean graph
     text: "Headless engine indexes ast-demo (TS family + Py) into the v1 schema; golden snapshot checked in; every node/edge hand-audited via the Inspector or CLI dump. No incremental, no MCP yet."
@@ -491,8 +492,9 @@ milestones:
     exit: "D13 and D17/D20 met on the fixtures."
 
 next_steps:
-  - Pillar decompositions written — see 10-graph-engine.yaml, 20-visualization.yaml, 30-mcp-server.yaml.
-  - Remaining per-pillar open questions (each carries a product-lead recommendation): GE-Q3, GE-Q4, GE-Q5, VZ-Q1, VZ-Q3, MC-Q1, MC-Q2, MC-Q3, MC-Q5.
-  - Agree or amend the milestone ladder M0–M4.
+  - Pillar decompositions written and all per-pillar questions agreed — see 10-, 20-, 30-*.yaml.
+  - Milestone ladder M0–M4 agreed.
+  - Research R1–R5 delegated 2026-09-11; findings land in ./research/ with a summary in 40-research.yaml.
+  - After research: architecture design for M0 (clean graph of ast-demo).
   - Turn the eval harness (X10) into a concrete seeded-bug catalogue tied to ast-demo.
   - Research items R1–R4 before architecture work begins.
