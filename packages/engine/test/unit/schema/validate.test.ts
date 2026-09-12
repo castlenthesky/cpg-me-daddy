@@ -261,6 +261,53 @@ describe("cross-file rule", () => {
   });
 });
 
+describe("referential integrity (fromKey/toKey) — added for the AST-to-CPG conversion unit", () => {
+  test("edges with no fromKey/toKey are still valid — existing callers are unaffected", () => {
+    // validEdges() carries no fromKey/toKey at all; the check only fires
+    // when a caller actually supplies one.
+    expect(validateGraphDelta(validDelta()).ok).toBe(true);
+  });
+
+  test("fromKey/toKey resolving to real nodes in the same delta pass clean", () => {
+    const delta = validDelta();
+    delta.edges[0] = {
+      ...delta.edges[0]!,
+      fromKey: "file:src/a.ts:MODULE:$root",
+      toKey: "file:src/a.ts:METHOD:foo",
+    };
+    expect(validateGraphDelta(delta).ok).toBe(true);
+  });
+
+  test("a dangling fromKey fails, naming the missing endpoint", () => {
+    const delta = validDelta();
+    delta.edges[0] = { ...delta.edges[0]!, fromKey: "file:src/a.ts:MODULE:does-not-exist" };
+    const result = validateGraphDelta(delta);
+    expect(result.ok).toBe(false);
+    expect(
+      result.problems.some((p) => p.includes("'fromKey'") && p.includes("does-not-exist")),
+    ).toBe(true);
+  });
+
+  test("a dangling toKey fails, naming the missing endpoint", () => {
+    const delta = validDelta();
+    delta.edges[0] = { ...delta.edges[0]!, toKey: "file:src/a.ts:METHOD:does-not-exist" };
+    const result = validateGraphDelta(delta);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("'toKey'") && p.includes("does-not-exist"))).toBe(
+      true,
+    );
+  });
+
+  test("a key resolving to the right value but wrong label still fails", () => {
+    const delta = validDelta();
+    // "foo" is a real METHOD id, not a SYMBOL fqn — CALLS.to is SYMBOL only.
+    delta.edges[3] = { ...delta.edges[3]!, toKey: "file:src/a.ts:METHOD:foo" };
+    const result = validateGraphDelta(delta);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("'toKey'"))).toBe(true);
+  });
+});
+
 describe("aggregation", () => {
   test("every problem is reported together, not just the first", () => {
     const delta = validDelta();

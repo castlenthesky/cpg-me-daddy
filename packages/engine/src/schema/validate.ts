@@ -22,6 +22,18 @@ export interface EdgeRow {
   type: string;
   fromLabel: string;
   toLabel: string;
+  /**
+   * The actual key of the node this edge connects — a node's own identity
+   * key, e.g. its `id` for a :CPG node or `fqn` for a SYMBOL (hence `Key`,
+   * not `Id`: not every endpoint is keyed by `id`). Optional here:
+   * schema-level conformance only needs the label pair — connectivity is
+   * the extractor's business, not this validator's. Added additively
+   * (M0.6/M0.8, the AST-to-CPG conversion unit) so a `GraphDelta` can
+   * represent a genuinely connected graph, not just which label pairs are
+   * legal; existing callers that omit them are still valid deltas.
+   */
+  fromKey?: string;
+  toKey?: string;
   properties: Record<string, unknown>;
 }
 
@@ -165,7 +177,44 @@ function validateNode(row: NodeRow, delta: GraphDelta, problems: string[]): void
   checkProperties(where, row.properties, spec.properties, problems, spec.key);
 }
 
-function validateEdge(row: EdgeRow, delta: GraphDelta, problems: string[]): void {
+/** This row's own kind label (its one non-`CPG` label), or `undefined` if that's not exactly one. */
+function nodeKind(row: NodeRow): string | undefined {
+  const nonCpgLabels = row.labels.filter((l) => l !== "CPG");
+  return nonCpgLabels.length === 1 ? nonCpgLabels[0] : undefined;
+}
+
+/**
+ * `"<label>:<keyValue>"` for every node in the delta whose label has a
+ * single-property key (every v1 label does — `["id"]`, `["fqn"]`, `["path"]`,
+ * or `[]` for the keyless `META_DATA` singleton). Feeds the referential-
+ * integrity check below: an edge's `fromKey`/`toKey` must resolve to a real
+ * node in the SAME delta, not just a legal label pair.
+ */
+function buildNodeKeyIndex(nodes: readonly NodeRow[]): ReadonlySet<string> {
+  const index = new Set<string>();
+  for (const node of nodes) {
+    const kind = nodeKind(node);
+    if (kind === undefined) {
+      continue;
+    }
+    const spec = nodeSpec(kind);
+    if (spec === undefined || spec.key.length !== 1) {
+      continue;
+    }
+    const keyValue = node.properties[spec.key[0]!];
+    if (typeof keyValue === "string") {
+      index.add(`${kind}:${keyValue}`);
+    }
+  }
+  return index;
+}
+
+function validateEdge(
+  row: EdgeRow,
+  delta: GraphDelta,
+  nodeKeyIndex: ReadonlySet<string>,
+  problems: string[],
+): void {
   const spec = edgeSpec(row.type);
   if (!spec) {
     problems.push(`edge '${row.type}': undeclared edge type`);
@@ -192,17 +241,35 @@ function validateEdge(row: EdgeRow, delta: GraphDelta, problems: string[]): void
     );
   }
 
+  // Referential integrity: `fromKey`/`toKey` are optional (existing callers
+  // that never set them stay valid — see the field doc), but a caller that
+  // DOES set one must point at a node that actually exists in this same
+  // delta. A per-file replace's own nodes are the only thing it can promise
+  // to be self-consistent about; cross-file references (SYMBOL) are exactly
+  // why this check only fires when the key was supplied at all.
+  if (row.fromKey !== undefined && !nodeKeyIndex.has(`${row.fromLabel}:${row.fromKey}`)) {
+    problems.push(
+      `${where}: 'fromKey' ${JSON.stringify(row.fromKey)} does not match any '${row.fromLabel}' node in this delta`,
+    );
+  }
+  if (row.toKey !== undefined && !nodeKeyIndex.has(`${row.toLabel}:${row.toKey}`)) {
+    problems.push(
+      `${where}: 'toKey' ${JSON.stringify(row.toKey)} does not match any '${row.toLabel}' node in this delta`,
+    );
+  }
+
   checkProperties(where, row.properties, spec.properties, problems);
 }
 
 /** Runs every schema check against a `GraphDelta` and reports every problem, not just the first. */
 export function validateGraphDelta(delta: GraphDelta): VerifyResult {
   const problems: string[] = [];
+  const nodeKeyIndex = buildNodeKeyIndex(delta.nodes);
   for (const node of delta.nodes) {
     validateNode(node, delta, problems);
   }
   for (const edge of delta.edges) {
-    validateEdge(edge, delta, problems);
+    validateEdge(edge, delta, nodeKeyIndex, problems);
   }
   return { ok: problems.length === 0, problems };
 }
