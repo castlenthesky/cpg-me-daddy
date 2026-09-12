@@ -474,6 +474,7 @@ decisions:
   - { id: D34, text: "SYMBOL.fqn uses SCIP descriptor grammar with scheme/package/version as properties; SCIP indexers are the golden oracle, TS compiler API is the live precise upgrade path.", source: R2/AM4/AM5 }
   - { id: D35, text: "MCP shim is dual-era (SDK v2 serveStdio), takes --workspace explicitly, answers handshake before engine attach, exposes ≤ 12 tools.", source: R3/AM3/AM6 }
   - { id: D36, text: "Detached CLI-owned daemon; extension attaches or spawns, never kills; FalkorDB downloaded with pinned SHA-256 manifest to a user cache; universal VSIX.", source: R5 }
+  - { id: D37, text: "Schema alignment (M0.0): option (b) — align names to Joern where they overlap, keep the sparse-tier and SCIP divergences, document every divergence. Spec at 50-schema.md. Supersedes README design rules 1, 2 (in part) and 3 (in part), and 10-graph-engine.yaml's v1_schema draft.", source: "M0.0 / research/R6-ontology-debate-synthesis.md" }
 
 milestones:
   # Agreed 2026-09-11.
@@ -504,6 +505,6 @@ next_steps:
   - Research R1–R5 complete 2026-09-11 — reports in ./research/, distilled in 40-research.yaml (7 amendments, 7 confirmations, adopted defaults, 14 spikes).
   - Visionary to confirm AM1 (id scheme without file hash), AM3 (which analytics tools make the 12), and the packages/engine+cli+vscode layout.
   - Then: architecture design for M0 (clean graph of ast-demo), starting with spikes SP1, SP2, SP3, SP11.
-  - North-star candidates logged in 50-north-star.yaml (7 themes, 29 ideas, 3 tensions); visionary to answer NS-Q1–Q3.
+  - North-star candidates logged in potential-development.yaml (7 themes, 29 ideas, 3 tensions; renamed from 50-north-star.yaml so the 50- slot could hold the M0.0 schema spec instead); visionary to answer NS-Q1–Q3.
   - Turn the eval harness (X10) into a concrete seeded-bug catalogue tied to ast-demo.
   - Research items R1–R4 before architecture work begins.

@@ -55,7 +55,7 @@ use_cases:
     title: Impact view — what depends on this?
     actor: A1
     narrative: >
-      Select a METHOD/TYPE_DECL/FILE → render transitive dependents via IMPORTS/CALLS/EXTENDS edges with
+      Select a METHOD/TYPE_DECL/FILE → render transitive dependents via IMPORTS/CALLS/INHERITS_FROM edges with
       depth slider, coloured by distance, grouped by directory. Same query as MCP impact_of_change (X5).
     requirements: [VZ-FR4, VZ-FR6]
     priority: must
