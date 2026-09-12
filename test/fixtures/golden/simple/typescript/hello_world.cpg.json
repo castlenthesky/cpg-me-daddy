@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 2,
+  "file": "hello_world.ts",
+  "nodes": [
+    {
+      "labels": ["CPG", "MODULE"],
+      "properties": {
+        "id": "hello_world.ts:MODULE:hello_world",
+        "name": "hello_world",
+        "file": "hello_world.ts",
+        "range": "1:0-3:0",
+        "status": "ready"
+      }
+    },
+    {
+      "labels": ["CPG", "MEMBER"],
+      "properties": {
+        "id": "hello_world.ts:MEMBER:DISPLAY_TEXT",
+        "name": "DISPLAY_TEXT",
+        "file": "hello_world.ts",
+        "range": "1:0-1:35"
+      }
+    },
+    {
+      "labels": ["CPG", "CALL"],
+      "properties": {
+        "id": "hello_world.ts:CALL:log:0",
+        "callee_name": "log",
+        "receiver_text": "console",
+        "args_count": 1,
+        "file": "hello_world.ts",
+        "range": "2:0-2:26",
+        "kind": "call",
+        "status": "ready"
+      }
+    },
+    {
+      "labels": ["SYMBOL"],
+      "properties": {
+        "fqn": "hello_world.ts`DISPLAY_TEXT.",
+        "kind": "variable",
+        "language": "typescript"
+      }
+    },
+    {
+      "labels": ["SYMBOL"],
+      "properties": {
+        "fqn": "site:node`console.log().",
+        "kind": "method",
+        "language": "typescript",
+        "scheme": "site",
+        "package": "node"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DECLARES",
+      "fromLabel": "MODULE",
+      "toLabel": "MEMBER",
+      "fromKey": "hello_world.ts:MODULE:hello_world",
+      "toKey": "hello_world.ts:MEMBER:DISPLAY_TEXT",
+      "properties": {}
+    },
+    {
+      "type": "DEFINES",
+      "fromLabel": "MEMBER",
+      "toLabel": "SYMBOL",
+      "fromKey": "hello_world.ts:MEMBER:DISPLAY_TEXT",
+      "toKey": "hello_world.ts`DISPLAY_TEXT.",
+      "properties": {}
+    },
+    {
+      "type": "IN_SCOPE",
+      "fromLabel": "CALL",
+      "toLabel": "MODULE",
+      "fromKey": "hello_world.ts:CALL:log:0",
+      "toKey": "hello_world.ts:MODULE:hello_world",
+      "properties": {}
+    },
+    {
+      "type": "CALLS",
+      "fromLabel": "CALL",
+      "toLabel": "SYMBOL",
+      "fromKey": "hello_world.ts:CALL:log:0",
+      "toKey": "site:node`console.log().",
+      "properties": {
+        "status": "external"
+      }
+    },
+    {
+      "type": "REACHING_DEF",
+      "fromLabel": "MEMBER",
+      "toLabel": "CALL",
+      "fromKey": "hello_world.ts:MEMBER:DISPLAY_TEXT",
+      "toKey": "hello_world.ts:CALL:log:0",
+      "properties": {
+        "variable": "DISPLAY_TEXT"
+      }
+    }
+  ]
+}

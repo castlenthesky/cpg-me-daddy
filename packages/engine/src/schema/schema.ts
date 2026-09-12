@@ -36,7 +36,7 @@ export const CPG_SCHEMA = {
    * path, only rebuild: on start the daemon reads `META_DATA.schema_version`
    * and, on mismatch, drops and re-indexes (GE-FR18, GE-UC1).
    */
-  version: 1,
+  version: 2,
   idRule: ID_RULE,
   nodes: NODE_LABELS,
   edges: EDGE_TYPES,

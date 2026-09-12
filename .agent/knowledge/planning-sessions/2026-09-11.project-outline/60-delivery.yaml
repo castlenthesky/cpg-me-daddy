@@ -29,6 +29,7 @@ meta:
     - { id: DL10, text: "TYPE_PARAMETER/TYPE_ARGUMENT/BINDS/EVAL_TYPE (generics-aware graph traversal) deferred to v2, not rejected outright. v1 keeps folding generic type info into a type_text string property.", source: "R6-ontology-debate-synthesis.md Next Steps #5, visionary sign-off 2026-09-11", tracked_in: v2_backlog }
     - { id: DL11, text: "FILE.status=error and UNKNOWN nodes are unified with CALL.status=unresolved/IMPORT.status=unresolved into one triage surface via a shared needs_triage TAG (TAGGED_BY) — no new mechanism, reuses the TAG node already in v1 scope.", source: "R6-ontology-debate-synthesis.md Next Steps #6, visionary sign-off 2026-09-11" }
     - { id: DL12, text: "M0.0 schema alignment: option (b) — align node/edge names to Joern where they overlap, keep the sparse-tier and SCIP divergences, document every divergence with a specific reason. Spec at 50-schema.md. One deliberate divergence from R6's literal edge table: INHERITS_FROM points TYPE_DECL -> SYMBOL, not TYPE_DECL -> TYPE_DECL, preserving per-file-replace safety (D5) and GE-FR7's cascade traversal.", source: "M0.0 / research/R6-ontology-debate-synthesis.md §1, user-confirmed 2026-09-12" }
+    - { id: DL13, text: "Sparse REACHING_DEF (MEMBER|PARAM -> CALL, variable property) is in v1 — structural-tier data flow. CFG and remaining PDG (CDG/DOMINATE) stay deferred; expression-tier nodes (LOCAL/IDENTIFIER/LITERAL) stay rejected. Amends D23/R6's blanket PDG deferral for this edge alone.", source: "visionary amendment 2026-09-12 (hello-world CPG golden)", note: "Aligns with D10's 'structural-tier data flow'. Schema version bumped to 2." }
 
 # ------------------------------------------------------------------------------------------------------
 # What the code survey found that CHANGED this plan.
@@ -377,8 +378,15 @@ units:
 
     - id: M0.7
       name: "TS adapter: imports + calls"
-      delivers: "IMPORT and CALL nodes with properties; IN_SCOPE edges."
-      gate: "Golden snapshots; every call site in the fixture appears exactly once; NO bare-name SYMBOLs created for unresolved calls (README rule 2)."
+      delivers: >
+        IMPORT and CALL nodes with properties; IN_SCOPE edges; sparse REACHING_DEF edges
+        (MEMBER|PARAM -> CALL, variable) per the 2026-09-12 amendment (DL13) — the hello-world
+        goldens under test/fixtures/golden/simple/ are the target contract this unit must match.
+      gate: >
+        Golden snapshots (test/fixtures/golden/simple/typescript/hello_world.cpg.json is the smoke
+        case); every call site in the fixture appears exactly once; NO bare-name SYMBOLs created for
+        unresolved calls (README rule 2); REACHING_DEF emitted for every MEMBER/PARAM whose value
+        reaches a CALL argument in the fixture.
       status: not_started
 
     - id: M0.8
@@ -400,8 +408,10 @@ units:
 
     - id: M0.9
       name: "Python adapter: imports + calls"
-      delivers: "As M0.7, Python."
-      gate: "Golden snapshots; call sites exactly once; no bare-name SYMBOLs."
+      delivers: "As M0.7, Python — including sparse REACHING_DEF (DL13)."
+      gate: >
+        Golden snapshots (test/fixtures/golden/simple/python/hello_world.cpg.json is the smoke case);
+        call sites exactly once; no bare-name SYMBOLs; REACHING_DEF emitted per M0.7's gate.
       status: not_started
 
     - id: M0.10

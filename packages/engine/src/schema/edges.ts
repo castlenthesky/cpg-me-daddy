@@ -1,8 +1,9 @@
 /**
- * The 13 v1 edge types (M0.0), transcribed from
- * `research/R6-ontology-debate-synthesis.md`'s edge type table, with one
- * deliberate, reasoned divergence from its literal text: `INHERITS_FROM`
- * points at `SYMBOL`, not `TYPE_DECL` — see its entry below.
+ * The 14 v1 edge types (M0.0 + sparse REACHING_DEF amendment), transcribed from
+ * `research/R6-ontology-debate-synthesis.md`'s edge type table, with deliberate
+ * reasoned divergences: `INHERITS_FROM` points at `SYMBOL`, not `TYPE_DECL`;
+ * and `REACHING_DEF` is sparse (`MEMBER|PARAM -> CALL`) rather than Joern's
+ * expression-tier endpoints — see those entries below.
  */
 import { INHERITS_RELATION, RESOLUTION_STATUS } from "./enums";
 import type { EdgeTypeSpec } from "./types";
@@ -328,6 +329,39 @@ export const EDGE_TYPES = [
     },
     firstWrittenIn: "M4",
     doc: "",
+  },
+  {
+    type: "REACHING_DEF",
+    from: ["MEMBER", "PARAM"],
+    to: ["CALL"],
+    ownership: "file-owned",
+    write: "delete-create",
+    properties: [
+      {
+        name: "variable",
+        type: "string",
+        cardinality: "one",
+        golden: "include",
+        doc: "Name of the binding whose definition reaches the call-site use.",
+      },
+    ],
+    joern: {
+      verdict: "extend",
+      joernName: "REACHING_DEF",
+      divergenceClass: "semantic",
+      rationale:
+        "Pulled into v1 as sparse structural-tier data flow (visionary amendment 2026-09-12), aligning " +
+        "with D10's 'structural-tier data flow' and superseding the blanket PDG deferral in D23/R6 for " +
+        "this edge alone. Joern's REACHING_DEF spans expression-tier nodes (IDENTIFIER/LITERAL/LOCAL); " +
+        "ours keeps PR1 sparsity by endpointing at MEMBER|PARAM (definitions) and CALL (use sites). " +
+        "CFG, CDG, DOMINATE, and expression-tier nodes remain deferred. Intra-file only — both endpoints " +
+        "are file-owned :CPG nodes, so no SYMBOL indirection is required.",
+      source: "Joern PDG; visionary amendment 2026-09-12 (hello-world CPG golden)",
+    },
+    firstWrittenIn: "M0.7",
+    doc:
+      "Sparse data-flow: a MEMBER or PARAM definition reaches a CALL that uses that binding " +
+      "(e.g. as an argument). Not full PDG — no CDG, no expression-tier hops.",
   },
 ] as const satisfies readonly EdgeTypeSpec[];
 

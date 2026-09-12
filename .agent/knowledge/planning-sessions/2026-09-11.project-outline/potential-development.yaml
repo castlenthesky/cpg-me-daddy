@@ -2,7 +2,8 @@
 # Brainstormed 2026-09-11 in the discovery interview. Everything here is a CANDIDATE: logged so it is not
 # lost, not committed to. None of it is v1. Ideas already recorded as north star elsewhere are cross-referenced
 # rather than duplicated (taint tracing D10, layer rules D16, annotations X9, graph diff X2, HTTP transport X8,
-# CFG/PDG/expression tier in 10-graph-engine.yaml deferred_layers).
+# CFG / remaining PDG (CDG/DOMINATE) / expression tier in 10-graph-engine.yaml deferred_layers;
+# sparse REACHING_DEF is in v1 as of 2026-09-12).
 # Status vocabulary: candidate | endorsed (visionary picked it for the north-star statement) | rejected
 
 meta:

@@ -318,6 +318,41 @@ describe("aggregation", () => {
     expect(result.problems.length).toBeGreaterThanOrEqual(3);
   });
 
+  test("REACHING_DEF (MEMBER -> CALL) with variable is accepted", () => {
+    const delta = validDelta();
+    delta.nodes.push({
+      labels: ["CPG", "MEMBER"],
+      properties: {
+        id: "file:src/a.ts:MEMBER:x",
+        name: "x",
+        file: FILE,
+        range: "1:0-1:10",
+      },
+    });
+    delta.edges.push({
+      type: "REACHING_DEF",
+      fromLabel: "MEMBER",
+      toLabel: "CALL",
+      properties: { variable: "x" },
+    });
+    expect(validateGraphDelta(delta).ok).toBe(true);
+  });
+
+  test("REACHING_DEF missing variable fails", () => {
+    const delta = validDelta();
+    delta.edges.push({
+      type: "REACHING_DEF",
+      fromLabel: "MEMBER",
+      toLabel: "CALL",
+      properties: {},
+    });
+    const result = validateGraphDelta(delta);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("missing required property 'variable'"))).toBe(
+      true,
+    );
+  });
+
   test("assertGraphDeltaValid throws listing every problem", () => {
     const delta = validDelta();
     delta.nodes.push({ labels: ["CPG", "BOGUS"], properties: {} });

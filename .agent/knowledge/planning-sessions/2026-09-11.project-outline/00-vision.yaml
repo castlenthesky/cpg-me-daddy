@@ -400,7 +400,10 @@ open_questions:
     status: answered
   - id: Q18
     q: v1 CPG layers?
-    answer: Filesystem, symbols, types, imports, calls. CFG/PDG deferred; evolve as we go.
+    answer: >
+      Filesystem, symbols, types, imports, calls, and sparse structural-tier data flow
+      (REACHING_DEF: MEMBER|PARAM -> CALL). CFG and the rest of PDG (CDG/DOMINATE) deferred;
+      expression-tier nodes stay deferred. Amended 2026-09-12 — see D23.
     status: answered
   - id: Q19
     q: Distribution of engine and DB binary?
@@ -458,7 +461,7 @@ decisions:
   # Added 2026-09-11, discovery round 3
   - { id: D21, text: "Readers are never blocked. Over-budget cascades mark dependents STALE; every node carries an explicit status property.", source: Q16 }
   - { id: D22, text: "MCP serves a partial graph with coverage status during first launch.", source: Q17 }
-  - { id: D23, text: "v1 graph layers: filesystem, symbols, types, imports, calls. CFG and PDG deferred.", source: Q18 }
+  - { id: D23, text: "v1 graph layers: filesystem, symbols, types, imports, calls, sparse REACHING_DEF (MEMBER|PARAM -> CALL). CFG and remaining PDG (CDG/DOMINATE) deferred; expression-tier nodes deferred. Amended 2026-09-12 — sparse data flow is in v1 (aligns with D10); full Joern PDG is not.", source: Q18 }
   - { id: D24, text: "Distribution follows extension convention: engine bundled in VSIX and published to npm; FalkorDB downloaded on first run, pinned + checksummed (X14).", source: Q19 }
   - { id: D25, text: "Privacy and local compute are design principles (PR7).", source: Q20 }
   # Added 2026-09-11, decomposition round
