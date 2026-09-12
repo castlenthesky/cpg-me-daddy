@@ -3,6 +3,9 @@
 # executable verification that lands in the same PR.
 # IDs: F# (foundation), M0.#, M1.# (sliced), M2/M3/M4 (outlined).
 # Status vocabulary: draft | agreed | rejected | deferred
+# Unit status (units.* below, first set 2026-09-12): not_started | in_progress | blocked | done.
+# "done" means merged to master with its gate verified green there, not just PR-merged into a
+# stacked feature branch — see the F1-F4 status note below for why that distinction mattered.
 
 meta:
   session_date: 2026-09-11
@@ -171,7 +174,8 @@ units:
         is proven to fire on a deliberately misformatted commit. A no-restricted-imports rule fails the build
         if anything under packages/engine imports vscode — add a deliberately-violating file, watch the build
         go red, then remove it. A rule nobody has seen fail is not a gate.
-      status: draft
+      status: done
+      verified_2026-09-12: "lint, format:check, typecheck, test:unit all green on master@4f5fca2."
 
     - id: F2
       name: FalkorDB test harness + invariant suite
@@ -187,7 +191,10 @@ units:
         tears its graph down — green on Linux (CI) and macOS (local). Two tests running concurrently must not
         see each other's data.
       derisks: [SF3]
-      status: draft
+      status: done
+      verified_2026-09-12: >
+        db:up + test:integration + db:down green on master@4f5fca2 (12 pass, live FalkorDB v4.20.4 on
+        127.0.0.1:6381).
 
     - id: F3
       name: FalkorDB acquisition
@@ -200,7 +207,10 @@ units:
         Test downloads (or reuses cache), verifies checksum, spawns on an ephemeral port, PINGs, shuts down
         cleanly. A tampered-checksum test asserts the launch is REFUSED. macOS Gatekeeper path exercised
         locally. Offline produces the clear error X14(4) describes, not a silent hang.
-      status: draft
+      status: done
+      verified_2026-09-12: >
+        Unit + integration coverage for acquire/cache/checksum/download/manifest/redis present, incl. a
+        tampered-checksum-refuses-launch test. Merged into falkordb-service (see note below).
 
     - id: F4
       name: Grammar loading
@@ -223,7 +233,17 @@ units:
         cursor walks are SLOWER natively (every gotoFirstChild() crosses N-API). VS Code itself ships
         tree-sitter as wasm. Real wasm hazards are ABI and memory, both gated here and in M1.3.
       replaces: "the repo's current native tree-sitter ^0.21.0 dependency"
-      status: draft
+      status: done
+      verified_2026-09-12: "abi.test.ts and web-tree-sitter-backend.test.ts assert the mismatch-fails-loudly case; green on master@4f5fca2."
+
+  note_2026-09-12_master_integration_gap: >
+    F1-F4 were each implemented and PR-merged (github PRs #1-#5), but PRs #2-#5 were stacked on the
+    previous feature branch instead of on master (F4 -> F1's branch, F2 -> F4's branch, F3 -> F2's
+    branch, the falkordb-service refactor -> F3's branch). Only F1 and F4 had actually reached master
+    (via PR #1 and #6); F2, F3, and the refactor existed only on refactor-falkordb-service-package.
+    Fixed today by merging that branch's tip (c60f943) into master (merge commit 4f5fca2, pushed to
+    origin/master) after re-running all four standing gates plus the live-FalkorDB integration suite
+    green on the merged result. The "done" statuses below reflect master post-merge, not the PR view.
 
   m0_milestone_exit: "Snapshot diff is empty and a human has signed off on it. (00-vision.yaml M0)"
 
@@ -265,13 +285,13 @@ units:
         defend to someone who knows Joern.
       blocks: [M0.4, "every golden-snapshot gate after it", "cpg://schema in M2"]
       does_not_block: [F1, F2, F3, F4]
-      status: draft
+      status: not_started
 
     - id: M0.1
       name: Config loading, manifest discovery, cpg doctor
       delivers: "cpg.config.yaml schema; precedence CLI > env (CPG_*) > file > manifest discovery > defaults; manifest discovery (package.json workspaces, pyproject/uv, tsconfig references/paths); .gitignore merge. (X11, GE-FR1, GE-FR2, GE-UC9)"
       gate: "Precedence unit tests per layer; `cpg doctor` golden output; a zero-config fixture resolves to sane defaults."
-      status: draft
+      status: not_started
 
     - id: M0.2
       name: Workspace walker + content hashing
@@ -279,7 +299,7 @@ units:
       gate: >
         Walking test/fixtures/ yields an exactly-asserted file list; node_modules / .venv / __pycache__ proven
         excluded; hash stable across runs and changes on byte change.
-      status: draft
+      status: not_started
 
     - id: M0.3
       name: Node identity
@@ -291,7 +311,7 @@ units:
         visionary's confirmation; this unit is where that confirmation becomes executable, because the spike
         either measures 0 id changes or it does not.
       gate: "Insert-above -> 0 id changes; reformat -> 0; file move -> path-prefix change only; symbol rename -> exactly 1 delete + 1 create."
-      status: draft
+      status: not_started
 
     - id: M0.4
       name: "Graph store: schema, indexes, DiffGraph writer"
@@ -300,7 +320,7 @@ units:
         Write a ~1k-node synthetic DiffGraph, assert counts; GRAPH.EXPLAIN shows INDEX SCAN not label scan on
         CPG.id / CPG.file / SYMBOL.fqn; re-write is idempotent.
       depends_on: [M0.0]
-      status: draft
+      status: not_started
 
     - id: M0.5
       name: Layered TypeScript fixture
@@ -308,31 +328,31 @@ units:
       delivers: "A mirror of the existing layered Python app in TS (api -> services -> database) under test/fixtures/code_examples/typescript/. Fixture content only, no engine code."
       why_before_the_extractor: "There must be something real to extract. Keep it deliberately small — Q12/D18: fixtures grow only as far as they stay hand-auditable."
       gate: "It typechecks and runs; the visionary confirms it is small enough to audit by hand."
-      status: draft
+      status: not_started
 
     - id: M0.6
       name: "TS adapter: declarations"
       delivers: "tree-sitter .scm queries -> MODULE/TYPE_DECL/METHOD/PARAM/MEMBER + DECLARES/HAS_PARAM (names subject to M0.0)."
       gate: "Per-file golden snapshots for the TS fixture; snapshot generator extended; --update-snapshots is local-only."
-      status: draft
+      status: not_started
 
     - id: M0.7
       name: "TS adapter: imports + calls"
       delivers: "IMPORT and CALL nodes with properties; IN_METHOD edges."
       gate: "Golden snapshots; every call site in the fixture appears exactly once; NO bare-name SYMBOLs created for unresolved calls (README rule 2)."
-      status: draft
+      status: not_started
 
     - id: M0.8
       name: "Python adapter: declarations"
       delivers: "As M0.6, Python, against the existing layered Python fixture."
       gate: "Per-file golden snapshots."
-      status: draft
+      status: not_started
 
     - id: M0.9
       name: "Python adapter: imports + calls"
       delivers: "As M0.7, Python."
       gate: "Golden snapshots; call sites exactly once; no bare-name SYMBOLs."
-      status: draft
+      status: not_started
 
     - id: M0.10
       name: SYMBOL model + adapter-native resolver
@@ -345,7 +365,7 @@ units:
         Resolution golden snapshot; unresolved-rate metric asserted below threshold (one Cypher GROUP BY over
         CALLS status properties); SYMBOL.fqn uniqueness holds; cross-file api -> services -> database edges
         exist in both fixtures.
-      status: draft
+      status: not_started
 
     - id: M0.11
       name: cpg index end-to-end + whole-graph golden
@@ -356,7 +376,7 @@ units:
         whole-graph snapshot; assertGraphInvariants() passes; and the visionary reads the dumped graph and
         signs off — every node and edge is one they'd expect, nothing spurious, nothing missing. That
         signature is the M0 exit.
-      status: draft
+      status: not_started
 
     - id: M0.12
       name: Golden oracle harness
@@ -364,7 +384,7 @@ units:
       delivers: "scip-typescript + scip-python over the fixtures and 1-2 small OSS repos -> precision/recall per RefSite.kind. SCIP is the golden oracle, not a live resolver (AM4)."
       gate: "Report produced and recorded; the v1 target (>= 90% call sites resolved at >= 95% precision on typed TS) is MEASURED, not necessarily met yet."
       parallelizable: true
-      status: draft
+      status: not_started
 
   m1_milestone_exit: "Body edit -> ready < 2 s with zero cascade; interface edit -> dependents re-resolved; offline edits caught up on restart. (00-vision.yaml M1)"
 
@@ -380,7 +400,7 @@ units:
       gate: >
         Real FS ops in a temp dir produce exactly the asserted normalized events. MANUAL: editor save shapes
         from VS Code / vim / JetBrains / terminal on macOS + Linux each yield ONE change event.
-      status: draft
+      status: not_started
 
     - id: M1.2
       name: Per-file incremental replace, one transaction
@@ -393,14 +413,14 @@ units:
         Ported verifyFile(): counts match, INBOUND CROSS-FILE CALLS UNCHANGED, zero orphan SYMBOLs among
         touched fqns, FILE marker ready + version+1. A concurrent reader never observes a torn version.
       reuses: [SF3]
-      status: draft
+      status: not_started
 
     - id: M1.3
       name: Tree cache + tree.edit for open documents
       delivers: "Cached trees + tree.edit ONLY for open documents plus LRU(100); everything else full-parses. delete() on eviction. (GE-FR5, AM7)"
       why_bounded: "A cached tree costs ~1.6 MB RSS per 1000-line file and the wasm heap never shrinks (measured: 500 trees -> +789 MB). Full parse is 4.2 ms, which is fine."
       gate: "Incremental reparse yields a CST IDENTICAL to a full parse, over the fixture with N randomized edits."
-      status: draft
+      status: not_started
 
     - id: M1.4
       name: interface_hash + cascade gating
@@ -411,7 +431,7 @@ units:
         Body-only edit -> 0 hash change -> 0 cascade. Export-signature change -> EXACTLY the importing
         dependents (asserted set, NOT a superset — a superset silently reintroduces the stampede). Barrel
         re-export propagation.
-      status: draft
+      status: not_started
 
     - id: M1.5
       name: Cascade execution + stale marking + background drain
@@ -422,7 +442,7 @@ units:
       gate: >
         Exported-signature edit re-resolves the exact dependent set and re-points edges; a forced over-budget
         case leaves the saved file ready, dependents stale with reason, and the background drain clears them.
-      status: draft
+      status: not_started
 
     - id: M1.6
       name: Catch-up on start + move detection
@@ -430,7 +450,7 @@ units:
       gate: >
         Engine stopped, files edited/added/deleted/moved on disk, restarted -> graph converges to the
         full-reindex snapshot. A move is a relocation (ids preserved) with importers cascaded.
-      status: draft
+      status: not_started
 
     - id: M1.7
       name: Bulk mode
@@ -443,13 +463,13 @@ units:
         SP4: git checkout of a large branch diff -> bounded batch count, ZERO node_modules events, converges
         to the same graph as a full reindex. SP7: kill -9 mid-storm then restart -> getEventsSince +
         reconciliation walk converge within budget.
-      status: draft
+      status: not_started
 
     - id: M1.8
       name: Status document + event bus
       delivers: "Local IPC status endpoint and `cpg status`: coverage, counts by status, active cascades, stale counts, versions, DB health. Events: index.start/progress/complete, file.updated, cascade.*, analytics.complete, engine.error. (GE-FR13, GE-FR17)"
       gate: "A save emits the exact asserted event sequence; the status document's coverage and counts agree with a direct graph count."
-      status: draft
+      status: not_started
 
     - id: M1.9
       name: Save-to-ready budget gate
@@ -459,7 +479,7 @@ units:
         ZERO files; reader p95 <= 150 ms under concurrent writes (GE-NFR4); no unbounded memory growth over
         1 h of churn (GE-NFR5).
       also_decides: "Missing these after tuning is the documented FalkorDB fallback trigger (README), so this gate is also the LadybugDB fallback decision point."
-      status: draft
+      status: not_started
 
   m2_outline:
     name: Agent wedge
@@ -476,7 +496,7 @@ units:
       - "Host config generation (`cpg mcp install --host ...`) with >= 2 hosts in CI (MC-NFR5)."
       - "Query logging (GE-FR21, MC-FR14) — must land here because M3's Query History depends on it."
     carry_in_decision: "AM3 caps v1 at <= 12 tools (Cursor silently drops tools past ~40 active). Which 2-3 analytics tools survive into the 12 is still open in 40-research.yaml — settle before the tool units."
-    status: draft
+    status: not_started
 
   m3_outline:
     name: Trust surface
@@ -491,7 +511,7 @@ units:
       - "Query History (VZ-UC10), depending on M2's query logging."
       - "MCP server definition provider registration (finalized in VS Code 1.101)."
     constraint: "Per AM2, webview views relocate between primary sidebar / panel / secondary sidebar only; the editor-area surface is a separate WebviewPanel with a serializer."
-    status: draft
+    status: not_started
 
   m4_outline:
     name: Scale and eval
@@ -503,7 +523,7 @@ units:
       - "Analytics MCP tools, folded per AM3."
       - "Seeded-bug catalogue — MC-Q4 lists six candidate classes; deferred until M0's clean graph exists, which it now will (D27)."
       - "Eval runner scoring detection + mitigation with and without MCP; target > 95% (D13, MC-UC9)."
-    status: draft
+    status: not_started
 
 # ------------------------------------------------------------------------------------------------------
 verification_commands:
