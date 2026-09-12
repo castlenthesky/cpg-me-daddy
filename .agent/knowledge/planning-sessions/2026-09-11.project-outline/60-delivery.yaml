@@ -311,7 +311,14 @@ units:
         visionary's confirmation; this unit is where that confirmation becomes executable, because the spike
         either measures 0 id changes or it does not.
       gate: "Insert-above -> 0 id changes; reformat -> 0; file move -> path-prefix change only; symbol rename -> exactly 1 delete + 1 create."
-      status: not_started
+      status: done
+      verified_2026-09-12: >
+        packages/engine/src/identity/node-id.ts (makeNodeId over an explicit scope-frame chain) +
+        packages/engine/test/support/id-diff.ts (idSetDiff, the differ the gate needs but nothing had
+        scoped). All four gate scenarios pass against a synthetic file model
+        (test/unit/identity/node-id.test.ts); the insert-above and file-move scenarios were additionally
+        re-verified against a REAL parse in M0.6/M0.8's PR (mutate the real fixture source, reparse,
+        diff the id set) once an extractor existed to produce them. Commit ed848e8.
 
     - id: M0.4
       name: "Graph store: schema, indexes, DiffGraph writer"
@@ -334,7 +341,19 @@ units:
       name: "TS adapter: declarations"
       delivers: "tree-sitter .scm queries -> MODULE/TYPE_DECL/METHOD/PARAM/MEMBER + DECLARES/HAS_PARAM (names subject to M0.0)."
       gate: "Per-file golden snapshots for the TS fixture; snapshot generator extended; --update-snapshots is local-only."
-      status: not_started
+      status: done
+      verified_2026-09-12: >
+        Landed together with M0.8 in one PR (commit 191a63c) so the adapter seam was proven
+        language-neutral before it hardened — reverses this file's original TS-before-Python ordering.
+        Two deviations from the delivery text, both deliberate: a hand-written recursive cursor walk
+        (packages/engine/src/extract/walk.ts) instead of .scm queries — the walk IS the scope stack
+        qualifiedScopePath needs, and .scm assets hit the exact src/dist resolution problem
+        wasm-locator.ts documents; and hand-written exact-set assertions
+        (test/unit/extract/typescript.test.ts) instead of checked-in goldens, deferred until the delta
+        shape stops moving (per-PR decision, not yet revisited). Gate covers a purpose-built TS fixture
+        (test/fixtures/typescript/hello_world.ts) rather than M0.5's TS fixture unit, which this
+        supersedes for the declarations slice. assertGraphDeltaValid() wired into every extraction with
+        a negative control proving it has been seen to fail on this adapter's own output.
 
     - id: M0.7
       name: "TS adapter: imports + calls"
@@ -346,7 +365,18 @@ units:
       name: "Python adapter: declarations"
       delivers: "As M0.6, Python, against the existing layered Python fixture."
       gate: "Per-file golden snapshots."
-      status: not_started
+      status: done
+      verified_2026-09-12: >
+        Landed together with M0.6 in one PR (commit 191a63c) — see that unit's note for the shared
+        walk.ts spine, the .scm-vs-cursor-walk and golden-vs-assertions deviations, and the ordering
+        reversal ahead of TS. Gate covers a purpose-built fixture
+        (test/fixtures/python/hello_world.py: a module-level constant, a class with a typed field and
+        two methods incl. a constructor, a top-level function) rather than the existing layered
+        api->services->database fixture — neither of the repo's existing hello_world fixtures contains a
+        single declaration, so a declarations-only slice over either yields one MODULE node and nothing
+        else; the layered fixture remains the target for a later, larger-scale unit. Includes the real
+        (not synthetic) M0.3 stability gate: reparsing with a comment prepended and with a sibling
+        declaration inserted above, asserting the id set is unaffected.
 
     - id: M0.9
       name: "Python adapter: imports + calls"
