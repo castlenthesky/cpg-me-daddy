@@ -85,10 +85,14 @@ declarations, calls, imports, the `SYMBOL` identity layer, the analytics overlay
 syntax; positions are properties for navigation, never identity.
 
 Deferred, not designed away: the **expression tier** (`IDENTIFIER`/`LITERAL`/`FIELD_IDENTIFIER`/`REF`)
-and the **CFG/PDG tiers** (`BLOCK`/`CONTROL_STRUCTURE`/`RETURN`, `REACHING_DEF`/`CDG`/`DOMINATE`).
+and the **CFG/remaining-PDG tiers** (`BLOCK`/`CONTROL_STRUCTURE`/`RETURN`, `CDG`/`DOMINATE`).
 Their Joern names are reserved unchanged for when these tiers ship (§9b) — RK1 requires the v1 schema
 not preclude adding taint analysis later, and reserved-name discipline is how that promise stays
 concrete rather than aspirational.
+
+**Amended 2026-09-12:** `REACHING_DEF` was pulled forward out of the deferred PDG tier as sparse
+structural-tier data flow — `MEMBER|PARAM -> CALL`, intra-file, no expression-tier nodes required
+(D10/D23 amendment, DL13). See §4 and §5.
 
 ---
 
@@ -133,7 +137,7 @@ comments don't repeat.
 
 ## §4. Edge type catalogue
 
-Thirteen edge types. Endpoint label sets, properties, ownership and write mechanism live in
+Fourteen edge types. Endpoint label sets, properties, ownership and write mechanism live in
 `packages/engine/src/schema/edges.ts`.
 
 - **`HAS_ENTRY`** (was `CONTAINS`) — `DIRECTORY -> DIRECTORY|FILE`. Renamed to resolve the
@@ -185,6 +189,11 @@ Thirteen edge types. Endpoint label sets, properties, ownership and write mechan
 - **`DEPENDS_ON`** — `FILE -> FILE`, a file-granularity rollup from the **same** overlay job as
   `TARGETS` (one job, two materializations), giving import-cycle detection a materialized file-level
   graph instead of a live per-pair traversal.
+- **`REACHING_DEF`** (amended 2026-09-12, DL13) — `MEMBER|PARAM -> CALL {variable}`. Sparse
+  structural-tier data flow, pulled forward out of the deferred PDG tier for this edge alone: a
+  `MEMBER`/`PARAM` definition reaches a `CALL` that uses that binding (e.g. as an argument). Endpoints
+  are file-owned `:CPG` nodes, both intra-file, so no `SYMBOL` indirection is required. Not full PDG —
+  no `CDG`, no `DOMINATE`, no expression-tier hops (`IDENTIFIER`/`LITERAL`/`LOCAL` stay rejected, PR1).
 
 **Rebuild trigger for `TARGETS`/`DEPENDS_ON` (R6 Next Steps #3, decided):** periodic tick +
 `computed_at`/`status`, same cadence/contract as `COMMUNITY`, plus a manual "refresh now" escape hatch
@@ -230,6 +239,7 @@ schema module.
 | `INHERITS_FROM` | edge | `adopt_as_is` | INHERITS_FROM | `semantic` | Merges the former EXTENDS/IMPLEMENTS into one edge with a relation property (R6 Next Steps #1, DL6, visionary sign-off 2026-09-11). DELIBERATE DIVERGENCE FROM R6'S LITERAL TEXT: R6's edge table hedges the endpoint as `TYPE_DECL -> TYPE_DECL\|IDENTIFIER (or equivalent)`, a direct :CPG->:CPG cross-file edge. That is exactly the shape SYMBOL indirection (D5, design rule 2) exists to prevent — a per-file replace of the parent class's file would delete a node other files' edges point into — and it contradicts GE-FR7/GE-UC3, which compute the interface-change cascade by traversing inheritance edges into changed SYMBOLs, not into TYPE_DECL nodes directly. Pinned to TYPE_DECL -> SYMBOL instead, matching the endpoint EXTENDS/IMPLEMENTS already had. The one-hop TYPE_DECL -> TYPE_DECL traversal that motivated the direct form is already provided by the TARGETS overlay edge, whose own row lists TYPE_DECL as both source and target. | R6 edge table; M0.0 planning decision, user-confirmed |
 | `IN_SCOPE` | edge | `adopt_renamed` | CONTAINS | `semantic` | Was IN_METHOD, METHOD-only. Module-level/top-level calls (route registration, decorator-as-call, module init) had no home under that shape; broadened to MODULE and renamed so the old name targeting MODULE would not mislead an agent about the target label. Deliberately not merged into DECLARES: 'declared inside' and 'called inside' diverge exactly at inline callbacks not themselves declared. | R6 edge table |
 | `MEMBER_OF` | edge | `extend` | — | `gap-fill` | No Joern equivalent. Unrestricted target set (FILE/METHOD/TYPE_DECL), governed by the overlay-edge classification rule: any edge landing on a :CPG node from outside that node's own per-file replace transaction is a periodic-recompute overlay, never a correctness dependency of the write path. | R6 edge table |
+| `REACHING_DEF` | edge | `extend` | REACHING_DEF | `semantic` | Pulled into v1 as sparse structural-tier data flow (visionary amendment 2026-09-12), aligning with D10's 'structural-tier data flow' and superseding the blanket PDG deferral in D23/R6 for this edge alone. Joern's REACHING_DEF spans expression-tier nodes (IDENTIFIER/LITERAL/LOCAL); ours keeps PR1 sparsity by endpointing at MEMBER\|PARAM (definitions) and CALL (use sites). CFG, CDG, DOMINATE, and expression-tier nodes remain deferred. Intra-file only — both endpoints are file-owned :CPG nodes, so no SYMBOL indirection is required. | Joern PDG; visionary amendment 2026-09-12 (hello-world CPG golden) |
 | `TAGGED_BY` | edge | `adopt_as_is` | TAGGED_BY | `semantic` | Primary anchor SYMBOL, not CALL (Identity's correction, adopted by Security: sink/source classification is a fact about callee identity, stable across every caller's file-save cycle, and inherited for free via the existing CALLS -> SYMBOL hop). Secondary anchor MEMBER (local secrets); CALL-level tags reserved narrowly for per-call-site sanitizer/verified-safe annotations. Also the mechanism for the unified triage surface (see UNKNOWN/TAG). | R6 edge table |
 | `TARGETS` | edge | `extend` | CALL | `semantic` | Joern's Shortcuts-layer CALL edge is linker-created and its frontend MUST NOT create it. Ours is a one-hop shortcut past the CALL -> SYMBOL <- DEFINES tax on centrality/PageRank/impact-of-change traversal, materialized ONLY when the underlying resolution is status=resolved, resolved through ALIAS_OF* to the canonical SYMBOL first. Mandatory constraints: computed by an async periodic overlay job, the same contract as COMMUNITY, never written inside the per-file replace transaction; and must be a pure projection of the same resolver call that sets CALLS.status/IMPORTS.status — never an independent fast-path resolver. Rebuild trigger: periodic tick + computed_at, same as COMMUNITY, plus a manual refresh escape hatch. Rejected: recompute on every save of either endpoint's file. | R6 edge table; R6 Next Steps #3, DL8 |
 
@@ -277,7 +287,6 @@ schema module.
 | `CDG` | edge | deferred tier, names reserved | PDG tier |
 | `DOMINATE` | edge | deferred tier, names reserved | CFG tier |
 | `POST_DOMINATE` | edge | deferred tier, names reserved | CFG tier |
-| `REACHING_DEF` | edge | deferred tier, names reserved | PDG tier |
 | `CONDITION` | edge | deferred tier, names reserved | CFG tier |
 | `EVAL_TYPE` | edge | deferred tier, names reserved | v2 type-system tier alongside TYPE_PARAMETER/TYPE_ARGUMENT/BINDS |
 | `CATCH_BODY` | edge | deferred tier, names reserved | CFG tier |
@@ -448,11 +457,12 @@ reasoning as the rest of this row; revisit only if a concrete need surfaces. `KE
 `TAG_NODE_PAIR` — edge/node properties already serve this in a property graph. `FINDING` —
 taint-overlay territory, deferred alongside CFG/PDG, not gone.
 
-**Expression/CFG/PDG tier, deferred, names reserved (§9b):** `CONTROL_STRUCTURE`, `BLOCK`, `RETURN`,
-`JUMP_TARGET`, `JUMP_LABEL`, `IDENTIFIER`, `LITERAL`, `FIELD_IDENTIFIER`, `LOCAL`, `METHOD_REF`,
-`TYPE_REF`, `ARRAY_INITIALIZER`, `COMMENT`; edges `CFG`, `CDG`, `DOMINATE`, `POST_DOMINATE`,
-`REACHING_DEF`, `CONDITION`, `EVAL_TYPE`, `CATCH_BODY`/`DO_BODY`/`FALSE_BODY`/`FINALLY_BODY`/
-`FOR_BODY`/`FOR_INIT`/`FOR_UPDATE`/`TRUE_BODY`/`TRY_BODY`.
+**Expression/CFG/remaining-PDG tier, deferred, names reserved (§9b):** `CONTROL_STRUCTURE`, `BLOCK`,
+`RETURN`, `JUMP_TARGET`, `JUMP_LABEL`, `IDENTIFIER`, `LITERAL`, `FIELD_IDENTIFIER`, `LOCAL`,
+`METHOD_REF`, `TYPE_REF`, `ARRAY_INITIALIZER`, `COMMENT`; edges `CFG`, `CDG`, `DOMINATE`,
+`POST_DOMINATE`, `CONDITION`, `EVAL_TYPE`, `CATCH_BODY`/`DO_BODY`/`FALSE_BODY`/`FINALLY_BODY`/
+`FOR_BODY`/`FOR_INIT`/`FOR_UPDATE`/`TRUE_BODY`/`TRY_BODY`. (`REACHING_DEF` moved to adopted, §4/§5 —
+amended 2026-09-12, DL13.)
 
 **v2 candidate, not rejected (§9c):** `TYPE_PARAMETER`, `TYPE_ARGUMENT`.
 

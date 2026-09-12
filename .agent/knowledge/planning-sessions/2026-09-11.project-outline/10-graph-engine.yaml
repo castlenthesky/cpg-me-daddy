@@ -238,4 +238,4 @@ open_questions:
     answer: "Yes. Host passes open editors as a priority list; headless falls back to git recently-changed."
     status: agreed   # 2026-09-11
 
-out_of_scope_v1: [CFG, PDG, taint sources/sinks, persisted labels/annotations (X9), layer rules and violations (D16), SCIP/LSP resolvers (design the seam only), Windows native DB, remote/multi-user graph]
+out_of_scope_v1: [CFG, full PDG (CDG/DOMINATE — sparse REACHING_DEF is in v1), taint sources/sinks, persisted labels/annotations (X9), layer rules and violations (D16), SCIP/LSP resolvers (design the seam only), Windows native DB, remote/multi-user graph]

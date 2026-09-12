@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 2,
+  "file": "hello_world.py",
+  "nodes": [
+    {
+      "labels": ["CPG", "MODULE"],
+      "properties": {
+        "id": "hello_world.py:MODULE:hello_world",
+        "name": "hello_world",
+        "file": "hello_world.py",
+        "range": "1:0-3:0",
+        "status": "ready"
+      }
+    },
+    {
+      "labels": ["CPG", "MEMBER"],
+      "properties": {
+        "id": "hello_world.py:MEMBER:DISPLAY_TEXT",
+        "name": "DISPLAY_TEXT",
+        "file": "hello_world.py",
+        "range": "1:0-1:28"
+      }
+    },
+    {
+      "labels": ["CPG", "CALL"],
+      "properties": {
+        "id": "hello_world.py:CALL:print:0",
+        "callee_name": "print",
+        "args_count": 1,
+        "file": "hello_world.py",
+        "range": "2:0-2:19",
+        "kind": "call",
+        "status": "ready"
+      }
+    },
+    {
+      "labels": ["SYMBOL"],
+      "properties": {
+        "fqn": "hello_world.py`DISPLAY_TEXT.",
+        "kind": "variable",
+        "language": "python"
+      }
+    },
+    {
+      "labels": ["SYMBOL"],
+      "properties": {
+        "fqn": "site:python-stdlib`print().",
+        "kind": "function",
+        "language": "python",
+        "scheme": "site",
+        "package": "python-stdlib"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DECLARES",
+      "fromLabel": "MODULE",
+      "toLabel": "MEMBER",
+      "fromKey": "hello_world.py:MODULE:hello_world",
+      "toKey": "hello_world.py:MEMBER:DISPLAY_TEXT",
+      "properties": {}
+    },
+    {
+      "type": "DEFINES",
+      "fromLabel": "MEMBER",
+      "toLabel": "SYMBOL",
+      "fromKey": "hello_world.py:MEMBER:DISPLAY_TEXT",
+      "toKey": "hello_world.py`DISPLAY_TEXT.",
+      "properties": {}
+    },
+    {
+      "type": "IN_SCOPE",
+      "fromLabel": "CALL",
+      "toLabel": "MODULE",
+      "fromKey": "hello_world.py:CALL:print:0",
+      "toKey": "hello_world.py:MODULE:hello_world",
+      "properties": {}
+    },
+    {
+      "type": "CALLS",
+      "fromLabel": "CALL",
+      "toLabel": "SYMBOL",
+      "fromKey": "hello_world.py:CALL:print:0",
+      "toKey": "site:python-stdlib`print().",
+      "properties": {
+        "status": "external"
+      }
+    },
+    {
+      "type": "REACHING_DEF",
+      "fromLabel": "MEMBER",
+      "toLabel": "CALL",
+      "fromKey": "hello_world.py:MEMBER:DISPLAY_TEXT",
+      "toKey": "hello_world.py:CALL:print:0",
+      "properties": {
+        "variable": "DISPLAY_TEXT"
+      }
+    }
+  ]
+}

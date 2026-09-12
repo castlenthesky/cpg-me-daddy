@@ -188,7 +188,6 @@ export const REJECTED_JOERN_EDGES: readonly RejectedName[] = [
   { name: "CDG", group: "deferred tier, names reserved", reason: "PDG tier" },
   { name: "DOMINATE", group: "deferred tier, names reserved", reason: "CFG tier" },
   { name: "POST_DOMINATE", group: "deferred tier, names reserved", reason: "CFG tier" },
-  { name: "REACHING_DEF", group: "deferred tier, names reserved", reason: "PDG tier" },
   { name: "CONDITION", group: "deferred tier, names reserved", reason: "CFG tier" },
   {
     name: "EVAL_TYPE",

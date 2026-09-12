@@ -81,7 +81,7 @@ every integration test ends by asserting both `assertGraphInvariants()` and `ass
 ## The v1 CPG schema
 
 `packages/engine/src/schema/` (`nodes.ts`, `edges.ts`, `schema.ts`, `serialize.ts`, `validate.ts`) is the
-single source of truth for the graph vocabulary: 14 node labels, 13 edge types, each carrying its Joern
+single source of truth for the graph vocabulary: 14 node labels, 14 edge types, each carrying its Joern
 alignment, ownership class (`filesystem` | `file-owned` | `identity` | `overlay` | `graph-singleton`) and
 write mechanism. It feeds the `test:schema` gate, the golden serializer (M0.6+), and the future
 `cpg://schema` MCP resource (M2) from one object — never a second, hand-maintained copy. Full narrative
