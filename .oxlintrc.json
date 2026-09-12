@@ -1,6 +1,11 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": [
+    // Legacy, pre-monorepo trees: reference only, excluded from every gate.
+    // NOTE: these patterns do NOT exclude sibling git worktrees under
+    // .claude/worktrees/ — oxlint's config-level ignorePatterns do not match
+    // dot-directories. The `packages` argument in the root `lint` script is
+    // what keeps those out. See also --ignore-pattern, which does work.
     "**/dist/**",
     "**/out/**",
     "**/node_modules/**",

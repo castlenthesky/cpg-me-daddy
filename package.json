@@ -7,9 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "lint": "oxlint",
-    "format": "oxfmt",
-    "format:check": "oxfmt --check",
+    "lint": "oxlint packages",
+    "format": "oxfmt . '!.claude/**'",
+    "format:check": "oxfmt --check . '!.claude/**'",
     "typecheck": "tsc --build",
     "watch": "tsc --build --watch",
     "typecheck:clean": "tsc --build --clean",
