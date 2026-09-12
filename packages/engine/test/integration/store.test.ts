@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { openTestGraph, type TestGraph } from "../support/falkordb.ts";
 import { assertGraphInvariants, checkGraphInvariants } from "../support/invariants.ts";
+import { assertSchemaConformance } from "../support/schema-conformance.ts";
 
 const open: TestGraph[] = [];
 
@@ -24,20 +25,36 @@ afterEach(async () => {
 });
 
 /**
- * A minimal well-formed slice of the schema: one ready FILE, two SYMBOLs it
- * DEFINES, and a CALL into one of them. Satisfies every invariant, so a test
- * that breaks one has broken it deliberately.
+ * A minimal well-formed slice of the schema (M0.0): one ready FILE, a MODULE
+ * DEFINES-ing two SYMBOLs, and a CALL resolved into one of them. Satisfies
+ * every invariant AND every schema rule, so a test that breaks one has
+ * broken it deliberately.
+ *
+ * Schema-shaped on purpose, not just invariant-shaped: SYMBOL carries no
+ * `file` property (D5 — that is what makes it survive a per-file replace);
+ * DEFINES originates from a MODULE, not a FILE (FILE is not in DEFINES'
+ * declared `from` set); CALL carries the `:CPG` co-label plus its required
+ * properties and an `id`.
  */
 async function seed(g: TestGraph, file = "src/a.ts"): Promise<void> {
+  const name = file.split("/").pop();
   await g.falkor.graph.write(
-    `CREATE (f:FILE {path:$file, status:'ready', version:1})
-     CREATE (a:SYMBOL {fqn:$fqnA, file:$file})
-     CREATE (b:SYMBOL {fqn:$fqnB, file:$file})
-     CREATE (c:CALL {file:$file, name:'alpha'})
-     CREATE (f)-[:DEFINES]->(a)
-     CREATE (f)-[:DEFINES]->(b)
-     CREATE (c)-[:CALLS]->(a)`,
-    { file, fqnA: `${file}#alpha`, fqnB: `${file}#beta` },
+    `CREATE (f:FILE {path:$file, name:$name, language:'typescript', content_hash:'seed', status:'ready', version:1})
+     CREATE (m:CPG:MODULE {id:$moduleId, name:$name, file:$file, range:'1:0-1:0', status:'ready'})
+     CREATE (a:SYMBOL {fqn:$fqnA})
+     CREATE (b:SYMBOL {fqn:$fqnB})
+     CREATE (c:CPG:CALL {id:$callId, callee_name:'alpha', args_count:0, file:$file, range:'1:0-1:0', kind:'call', status:'ready'})
+     CREATE (m)-[:DEFINES]->(a)
+     CREATE (m)-[:DEFINES]->(b)
+     CREATE (c)-[:CALLS {status:'resolved'}]->(a)`,
+    {
+      file,
+      name,
+      moduleId: `module:${file}`,
+      callId: `call:${file}:0`,
+      fqnA: `${file}#alpha`,
+      fqnB: `${file}#beta`,
+    },
   );
 }
 
@@ -59,6 +76,7 @@ describe("FalkorDB store client", () => {
     expect(Number.isNaN(symbols.serverMs)).toBe(false);
 
     await assertGraphInvariants(g.falkor.graph);
+    await assertSchemaConformance(g.falkor.graph);
   });
 
   test("read() is read-only at the server, not by convention", async () => {

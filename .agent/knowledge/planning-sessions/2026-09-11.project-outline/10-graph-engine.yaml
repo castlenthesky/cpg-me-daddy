@@ -28,51 +28,24 @@ actors:
 
 # ------------------------------------------------------------------------------------------------------
 v1_schema:
-  status: draft
-  principle: >
-    Sparse by design (PR1). One node per thing a developer or agent would name; no nodes for syntax.
-    Positions (line/col ranges) are properties for navigation, never part of identity.
-  id_rule: >
-    AMENDED by R4 (40-research.yaml AM1): `${path}:${kind}:${qualifiedScopePath}` with `:${ordinal}` or
-    `:${bodyHash}` only for anonymous items. NO file content hash in ids — it would change every id on
-    every save. Content hash and interface hash live on FILE as properties.
-  symbol_fqn_rule: >
-    AMENDED by R2 (AM5): SYMBOL.fqn = SCIP descriptor grammar (e.g. src/`users.ts`/UserService#findById().);
-    scheme, manager, package, version stored as separate SYMBOL properties.
-  node_labels:
-    filesystem:
-      - { label: DIRECTORY, props: [path, name, status], id_rule: "dir:<relative path>" }
-      - { label: FILE, props: [path, name, language, content_hash, interface_hash, status, version, indexed_at, loc], id_rule: "file:<relative path>" }
-    code:   # all carry :CPG plus kind label; indexed on CPG.id and CPG.file
-      - { label: MODULE, props: [name, file, range, status], note: "One per file for TS/Py; namespaces/declared modules in TS become nested MODULE." }
-      - { label: TYPE_DECL, props: [name, kind (class|interface|enum|type_alias|protocol|dataclass), file, range, exported, docstring_head, status] }
-      - { label: METHOD, props: [name, kind (function|method|constructor|getter|setter|lambda_named), signature, params_count, file, range, exported, async, docstring_head, status], note: "Free functions and methods share the label; parent edge disambiguates." }
-      - { label: PARAM, props: [name, ordinal, type_text, default, file] }
-      - { label: MEMBER, props: [name, type_text, file, range, visibility], note: "Class fields / dataclass attributes / module-level constants." }
-      - { label: CALL, props: [callee_name, receiver_text, args_count, resolved (bool), file, range, kind (call|new|decorator|await)], note: "Args/literals folded into props (README rule 3). Never a bare-name SYMBOL for unresolved (README rule 2)." }
-      - { label: IMPORT, props: [source_text, "imported_names (list)", alias, is_type_only, "resolved (bool)", file, range] }
-    identity:
-      - { label: SYMBOL, props: [fqn, kind, language], note: "Not :CPG, no file. SCIP-style. Survives per-file replace by construction (D5)." }
-    analytics:
-      - { label: COMMUNITY, props: [algorithm, run_id, size, cohesion, computed_at, label_hint], note: "label_hint is a deterministic string (e.g. top-3 member names), not an LLM label (D15)." }
-  edge_types:
-    - { type: CONTAINS, from: DIRECTORY, to: [DIRECTORY, FILE], note: "Filesystem layer only. Code nesting uses DECLARES; file membership is the `file` property." }
-    - { type: DECLARES, from: [MODULE, TYPE_DECL, METHOD], to: [TYPE_DECL, METHOD, MEMBER], note: "Lexical nesting." }
-    - { type: HAS_PARAM, from: METHOD, to: PARAM }
-    - { type: DEFINES, from: [TYPE_DECL, METHOD, MEMBER, MODULE], to: SYMBOL }
-    - { type: CALLS, from: CALL, to: SYMBOL, props: [status (resolved|ambiguous|external|unresolved|dynamic), reason, confidence, resolvedBy], note: "R2: unresolved rate = one GROUP BY over these props." }
-    - { type: IN_METHOD, from: CALL, to: METHOD, note: "Which method body contains the call. Enables callers_of without CFG." }
-    - { type: IMPORTS, from: IMPORT, to: SYMBOL, note: "Per imported name. Module-level wildcard/namespace imports point at the MODULE's SYMBOL." }
-    - { type: EXTENDS, from: TYPE_DECL, to: SYMBOL }
-    - { type: IMPLEMENTS, from: TYPE_DECL, to: SYMBOL }
-    - { type: MEMBER_OF, from: [FILE, METHOD, TYPE_DECL], to: COMMUNITY, props: [run_id] }
-  status_property:
-    text: >
-      Every DIRECTORY/FILE/:CPG node carries `status` ∈ {ready, indexing, stale, error} and FILE carries
-      `version` (monotonic per file). Readers filter or annotate on it (D21, PR8). Dependents marked by an
-      over-budget cascade get `status: stale` and `stale_reason: <file id that changed>`.
-    status: agreed
-  deferred_layers: [CFG (BLOCK/CONTROL_STRUCTURE/RETURN), PDG (REACHING_DEF), expression tier (IDENTIFIER/LITERAL/REF), taint sources/sinks]
+  status: superseded
+  superseded_by: ./50-schema.md
+  superseded_on: 2026-09-12
+  by: "M0.0 — R6 ontology debate + visionary sign-off 2026-09-11 (DL6-DL11, D37)"
+  what_moved: >
+    CONTAINS -> HAS_ENTRY (frees CONTAINS for Joern's opposite-meaning METHOD->CFG edge);
+    IN_METHOD -> IN_SCOPE (target broadened to MODULE for top-level calls);
+    EXTENDS + IMPLEMENTS -> INHERITS_FROM{relation} (DL6), pointed at SYMBOL not TYPE_DECL (M0.0
+    planning decision, per-file-replace safety);
+    CALL.resolved / IMPORT.resolved booleans DROPPED -> shared 5-value status enum on CALLS and IMPORTS;
+    DECLARES extended to IMPORT; DEFINES extended to PARAM;
+    ADDED nodes TAG / UNKNOWN / META_DATA; ADDED edges ALIAS_OF / TAGGED_BY / TARGETS / DEPENDS_ON;
+    ADDED properties METHOD.{cyclomatic_complexity,max_nesting_depth,loc,visibility,generator},
+    TYPE_DECL.structural, COMMUNITY.{projection,edge_basis,level}.
+    Node/edge/property tables, id rule, status enums and ownership classes now live in 50-schema.md.
+    This block was never ratified (status was always draft) — nothing here was overwriting an agreed
+    record.
+  retained_here: "Nothing normative. This block is a pointer; 50-schema.md is the source of truth."
 
 # ------------------------------------------------------------------------------------------------------
 use_cases:
@@ -111,7 +84,7 @@ use_cases:
     trigger: GE-UC2 detects interface_hash change
     narrative: >
       Compute the set of changed SYMBOLs (added/removed/signature-changed). Find dependents via
-      IMPORTS/CALLS/EXTENDS edges into those SYMBOLs only — not every importer of the file. Mark them stale
+      IMPORTS/CALLS/INHERITS_FROM edges into those SYMBOLs only — not every importer of the file. Mark them stale
       with stale_reason. Re-resolve each dependent (re-parse only if its cached tree is missing). If the
       remaining work exceeds the budget, return READY for the saved file and drain the stale set in the
       background with a visible count (D21). GC orphaned SYMBOLs bounded to touched fqns.
@@ -137,8 +110,8 @@ use_cases:
     actor: A1
     trigger: watcher rename event, or catch-up hash match
     narrative: >
-      Update FILE.path/name and DIRECTORY CONTAINS edges. :CPG node ids are content-derived (README rule 1)
-      so they do not change. SYMBOL fqns that embed the module path DO change for TS/Py — re-derive the
+      Update FILE.path/name and DIRECTORY HAS_ENTRY edges. :CPG node ids are content-derived (AM1/D31,
+      50-schema.md §6) so they do not change. SYMBOL fqns that embed the module path DO change for TS/Py — re-derive the
       file's DEFINES/SYMBOL set and re-point IMPORTS from dependents (bounded cascade, GE-UC3).
     requirements: [GE-FR8, GE-FR12]
     priority: should
@@ -215,7 +188,7 @@ requirements:
     - { id: GE-FR4,  text: "Watcher = @parcel/watcher with native ignore globs; 100 ms trailing debounce / 500 ms ceiling; delete→create coalesced to change; zero-byte guard; rename pairing by ino+dev then hash; reconciliation walk on error/restart/10 min idle. Full policy in 40-research.yaml adopted_defaults.watcher. (R1)", status: agreed-by-evidence }
     - { id: GE-FR5,  text: "web-tree-sitter (wasm). Cached trees + tree.edit ONLY for open documents plus LRU(100); everything else full-parses (~4 ms per 1000 lines). Grammars: typescript, tsx, javascript, python, ABI-asserted at startup. (R4, AM7)", status: agreed-by-evidence }
     - { id: GE-FR6,  text: "Per-file interface_hash = hash of exported symbol set (name, kind, signature text, re-exports). Cascade only when it changes.", status: draft }
-    - { id: GE-FR7,  text: "Cascade targets = dependents with IMPORTS/CALLS/EXTENDS/IMPLEMENTS edges into the changed SYMBOLs, not all importers of the file.", status: draft }
+    - { id: GE-FR7,  text: "Cascade targets = dependents with IMPORTS/CALLS/INHERITS_FROM edges into the changed SYMBOLs, not all importers of the file.", status: draft }
     - { id: GE-FR8,  text: "Move detection: content_hash match between a disappeared and an appeared path within one catch-up or bulk window → relocation.", status: draft }
     - { id: GE-FR9,  text: "Bulk mode triggers on > N changed files (default 50) or .git/HEAD change; suppresses per-file analytics; single refresh at end.", status: draft }
     - { id: GE-FR10, text: "DIRECTORY/FILE nodes are written before parsing so coverage is visible during first launch (D22).", status: draft }
