@@ -1,0 +1,37 @@
+{
+  "name": "@cpg/vscode",
+  "displayName": "codegraph",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Graph representation of code symbols.",
+  "categories": [
+    "Other"
+  ],
+  "type": "commonjs",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "test:unit": "bun test test/unit",
+    "test:host": "vscode-test"
+  },
+  "dependencies": {
+    "@cpg/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/vscode": "^1.109.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "cpg.showVersion",
+        "title": "CPG: Show Version"
+      }
+    ]
+  },
+  "activationEvents": [],
+  "engines": {
+    "vscode": "^1.107.0"
+  }
+}

@@ -1,0 +1,22 @@
+# Standing gates, fired before a commit exists rather than after a push (F1).
+# Install with `lefthook install` (the root `prepare` script does this on `bun install`).
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: oxlint
+      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"
+      run: bunx oxlint {staged_files}
+
+    - name: oxfmt
+      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,json,jsonc,yml,yaml,css}"
+      run: bunx oxfmt --check --no-error-on-unmatched-pattern {staged_files}
+
+pre-push:
+  parallel: false
+  jobs:
+    - name: typecheck
+      run: bunx tsc --build
+
+    - name: unit tests
+      run: bun test packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit
