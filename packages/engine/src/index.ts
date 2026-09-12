@@ -23,6 +23,8 @@ export function engineIdentity(): string {
   return `@cpg/engine@${ENGINE_VERSION} (schema v${SCHEMA_VERSION})`;
 }
 
+export * from "./extract/index";
+export * from "./identity/index";
 export * from "./parser/index";
 export * from "./schema/index";
 export * from "./store/falkordb.config";
