@@ -1,0 +1,37 @@
+# Pinned FalkorDB for the cpg-me-daddy integration harness (F2).
+#
+# Port 6381, bound to loopback only. 6379 is the conventional dev instance and
+# 6380 is taken by the ast-demo benchmark on at least one machine here, so both
+# are off limits: a harness that binds a busy port gets "port is already
+# allocated" from Docker while `PING` on that port still answers — from the
+# *foreign* container. See scripts/falkordb-up.ts, which fails loudly on that
+# case, and packages/engine/test/support/falkordb.ts, which refuses to run
+# against an instance that is not this one.
+#
+# FALKORDB_ARGS rationale (carried over from ast-demo/bench/docker-compose.yml):
+#   TIMEOUT_DEFAULT/MAX  recent images ship a 1000ms default that silently rolls
+#                        back long writes (FalkorDB issue #1826)
+#   CACHE_SIZE           default 25 plan-cache entries; this harness has ~40 query shapes
+#   NODE_CREATION_BUFFER pre-sized matrix growth for bulk inserts
+# `--save ""` disables RDB so fork() snapshots don't spike latency mid-run, and
+# `--appendonly no` keeps the test instance purely in-memory: a torn-down
+# harness must never leave state on disk to leak into the next run.
+#
+# These four FALKORDB_ARGS values double as the harness fingerprint. They are
+# deliberately far from the FalkorDB defaults, so an instance answering on 6381
+# that does NOT report them is somebody else's server and the harness refuses
+# it. Change them here and you must change HARNESS_GRAPH_CONFIG in
+# packages/engine/test/support/falkordb.ts.
+services:
+  falkordb:
+    image: falkordb/falkordb:v4.20.4
+    container_name: cpg-test-falkordb
+    ports:
+      - "127.0.0.1:6381:6379"
+    environment:
+      FALKORDB_ARGS: ${FALKORDB_ARGS:-TIMEOUT_DEFAULT 30000 TIMEOUT_MAX 60000 CACHE_SIZE 200 NODE_CREATION_BUFFER 65536}
+      REDIS_ARGS: ${REDIS_ARGS:---save "" --appendonly no}
+    deploy:
+      resources:
+        limits:
+          memory: 4g

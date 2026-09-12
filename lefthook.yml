@@ -16,7 +16,7 @@ pre-push:
   parallel: false
   jobs:
     - name: typecheck
-      run: bunx tsc --build
+      run: bunx tsc --build && bunx tsc -p tsconfig.test.json
 
     - name: unit tests
       run: bun test packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit
