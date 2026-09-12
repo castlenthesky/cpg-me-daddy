@@ -33,54 +33,58 @@ describe("graph isolation", () => {
 
     // Interleaved writes on two live connections.
     await Promise.all([
-      a.client.write(
+      a.falkor.graph.write(
         "CREATE (f:FILE {path:'a.ts', status:'ready'}) WITH f CREATE (f)-[:DEFINES]->(:SYMBOL {fqn:'a.ts#only_a'})",
       ),
-      b.client.write(
+      b.falkor.graph.write(
         "CREATE (f:FILE {path:'b.ts', status:'ready'}) WITH f CREATE (f)-[:DEFINES]->(:SYMBOL {fqn:'b.ts#only_b'})",
       ),
-      a.client.write("CREATE (:CALL {file:'a.ts'})-[:CALLS]->(:SYMBOL {fqn:'a.ts#second'})"),
-      b.client.write("CREATE (:CALL {file:'b.ts'})-[:CALLS]->(:SYMBOL {fqn:'b.ts#second'})"),
+      a.falkor.graph.write("CREATE (:CALL {file:'a.ts'})-[:CALLS]->(:SYMBOL {fqn:'a.ts#second'})"),
+      b.falkor.graph.write("CREATE (:CALL {file:'b.ts'})-[:CALLS]->(:SYMBOL {fqn:'b.ts#second'})"),
     ]);
 
     const [fqnsA, fqnsB] = await Promise.all([
-      a.client.read<{ fqn: string }>("MATCH (s:SYMBOL) RETURN s.fqn AS fqn ORDER BY s.fqn"),
-      b.client.read<{ fqn: string }>("MATCH (s:SYMBOL) RETURN s.fqn AS fqn ORDER BY s.fqn"),
+      a.falkor.graph.read<{ fqn: string }>("MATCH (s:SYMBOL) RETURN s.fqn AS fqn ORDER BY s.fqn"),
+      b.falkor.graph.read<{ fqn: string }>("MATCH (s:SYMBOL) RETURN s.fqn AS fqn ORDER BY s.fqn"),
     ]);
 
     expect(fqnsA.data.map((r) => r.fqn)).toEqual(["a.ts#only_a", "a.ts#second"]);
     expect(fqnsB.data.map((r) => r.fqn)).toEqual(["b.ts#only_b", "b.ts#second"]);
 
     // Neither side sees the other's FILE either.
-    expect(await a.client.scalar("MATCH (f:FILE {path:'b.ts'}) RETURN count(f) AS n")).toBe(0);
-    expect(await b.client.scalar("MATCH (f:FILE {path:'a.ts'}) RETURN count(f) AS n")).toBe(0);
+    expect(await a.falkor.graph.scalar("MATCH (f:FILE {path:'b.ts'}) RETURN count(f) AS n")).toBe(
+      0,
+    );
+    expect(await b.falkor.graph.scalar("MATCH (f:FILE {path:'a.ts'}) RETURN count(f) AS n")).toBe(
+      0,
+    );
 
     // And each side's invariants are evaluated only against its own graph.
-    await assertGraphInvariants(a.client);
-    await assertGraphInvariants(b.client);
+    await assertGraphInvariants(a.falkor.graph);
+    await assertGraphInvariants(b.falkor.graph);
   });
 
   test("one test's violation does not fail its neighbour", async () => {
     const [a, b] = await Promise.all([graph("violator"), graph("bystander")]);
 
     await Promise.all([
-      a.client.write("CREATE (:SYMBOL {fqn:'orphan'})"),
-      b.client.write(
+      a.falkor.graph.write("CREATE (:SYMBOL {fqn:'orphan'})"),
+      b.falkor.graph.write(
         "CREATE (f:FILE {path:'b.ts', status:'ready'}) WITH f CREATE (f)-[:DEFINES]->(:SYMBOL {fqn:'b.ts#ok'})",
       ),
     ]);
 
-    await expect(assertGraphInvariants(a.client)).rejects.toThrow(/orphan SYMBOL/);
-    await assertGraphInvariants(b.client);
+    await expect(assertGraphInvariants(a.falkor.graph)).rejects.toThrow(/orphan SYMBOL/);
+    await assertGraphInvariants(b.falkor.graph);
   });
 
   test("a dropped graph leaves nothing behind for the next test", async () => {
     const first = await openTestGraph("reuse");
-    await first.client.write("CREATE (:SYMBOL {fqn:'ghost'})");
+    await first.falkor.graph.write("CREATE (:SYMBOL {fqn:'ghost'})");
     await first.close();
 
     const second = await graph("reuse");
     expect(second.key).not.toBe(first.key);
-    expect(await second.client.scalar("MATCH (n) RETURN count(n) AS n")).toBe(0);
+    expect(await second.falkor.graph.scalar("MATCH (n) RETURN count(n) AS n")).toBe(0);
   });
 });

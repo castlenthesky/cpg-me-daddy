@@ -37,8 +37,9 @@
     {
       // Engine purity (F1 gate). packages/engine is the pure core: it runs
       // unchanged inside the extension host, the CLI and a headless daemon, so
-      // it must never reach for an editor API.
-      "files": ["packages/engine/**"],
+      // it must never reach for an editor API. packages/falkordb-service sits
+      // below the engine and inherits the same rule.
+      "files": ["packages/engine/**", "packages/falkordb-service/**"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -52,7 +53,33 @@
             "patterns": [
               {
                 "group": ["vscode/*", "@cpg/vscode", "@cpg/vscode/**"],
-                "message": "Engine purity: packages/engine must never depend on the VS Code extension package."
+                "message": "Engine purity: the engine must never depend on the VS Code extension package."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Package independence. falkordb-service is published for reuse in other
+      // projects, so it must not know this one exists: no @cpg/* import, ever.
+      // Everything cpg-specific reaches it as configuration — see
+      // packages/engine/src/store/falkordb.config.ts.
+      "files": ["packages/falkordb-service/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "vscode",
+                "message": "falkordb-service must never import 'vscode'."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@cpg/*", "@cpg/**"],
+                "message": "falkordb-service is a standalone, reusable package: it must not depend on any @cpg/* package. Anything cpg-specific belongs in packages/engine and reaches this package as config (see FalkorBranding)."
               }
             ]
           }

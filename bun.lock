@@ -28,8 +28,15 @@
       "version": "0.0.1",
       "dependencies": {
         "@vscode/tree-sitter-wasm": "0.3.1",
-        "falkordb": "6.8.0",
+        "falkordb-service": "workspace:*",
         "web-tree-sitter": "0.27.0",
+      },
+    },
+    "packages/falkordb-service": {
+      "name": "falkordb-service",
+      "version": "0.1.0",
+      "dependencies": {
+        "falkordb": "6.8.0",
       },
     },
     "packages/vscode": {
@@ -236,6 +243,8 @@
     "escape-string-regexp": ["escape-string-regexp@4.0.0", "", {}, "sha512-TtpcNJ3XAzx3Gq8sWRzJaVajRs0uVxA2YAkdb1jm2YkPz4G6egUFAyA3n5vtEIZefPk5Wa4UXbKuS5fKkJWdgA=="],
 
     "falkordb": ["falkordb@6.8.0", "", { "dependencies": { "@js-temporal/polyfill": "^0.5.1", "@redis/client": "^5.10.0", "cluster-key-slot": "1.1.2", "generic-pool": "^3.9.0", "lodash": "^4.17.21", "redis": "^5.10.0" } }, "sha512-kPYTgo7LCQsZW6OO4o0k9hhwmitbZ+7xhLqtjMPV9h/rzLL3QqojBFpc1hv3xRhT2bZpJ4z0z/lH7rijID82Cg=="],
+
+    "falkordb-service": ["falkordb-service@workspace:packages/falkordb-service"],
 
     "fill-range": ["fill-range@7.1.1", "", { "dependencies": { "to-regex-range": "^5.0.1" } }, "sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg=="],
 

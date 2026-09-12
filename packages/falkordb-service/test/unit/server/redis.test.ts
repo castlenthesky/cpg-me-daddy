@@ -7,9 +7,14 @@ import {
   findRedisServer,
   ping,
   waitForReady,
-} from "../../../src/server/redis.ts";
-import { isServerError } from "../../../src/server/types.ts";
+} from "../../../src/services/server/redis.ts";
+import { isServerError } from "../../../src/services/server/types.ts";
+import { testConfig } from "../../support/config.ts";
 import { reservedClosedPort, startFakeRedis } from "./fixture-server.ts";
+
+/** Discovery and readiness both quote the host's own settings when they fail. */
+const CONFIG = testConfig();
+const DISCOVERY = { branding: CONFIG.branding, redisServerEnvName: CONFIG.envNames.redisServer };
 
 const onlyAt =
   (...paths: string[]) =>
@@ -17,19 +22,23 @@ const onlyAt =
     paths.includes(candidate);
 
 describe("findRedisServer", () => {
-  test("CPG_REDIS_SERVER takes precedence over PATH", () => {
+  test("the configured redis-server path takes precedence over PATH", () => {
     const found = findRedisServer({
-      env: { CPG_REDIS_SERVER: "/custom/redis-server", PATH: "/usr/bin" },
+      ...DISCOVERY,
+      explicitPath: "/custom/redis-server",
+      env: { PATH: "/usr/bin" },
       isExecutable: onlyAt("/custom/redis-server", "/usr/bin/redis-server"),
     });
     expect(found).toBe("/custom/redis-server");
   });
 
-  test("a CPG_REDIS_SERVER that is not executable is a clear error, not a fallback", () => {
+  test("a configured path that is not executable is a clear error, not a fallback", () => {
     let thrown: unknown;
     try {
       findRedisServer({
-        env: { CPG_REDIS_SERVER: "/custom/redis-server", PATH: "/usr/bin" },
+        ...DISCOVERY,
+        explicitPath: "/custom/redis-server",
+        env: { PATH: "/usr/bin" },
         isExecutable: onlyAt("/usr/bin/redis-server"),
       });
     } catch (error) {
@@ -44,6 +53,7 @@ describe("findRedisServer", () => {
 
   test("PATH is searched in order", () => {
     const found = findRedisServer({
+      ...DISCOVERY,
       env: { PATH: "/a:/b" },
       isExecutable: onlyAt("/b/redis-server"),
     });
@@ -52,6 +62,7 @@ describe("findRedisServer", () => {
 
   test("the common install prefixes are searched when PATH misses", () => {
     const found = findRedisServer({
+      ...DISCOVERY,
       env: { PATH: "/nowhere" },
       isExecutable: onlyAt("/opt/homebrew/bin/redis-server"),
     });
@@ -59,10 +70,10 @@ describe("findRedisServer", () => {
     expect(COMMON_REDIS_DIRS).toContain("/opt/homebrew/bin");
   });
 
-  test("X14(4): no redis-server produces the actionable FalkorDB-ships-a-module message", () => {
+  test("no redis-server produces the actionable FalkorDB-ships-a-module message", () => {
     let thrown: unknown;
     try {
-      findRedisServer({ env: { PATH: "/nowhere" }, isExecutable: () => false });
+      findRedisServer({ ...DISCOVERY, env: { PATH: "/nowhere" }, isExecutable: () => false });
     } catch (error) {
       thrown = error;
     }
@@ -71,14 +82,36 @@ describe("findRedisServer", () => {
       return;
     }
     expect(thrown.code).toBe("redis_server_not_found");
-    // The whole point of SP11's finding: explain WHY a Redis is needed at all.
+    // The whole point: explain WHY a Redis is needed at all.
     expect(thrown.remedy).toContain("Redis module");
     expect(thrown.remedy).toContain("brew install redis");
-    expect(thrown.remedy).toContain("CPG_REDIS_SERVER");
+    // ...and name the variable THIS host actually reads, not a hard-coded one.
+    expect(thrown.remedy).toContain(CONFIG.envNames.redisServer);
     expect(thrown.remedy).toContain("docker");
     expect(thrown.remedy).toContain("remote");
     // And it must render as one readable block for a CLI or MCP status payload.
     expect(thrown.toString()).toContain("[redis_server_not_found]");
+  });
+
+  test("the remedy names the host's own product and variable", () => {
+    let thrown: unknown;
+    try {
+      findRedisServer({
+        branding: { ...CONFIG.branding, productName: "myapp", modeSetting: "`db.mode`" },
+        redisServerEnvName: "MYAPP_REDIS_SERVER",
+        env: { PATH: "/nowhere" },
+        isExecutable: () => false,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(isServerError(thrown)).toBe(true);
+    if (isServerError(thrown)) {
+      expect(thrown.remedy).toContain("MYAPP_REDIS_SERVER");
+      expect(thrown.remedy).toContain("myapp");
+      expect(thrown.remedy).toContain("`db.mode`");
+      expect(thrown.remedy).not.toContain("CPG_");
+    }
   });
 });
 
@@ -114,7 +147,12 @@ describe("waitForReady", () => {
   test("returns as soon as the server answers", async () => {
     const fake = await startFakeRedis();
     try {
-      await waitForReady({ port: fake.port, readyTimeoutMs: 2_000, intervalMs: 25 });
+      await waitForReady({
+        branding: CONFIG.branding,
+        port: fake.port,
+        readyTimeoutMs: 2_000,
+        intervalMs: 25,
+      });
     } finally {
       await fake.close();
     }
@@ -126,6 +164,7 @@ describe("waitForReady", () => {
     let thrown: unknown;
     try {
       await waitForReady({
+        branding: CONFIG.branding,
         port,
         readyTimeoutMs: 30_000,
         intervalMs: 10,
@@ -146,11 +185,17 @@ describe("waitForReady", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  test("X14(4): an unresponsive server hits the deadline with a clear error", async () => {
+  test("an unresponsive server hits the deadline with a clear error", async () => {
     const port = await reservedClosedPort();
     let thrown: unknown;
     try {
-      await waitForReady({ port, readyTimeoutMs: 300, intervalMs: 25, timeoutMs: 100 });
+      await waitForReady({
+        branding: CONFIG.branding,
+        port,
+        readyTimeoutMs: 300,
+        intervalMs: 25,
+        timeoutMs: 100,
+      });
     } catch (error) {
       thrown = error;
     }
@@ -158,7 +203,7 @@ describe("waitForReady", () => {
     if (isServerError(thrown)) {
       expect(thrown.code).toBe("server_not_ready");
       expect(thrown.message).toContain("did not answer PING");
-      expect(thrown.remedy).toContain("engine.db.port");
+      expect(thrown.remedy).toContain(CONFIG.branding.portSetting);
     }
   });
 });

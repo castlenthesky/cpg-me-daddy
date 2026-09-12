@@ -1,5 +1,5 @@
 /**
- * The pinned FalkorDB release, and the platform -> asset map (X14(2)).
+ * The pinned FalkorDB release, and the platform -> asset map.
  *
  * FalkorDB publishes NO standalone server binary. Release v4.20.4 ships 15
  * assets and every one of them is a Redis module (`.so`) or a RAMP package.
@@ -13,6 +13,8 @@
  * NEVER add an entry here without downloading and hashing the real file.
  */
 
+import type { FalkorBranding } from "../../config";
+import { noAssetRemedy, windowsRemedy } from "./remedies";
 import { ServerError } from "./types";
 
 /** The one release the engine is pinned to. Bumping this needs new checksums. */
@@ -21,12 +23,18 @@ export const FALKORDB_VERSION = "v4.20.4";
 /** The Docker image carrying the same build, used by `DockerServerManager`. */
 export const FALKORDB_IMAGE = `falkordb/falkordb:${FALKORDB_VERSION}`;
 
-/** Where the release assets live. Plain HTTPS — product code never shells out to `gh`. */
-export const FALKORDB_RELEASE_BASE_URL = `https://github.com/FalkorDB/FalkorDB/releases/download/${FALKORDB_VERSION}`;
+/**
+ * Where the release assets live. Plain HTTPS — product code never shells out
+ * to `gh`. Takes the version so that overriding the release in config moves
+ * the base URL with it instead of silently pointing at the pinned one.
+ */
+export function releaseBaseUrl(version: string = FALKORDB_VERSION): string {
+  return `https://github.com/FalkorDB/FalkorDB/releases/download/${version}`;
+}
 
 /**
  * Keys the engine can auto-detect, plus glibc-variant keys that are reachable
- * only through the `CPG_FALKORDB_PLATFORM` override. The generic `linux-*`
+ * only through the platform override in config. The generic `linux-*`
  * assets are the Debian/Ubuntu builds; RHEL and Amazon Linux users whose glibc
  * is too old can pin their own.
  */
@@ -47,7 +55,7 @@ export interface AssetRecord {
   readonly sha256: string;
   /** Size in bytes. A cheap pre-check before the (much slower) hash. */
   readonly size: number;
-  /** True when only `CPG_FALKORDB_PLATFORM` can select this entry. */
+  /** True when only an explicit platform override can select this entry. */
   readonly overrideOnly?: boolean;
 }
 
@@ -104,7 +112,7 @@ export function isPlatformKey(value: string): value is PlatformKey {
 }
 
 /** Download URL for one asset of the pinned release. */
-export function assetUrl(record: AssetRecord, baseUrl: string = FALKORDB_RELEASE_BASE_URL): string {
+export function assetUrl(record: AssetRecord, baseUrl: string = releaseBaseUrl()): string {
   return `${baseUrl.replace(/\/+$/, "")}/${record.asset}`;
 }
 
@@ -118,27 +126,41 @@ export interface PlatformProbe {
   readonly musl?: boolean;
 }
 
-const WINDOWS_REMEDY =
-  "FalkorDB publishes no Windows build, so `engine.db.mode: spawned` cannot work on Windows. " +
-  "Set `engine.db.mode` to `docker` (runs " +
-  FALKORDB_IMAGE +
-  ") or to `remote` and point `engine.db.host`/`engine.db.port` at a FalkorDB you already run.";
-
-const NO_ASSET_REMEDY =
-  "Set `engine.db.mode` to `docker` or `remote`. If a FalkorDB release asset does exist for this " +
-  "platform, pin it with CPG_FALKORDB_PLATFORM=<key> (one of: " +
-  PLATFORM_KEYS.join(", ") +
-  ").";
+/** What `resolvePlatformKey` and `resolveAsset` need beyond the probe itself. */
+export interface AssetResolutionOptions {
+  /** Names the host's own settings in any remedy this produces. */
+  readonly branding: FalkorBranding;
+  /** Env var name quoted in remedies, e.g. `"FALKORDB_PLATFORM"`. */
+  readonly platformEnvName: string;
+  /**
+   * Explicit pin, already validated by `defineFalkorConfig`. This is how a
+   * RHEL8 or Amazon Linux user reaches an asset auto-detection would never
+   * pick. When set, auto-detection is skipped entirely.
+   */
+  readonly platformKey?: PlatformKey;
+  /**
+   * Overrides the pinned asset table. A seam for tests and for validating a
+   * version bump — a caller still has to supply a real sha256, so it cannot be
+   * used to skip verification.
+   */
+  readonly assets?: Readonly<Partial<Record<PlatformKey, AssetRecord>>>;
+}
 
 /**
  * platform/arch -> release asset. Throws `unsupported_platform` rather than
  * guessing: launching the wrong `.so` fails deep inside redis-server with a
  * far worse message than this one.
  */
-export function resolvePlatformKey(probe: PlatformProbe): PlatformKey {
+export function resolvePlatformKey(
+  probe: PlatformProbe,
+  options: AssetResolutionOptions,
+): PlatformKey {
+  const noAsset = (): string =>
+    noAssetRemedy(options.branding, options.platformEnvName, PLATFORM_KEYS);
+
   if (probe.platform === "win32") {
     throw new ServerError("unsupported_platform", "Spawned mode is not supported on Windows.", {
-      remedy: WINDOWS_REMEDY,
+      remedy: windowsRemedy(options.branding, FALKORDB_IMAGE),
     });
   }
   if (probe.platform === "darwin") {
@@ -148,7 +170,7 @@ export function resolvePlatformKey(probe: PlatformProbe): PlatformKey {
     throw new ServerError(
       "unsupported_platform",
       `FalkorDB ${FALKORDB_VERSION} ships no macOS ${probe.arch} module (arm64 only).`,
-      { remedy: NO_ASSET_REMEDY },
+      { remedy: noAsset() },
     );
   }
   if (probe.platform === "linux") {
@@ -162,55 +184,43 @@ export function resolvePlatformKey(probe: PlatformProbe): PlatformKey {
     throw new ServerError(
       "unsupported_platform",
       `FalkorDB ${FALKORDB_VERSION} ships no Linux ${probe.arch} module (x64 and arm64 only).`,
-      { remedy: NO_ASSET_REMEDY },
+      { remedy: noAsset() },
     );
   }
   throw new ServerError(
     "unsupported_platform",
     `Unsupported platform '${probe.platform}' for FalkorDB ${FALKORDB_VERSION}.`,
-    { remedy: NO_ASSET_REMEDY },
+    { remedy: noAsset() },
   );
 }
 
 /**
- * Resolve the asset for a probe, honouring `CPG_FALKORDB_PLATFORM`. The
- * override is how a RHEL8 or Amazon Linux user reaches an asset auto-detection
- * would never pick.
+ * Resolve the asset for a probe, honouring an explicit `platformKey` override.
  *
- * `assets` defaults to the pinned manifest. It is a seam for tests and for
- * validating a version bump — a caller still has to supply a real sha256, so
- * it cannot be used to skip verification.
+ * Unlike its pre-extraction form this reads no environment: the override
+ * arrives already parsed and validated from `defineFalkorConfig`, so the only
+ * failure left here is "no pinned asset for that key".
  */
 export function resolveAsset(
   probe: PlatformProbe,
-  env: Readonly<Record<string, string | undefined>> = {},
-  assets: Readonly<Partial<Record<PlatformKey, AssetRecord>>> = FALKORDB_ASSETS,
+  options: AssetResolutionOptions,
 ): { key: PlatformKey; record: AssetRecord } {
-  const override = env.CPG_FALKORDB_PLATFORM?.trim();
-  if (override) {
-    if (!isPlatformKey(override)) {
-      throw new ServerError(
-        "unsupported_platform",
-        `CPG_FALKORDB_PLATFORM='${override}' is not a known FalkorDB platform key.`,
-        { remedy: `Use one of: ${PLATFORM_KEYS.join(", ")}.` },
-      );
-    }
-    return { key: override, record: requireRecord(assets, override) };
-  }
-  const key = resolvePlatformKey(probe);
-  return { key, record: requireRecord(assets, key) };
+  const assets = options.assets ?? FALKORDB_ASSETS;
+  const key = options.platformKey ?? resolvePlatformKey(probe, options);
+  return { key, record: requireRecord(assets, key, options) };
 }
 
 function requireRecord(
   assets: Readonly<Partial<Record<PlatformKey, AssetRecord>>>,
   key: PlatformKey,
+  options: AssetResolutionOptions,
 ): AssetRecord {
   const record = assets[key];
   if (!record) {
     throw new ServerError(
       "unsupported_platform",
       `No pinned FalkorDB asset for platform key '${key}'.`,
-      { remedy: NO_ASSET_REMEDY },
+      { remedy: noAssetRemedy(options.branding, options.platformEnvName, PLATFORM_KEYS) },
     );
   }
   return record;

@@ -27,8 +27,8 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { Client } from "../packages/engine/src/store/client.ts";
 import { HARNESS_NONCE_KEY, harnessTarget } from "../packages/engine/test/support/falkordb.ts";
+import { FalkorClient } from "../packages/falkordb-service/src/client.ts";
 
 const COMPOSE_FILE = "docker/falkordb.yml";
 const SERVICE = "falkordb";
@@ -68,7 +68,7 @@ async function awaitProvenance(
   let lastError = "";
   for (;;) {
     try {
-      const client = await Client.connect({
+      const client = await FalkorClient.connect({
         host: target.host,
         port: target.port,
         password: target.password,

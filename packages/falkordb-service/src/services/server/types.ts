@@ -1,12 +1,12 @@
 /**
- * Server lifecycle vocabulary (README design rule 8).
+ * Server lifecycle vocabulary.
  *
  * FalkorDB is a Redis module, not a database server. Everything in this
  * directory exists because of that single fact: see `manifest.ts` for the
  * release assets that prove it.
  */
 
-/** How the engine obtains a running FalkorDB. Mirrors `engine.db.mode` in cpg.config.yaml. */
+/** How a running FalkorDB is obtained. */
 export type ServerMode = "spawned" | "remote" | "docker";
 
 /** Where a running FalkorDB can be reached. */
@@ -15,7 +15,7 @@ export interface ServerEndpoint {
   port: number;
 }
 
-/** A running server the engine may talk to. `stop()` is idempotent. */
+/** A running server the client may talk to. `stop()` is idempotent. */
 export interface ServerHandle {
   readonly mode: ServerMode;
   readonly endpoint: ServerEndpoint;
@@ -37,7 +37,7 @@ export interface ServerManager {
 
 /**
  * Machine-readable failure reasons. Every one of these must produce an
- * actionable message — X14(4) forbids failing silently or hanging.
+ * actionable message: failing silently, or hanging, is not an option.
  */
 export type ServerErrorCode =
   | "unsupported_platform"

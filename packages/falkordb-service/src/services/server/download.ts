@@ -1,17 +1,22 @@
 /**
  * HTTPS download with hard timeouts.
  *
- * X14(4) says an offline or unreachable download must report the problem, not
- * fail silently — and "silently" includes hanging forever. Two watchdogs run:
+ * An offline or unreachable download must report the problem, not fail
+ * silently — and "silently" includes hanging forever. Two watchdogs run:
  * one until response headers arrive, then a rolling one that fires when the
  * body stalls. Either aborts the request and produces a `download_failed`
  * ServerError carrying a remedy.
+ *
+ * Under the VS Code extension host (Node) the `proxy` init option is ignored —
+ * see `resolveProxy()` for why that is surfaced rather than hidden.
  */
 
 import { once } from "node:events";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 
+import type { FalkorBranding } from "../../config";
+import { offlineRemedy } from "./remedies";
 import { ServerError } from "./types";
 
 /** Time allowed for the response headers to arrive. */
@@ -22,8 +27,13 @@ export const DEFAULT_STALL_TIMEOUT_MS = 60_000;
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface DownloadOptions {
+  /** Names the host's own settings in the offline remedy. */
+  branding: FalkorBranding;
+  /** Env var name quoted in the offline remedy, e.g. `"FALKORDB_CACHE_DIR"`. */
+  cacheDirEnvName: string;
   connectTimeoutMs?: number;
   stallTimeoutMs?: number;
+  /** Proxy variables only (`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`), never a branded one. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Injected in tests; defaults to the global `fetch`. */
   fetchImpl?: FetchLike;
@@ -110,12 +120,6 @@ function assertSafeUrl(url: string, allowInsecure: boolean): void {
   );
 }
 
-const OFFLINE_REMEDY =
-  "cpg could not reach the FalkorDB release. Check your network or proxy " +
-  "(HTTPS_PROXY/HTTP_PROXY/NO_PROXY), or avoid the download entirely by setting " +
-  "`engine.db.mode` to `docker` or `remote`. If you already have the module, drop it in the " +
-  "cache directory (CPG_CACHE_DIR) and cpg will verify and reuse it.";
-
 /** fetch init plus the `proxy` option Bun understands and Node ignores. */
 type ProxyableInit = RequestInit & { proxy?: string };
 
@@ -126,7 +130,7 @@ type ProxyableInit = RequestInit & { proxy?: string };
 export async function downloadToFile(
   url: string,
   destPath: string,
-  options: DownloadOptions = {},
+  options: DownloadOptions,
 ): Promise<{ bytes: number }> {
   const allowInsecure = options.allowInsecureUrl === true;
   assertSafeUrl(url, allowInsecure);
@@ -161,9 +165,10 @@ export async function downloadToFile(
   const onExternalAbort = (): void => controller.abort();
   options.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
+  const remedy = offlineRemedy(options.branding, options.cacheDirEnvName);
   const fail = (message: string, cause?: unknown): ServerError => {
     const withProxy = proxy ? `${message} (proxy: ${proxy})` : message;
-    return new ServerError("download_failed", withProxy, { remedy: OFFLINE_REMEDY, cause });
+    return new ServerError("download_failed", withProxy, { remedy, cause });
   };
 
   try {

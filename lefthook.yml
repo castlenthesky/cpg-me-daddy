@@ -15,8 +15,11 @@ pre-commit:
 pre-push:
   parallel: false
   jobs:
+    # Both delegate to the root scripts rather than repeating their commands.
+    # The unit-test job used to list the package paths itself, which silently
+    # stopped covering a package the moment a fourth one was added.
     - name: typecheck
-      run: bunx tsc --build && bunx tsc -p tsconfig.test.json
+      run: bun run typecheck
 
     - name: unit tests
-      run: bun test packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit
+      run: bun run test:unit

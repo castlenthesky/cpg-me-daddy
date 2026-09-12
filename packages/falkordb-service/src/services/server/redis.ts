@@ -3,16 +3,19 @@
  *
  * FalkorDB ships only a Redis module, so spawned mode needs a `redis-server`
  * executable the FalkorDB project does not provide. When there isn't one, the
- * user must be told exactly that — X14(4): never a silent hang.
+ * user must be told exactly that — never a silent hang.
  *
  * The client here is deliberately tiny: enough to PING, to wait for readiness,
- * and to SHUTDOWN NOSAVE. The real RESP wrapper over GRAPH.QUERY is F2's job.
+ * and to SHUTDOWN NOSAVE. The full RESP wrapper over GRAPH.QUERY lives in
+ * `client.ts`.
  */
 
 import { accessSync, constants } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { delimiter, join } from "node:path";
 
+import type { FalkorBranding } from "../../config";
+import { moduleAbortedRemedy, noRedisServerRemedy, notReadyRemedy } from "./remedies";
 import { ServerError } from "./types";
 
 /** Looked at after `$PATH`, in order. Covers Homebrew (both prefixes) and distro packages. */
@@ -26,6 +29,17 @@ export const COMMON_REDIS_DIRS = [
 ];
 
 export interface DiscoveryOptions {
+  /** Names the host's own settings in the failure remedy. */
+  branding: FalkorBranding;
+  /** Env var name quoted in the remedy, e.g. `"FALKORDB_REDIS_SERVER"`. */
+  redisServerEnvName: string;
+  /**
+   * Explicit path from config, already resolved from its env var. When set and
+   * executable it wins outright; when set and not executable that is a hard
+   * error, never a silent fall through to PATH.
+   */
+  explicitPath?: string;
+  /** `$PATH` source. Only PATH is read here — every branded variable is config's job. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Injected in tests. Default: `X_OK` access check. */
   isExecutable?: (path: string) => boolean;
@@ -42,30 +56,25 @@ function defaultIsExecutable(path: string): boolean {
   }
 }
 
-const NO_REDIS_REMEDY =
-  "FalkorDB is distributed as a Redis module (a .so), not as a standalone server, so spawned mode " +
-  "needs a `redis-server` executable on your machine. Either install one " +
-  "(macOS: `brew install redis`; Debian/Ubuntu: `apt install redis-server`; Alpine: `apk add redis`), " +
-  "point cpg at one with CPG_REDIS_SERVER=/path/to/redis-server, or switch `engine.db.mode` to " +
-  "`docker` (no local Redis needed) or `remote` (use a FalkorDB you already run).";
-
 /**
- * Find `redis-server`. Precedence: `CPG_REDIS_SERVER`, then `$PATH`, then the
- * common install prefixes. Throws `redis_server_not_found` with the remedy above.
+ * Find `redis-server`. Precedence: the configured explicit path, then `$PATH`,
+ * then the common install prefixes. Throws `redis_server_not_found` carrying a
+ * remedy that names the host's own setting.
  */
-export function findRedisServer(options: DiscoveryOptions = {}): string {
+export function findRedisServer(options: DiscoveryOptions): string {
   const env = options.env ?? process.env;
   const isExecutable = options.isExecutable ?? defaultIsExecutable;
+  const remedy = noRedisServerRemedy(options.branding, options.redisServerEnvName);
 
-  const explicit = env.CPG_REDIS_SERVER?.trim();
+  const explicit = options.explicitPath?.trim();
   if (explicit) {
     if (isExecutable(explicit)) {
       return explicit;
     }
     throw new ServerError(
       "redis_server_not_found",
-      `CPG_REDIS_SERVER='${explicit}' is not an executable file.`,
-      { remedy: NO_REDIS_REMEDY },
+      `${options.redisServerEnvName}='${explicit}' is not an executable file.`,
+      { remedy },
     );
   }
 
@@ -86,7 +95,7 @@ export function findRedisServer(options: DiscoveryOptions = {}): string {
   throw new ServerError(
     "redis_server_not_found",
     "No `redis-server` executable found on PATH or in the usual install locations.",
-    { remedy: NO_REDIS_REMEDY },
+    { remedy },
   );
 }
 
@@ -156,7 +165,9 @@ export async function ping(options: CommandOptions): Promise<boolean> {
 }
 
 export interface ReadinessOptions extends CommandOptions {
-  /** Hard ceiling on the wait — X14(4)'s "not a silent hang". */
+  /** Names the host's own settings in the two failure remedies. */
+  branding: FalkorBranding;
+  /** Hard ceiling on the wait, so a dead server surfaces instead of hanging. */
   readyTimeoutMs?: number;
   intervalMs?: number;
   /**
@@ -179,13 +190,7 @@ export async function waitForReady(options: ReadinessOptions): Promise<void> {
       throw new ServerError(
         "server_start_failed",
         `redis-server exited before it became ready on port ${options.port}.`,
-        {
-          remedy:
-            "The server log below usually says why. A module without execute permission " +
-            "('It does not have execute permissions') means the cached .so lost its +x bit — " +
-            "delete the cpg cache directory and let cpg re-acquire it.",
-          detail: options.onGiveUp?.(),
-        },
+        { remedy: moduleAbortedRemedy(options.branding), detail: options.onGiveUp?.() },
       );
     }
     // Sequential by nature: a readiness poll, not parallelisable work.
@@ -202,12 +207,7 @@ export async function waitForReady(options: ReadinessOptions): Promise<void> {
       throw new ServerError(
         "server_not_ready",
         `FalkorDB did not answer PING on ${options.host ?? "127.0.0.1"}:${options.port} within ${readyTimeoutMs} ms.`,
-        {
-          remedy:
-            "Check the server log below, then retry. If the port is already taken by another " +
-            "Redis, choose a different `engine.db.port` or use `engine.db.mode: remote`.",
-          detail: options.onGiveUp?.(),
-        },
+        { remedy: notReadyRemedy(options.branding), detail: options.onGiveUp?.() },
       );
     }
     // eslint-disable-next-line no-await-in-loop

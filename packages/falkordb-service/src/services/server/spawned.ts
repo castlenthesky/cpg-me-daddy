@@ -1,9 +1,9 @@
 /**
- * `engine.db.mode: spawned` — cpg acquires the FalkorDB module and runs it
- * under a local `redis-server`.
+ * `spawned` mode — acquire the FalkorDB module and run it under a local
+ * `redis-server`.
  *
- * SP11 asked: single binary, or `redis-server --loadmodule`? FalkorDB publishes
- * no standalone server binary at all (see `manifest.ts`), so the answer is
+ * Single binary, or `redis-server --loadmodule`? FalkorDB publishes no
+ * standalone server binary at all (see `manifest.ts`), so the answer is
  * forced: `redis-server --loadmodule <cached .so>`. The consequence is that
  * this mode depends on an executable FalkorDB does not ship, and most of the
  * error handling below exists to say so clearly.
@@ -12,20 +12,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 
+import type { FalkorConfig } from "../../config";
 import { acquireFalkorModule, type AcquireOptions, type AcquiredModule } from "./acquire";
 import { findFreePort, findRedisServer, sendCommand, waitForReady } from "./redis";
+import { spawnFailedRemedy } from "./remedies";
 import { ServerError, type ServerHandle, type ServerManager } from "./types";
 
-export interface SpawnedServerOptions extends AcquireOptions {
-  host?: string;
-  /** 0 or omitted means "pick a free port". */
-  port?: number;
-  /** Overrides discovery. Otherwise `CPG_REDIS_SERVER` / PATH / common prefixes. */
-  redisServerPath?: string;
-  readyTimeoutMs?: number;
-  /** Appended to the redis-server command line (e.g. FalkorDB tuning flags). */
-  extraArgs?: readonly string[];
-}
+/** Test seams. Everything user-facing comes from the config instead. */
+export type SpawnedServerDeps = Omit<AcquireOptions, "config">;
 
 /** Keep the tail of the child's output so a failure can quote it back. */
 const LOG_TAIL_BYTES = 4_000;
@@ -46,23 +40,30 @@ export interface SpawnedStartResult extends ServerHandle {
 
 export class SpawnedServerManager implements ServerManager {
   readonly mode = "spawned" as const;
-  private readonly options: SpawnedServerOptions;
 
-  constructor(options: SpawnedServerOptions = {}) {
-    this.options = options;
-  }
+  constructor(
+    private readonly config: FalkorConfig,
+    private readonly deps: SpawnedServerDeps = {},
+  ) {}
 
   async start(): Promise<SpawnedStartResult> {
-    const host = this.options.host ?? "127.0.0.1";
-    const log = this.options.log ?? ((): void => {});
+    const { branding, envNames } = this.config;
+    const { host } = this.config.connection;
+    const { extraArgs, readyTimeoutMs, redisServerPath } = this.config.server;
+    const log = this.deps.log ?? ((): void => {});
 
     // Order matters: the platform check inside acquire() is what produces the
-    // X14(3) Windows message, and it must fire before anything touches the
-    // network or the filesystem.
-    const acquired = await acquireFalkorModule(this.options);
-    const redisServer = this.options.redisServerPath ?? findRedisServer({ env: this.options.env });
-    const port =
-      this.options.port && this.options.port > 0 ? this.options.port : await findFreePort(host);
+    // Windows message, and it must fire before anything touches the network or
+    // the filesystem.
+    const acquired = await acquireFalkorModule({ ...this.deps, config: this.config });
+    const redisServer = findRedisServer({
+      branding,
+      redisServerEnvName: envNames.redisServer,
+      explicitPath: redisServerPath,
+      env: this.deps.env,
+    });
+    const configured = this.config.connection.port;
+    const port = configured > 0 ? configured : await findFreePort(host);
 
     const args = [
       "--port",
@@ -71,13 +72,13 @@ export class SpawnedServerManager implements ServerManager {
       host,
       "--loadmodule",
       acquired.path,
-      // A cpg graph is a rebuildable cache (PR3): persistence would only cost
-      // fsyncs and leave dump.rdb litter in the user's cwd.
+      // The graph is treated as a rebuildable cache: persistence would only
+      // cost fsyncs and leave dump.rdb litter in the user's cwd.
       "--save",
       "",
       "--appendonly",
       "no",
-      ...(this.options.extraArgs ?? []),
+      ...extraArgs,
     ];
 
     log(`Spawning ${redisServer} ${args.join(" ")}`);
@@ -86,9 +87,7 @@ export class SpawnedServerManager implements ServerManager {
       child = spawn(redisServer, args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (cause) {
       throw new ServerError("server_start_failed", `Could not spawn '${redisServer}'.`, {
-        remedy:
-          "Check the redis-server path (CPG_REDIS_SERVER) or switch `engine.db.mode` to `docker` " +
-          "or `remote`.",
+        remedy: spawnFailedRemedy(branding, envNames.redisServer),
         cause,
       });
     }
@@ -109,9 +108,10 @@ export class SpawnedServerManager implements ServerManager {
 
     try {
       await waitForReady({
+        branding,
         host,
         port,
-        readyTimeoutMs: this.options.readyTimeoutMs ?? 15_000,
+        readyTimeoutMs,
         isAlive: () => !exited,
         onGiveUp: () => {
           const text = tail.toString();

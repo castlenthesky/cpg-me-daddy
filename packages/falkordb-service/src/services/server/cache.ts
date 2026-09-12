@@ -1,51 +1,37 @@
 /**
- * The user-level module cache: `~/.cache/cpg/falkordb/<version>/<asset>` (X14(2)),
- * shared across workspaces, overridable with `CPG_CACHE_DIR`.
+ * The user-level module cache: `<cacheRoot>/falkordb/<version>/<asset>`,
+ * shared across workspaces.
+ *
+ * Resolving `cacheRoot` itself — the env var, `XDG_CACHE_HOME`, the `~/.cache`
+ * fallback — belongs to `config.ts`. By the time anything here runs, the root
+ * is a plain absolute path and this module does no environment lookup at all.
  */
 
 import { chmod, mkdir, rename, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { FalkorBranding } from "../../config";
+import { cacheChmodRemedy, cacheUnreadableRemedy, cacheWriteRemedy } from "./remedies";
 import { ServerError } from "./types";
 
 /** Mode the cached module must end up with. See `ensureExecutable()`. */
 export const MODULE_MODE = 0o755;
 
-export interface CachePathsOptions {
-  env?: Readonly<Record<string, string | undefined>>;
-  home?: string;
-}
-
-/**
- * Root of the cpg cache. Precedence: `CPG_CACHE_DIR`, then `XDG_CACHE_HOME/cpg`,
- * then `~/.cache/cpg`.
- */
-export function resolveCacheRoot(options: CachePathsOptions = {}): string {
-  const env = options.env ?? process.env;
-  const explicit = env.CPG_CACHE_DIR?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  const xdg = env.XDG_CACHE_HOME?.trim();
-  if (xdg) {
-    return join(xdg, "cpg");
-  }
-  return join(options.home ?? homedir(), ".cache", "cpg");
-}
-
 /** Directory holding every asset of one pinned FalkorDB version. */
-export function moduleCacheDir(version: string, options: CachePathsOptions = {}): string {
-  return join(resolveCacheRoot(options), "falkordb", version);
+export function moduleCacheDir(cacheRoot: string, version: string): string {
+  return join(cacheRoot, "falkordb", version);
 }
 
 /** Absolute path of one cached module. */
-export function moduleCachePath(
-  version: string,
-  asset: string,
-  options: CachePathsOptions = {},
-): string {
-  return join(moduleCacheDir(version, options), asset);
+export function moduleCachePath(cacheRoot: string, version: string, asset: string): string {
+  return join(moduleCacheDir(cacheRoot, version), asset);
+}
+
+/** What the chmod and mkdir failures need in order to produce a useful remedy. */
+export interface CacheRemedyContext {
+  readonly branding: FalkorBranding;
+  /** Env var name quoted in remedies, e.g. `"FALKORDB_CACHE_DIR"`. */
+  readonly cacheDirEnvName: string;
 }
 
 /** True when the mode bits let the owner execute — what redis-server demands. */
@@ -64,13 +50,16 @@ export function isExecutableMode(mode: number): boolean {
  * costs nothing, and skipping it costs a hard startup abort. Returns whether
  * the file actually needed fixing, which is what the regression test asserts.
  */
-export async function ensureExecutable(path: string): Promise<{ changed: boolean; mode: number }> {
+export async function ensureExecutable(
+  path: string,
+  context: CacheRemedyContext,
+): Promise<{ changed: boolean; mode: number }> {
   let before: number;
   try {
     before = (await stat(path)).mode & 0o7777;
   } catch (cause) {
     throw new ServerError("cache_write_failed", `Cannot stat cached FalkorDB module: ${path}`, {
-      remedy: "Check the cache directory is readable, or delete it and let cpg download again.",
+      remedy: cacheUnreadableRemedy(context.branding),
       cause,
     });
   }
@@ -83,24 +72,19 @@ export async function ensureExecutable(path: string): Promise<{ changed: boolean
     throw new ServerError(
       "cache_write_failed",
       `Cannot chmod +x the cached FalkorDB module: ${path}`,
-      {
-        remedy:
-          "redis-server refuses to load a module without execute permission. Fix the file mode " +
-          `manually (chmod +x '${path}') or choose a writable CPG_CACHE_DIR.`,
-        cause,
-      },
+      { remedy: cacheChmodRemedy(path, context.cacheDirEnvName), cause },
     );
   }
   return { changed: true, mode: MODULE_MODE };
 }
 
 /** Create the version directory, failing with a remedy rather than a raw errno. */
-export async function ensureCacheDir(dir: string): Promise<void> {
+export async function ensureCacheDir(dir: string, context: CacheRemedyContext): Promise<void> {
   try {
     await mkdir(dir, { recursive: true });
   } catch (cause) {
-    throw new ServerError("cache_write_failed", `Cannot create the cpg cache directory: ${dir}`, {
-      remedy: "Point CPG_CACHE_DIR at a writable directory.",
+    throw new ServerError("cache_write_failed", `Cannot create the cache directory: ${dir}`, {
+      remedy: cacheWriteRemedy(context.cacheDirEnvName),
       cause,
     });
   }

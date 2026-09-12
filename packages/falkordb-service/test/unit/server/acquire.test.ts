@@ -5,14 +5,16 @@ import { appendFile, chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { FalkorAcquisitionConfig } from "../../../src/config.ts";
 import {
   acquireFalkorModule,
   detectMusl,
   type AcquireOptions,
-} from "../../../src/server/acquire.ts";
-import { isExecutableMode } from "../../../src/server/cache.ts";
-import type { AssetRecord, PlatformKey } from "../../../src/server/manifest.ts";
-import { isServerError } from "../../../src/server/types.ts";
+} from "../../../src/services/server/acquire.ts";
+import { isExecutableMode } from "../../../src/services/server/cache.ts";
+import type { AssetRecord, PlatformKey } from "../../../src/services/server/manifest.ts";
+import { isServerError } from "../../../src/services/server/types.ts";
+import { testConfig } from "../../support/config.ts";
 import { reservedClosedPort, startFixtureServer, type FixtureServer } from "./fixture-server.ts";
 
 const VERSION = "v4.20.4";
@@ -48,15 +50,31 @@ afterEach(async () => {
   await Promise.all(temps.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-function options(cacheRoot: string, baseUrl: string, extra: AcquireOptions = {}): AcquireOptions {
+/**
+ * Everything that used to be a flat option on `acquireFalkorModule` is now
+ * either a resolved config value (version, cache root, release URL, timeouts)
+ * or a test seam (the probe, the asset table, the fetch impl). `acquisition`
+ * overrides the first group; `extra` overrides the second.
+ */
+function options(
+  cacheRoot: string,
+  baseUrl: string,
+  extra: Partial<AcquireOptions> = {},
+  acquisition: Partial<FalkorAcquisitionConfig> = {},
+): AcquireOptions {
   return {
-    version: VERSION,
-    baseUrl,
-    cacheRoot,
+    config: testConfig({
+      acquisition: {
+        version: VERSION,
+        releaseBaseUrl: baseUrl,
+        cacheRoot,
+        stripQuarantine: false,
+        ...acquisition,
+      },
+    }),
     platform: PROBE,
-    manifest: manifestOf(),
+    assets: manifestOf(),
     allowInsecureUrl: true,
-    stripQuarantine: false,
     env: {},
     ...extra,
   };
@@ -67,7 +85,7 @@ function cachedPath(cacheRoot: string): string {
 }
 
 describe("acquireFalkorModule — happy path", () => {
-  test("downloads, verifies, chmod +x and caches at the X14(2) path", async () => {
+  test("downloads, verifies, chmod +x and caches at the documented path", async () => {
     const cache = await temp();
     const server = await fixture();
 
@@ -106,24 +124,31 @@ describe("acquireFalkorModule — happy path", () => {
     const deadPort = await reservedClosedPort();
 
     const result = await acquireFalkorModule(
-      options(cache, `http://127.0.0.1:${deadPort}`, { connectTimeoutMs: 500 }),
+      options(cache, `http://127.0.0.1:${deadPort}`, {}, { connectTimeoutMs: 500 }),
     );
 
     expect(result.fromCache).toBe(true);
   });
 
-  test("CPG_CACHE_DIR is honoured when no explicit cacheRoot is given", async () => {
+  test("the cache-dir env var is honoured when no explicit cacheRoot is given", async () => {
     const cache = await temp();
     const server = await fixture();
 
+    // The env read happens in defineFalkorConfig, not in acquire, so this now
+    // exercises the config layer feeding the acquisition layer.
     const result = await acquireFalkorModule({
-      version: VERSION,
-      baseUrl: server.baseUrl,
+      config: testConfig({
+        env: { FALKORDB_CACHE_DIR: cache },
+        acquisition: {
+          version: VERSION,
+          releaseBaseUrl: server.baseUrl,
+          stripQuarantine: false,
+        },
+      }),
       platform: PROBE,
-      manifest: manifestOf(),
+      assets: manifestOf(),
       allowInsecureUrl: true,
-      stripQuarantine: false,
-      env: { CPG_CACHE_DIR: cache },
+      env: {},
     });
 
     expect(result.path).toBe(cachedPath(cache));
@@ -191,7 +216,7 @@ describe("acquireFalkorModule — checksum refusal", () => {
     let thrown: unknown;
     try {
       await acquireFalkorModule(
-        options(cache, server.baseUrl, { manifest: manifestOf({ sha256: wrongHash }) }),
+        options(cache, server.baseUrl, { assets: manifestOf({ sha256: wrongHash }) }),
       );
     } catch (error) {
       thrown = error;

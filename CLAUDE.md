@@ -7,6 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `cpg-me-daddy` builds a Code Property Graph over TypeScript/JavaScript/Python and exposes it to editors
 and agents. It is a **bun workspace monorepo**:
 
+- `packages/falkordb-service` (`falkordb-service`) — the reusable FalkorDB layer. Client, service
+  facade, and the whole server lifecycle. Knows FalkorDB; knows nothing about cpg.
 - `packages/engine` (`@cpg/engine`) — the pure TypeScript core. Parsing, graph construction, storage.
 - `packages/cli` (`@cpg/cli`) — the `cpg` command line interface.
 - `packages/vscode` (`@cpg/vscode`) — the VS Code extension (manifest, activation, UI).
@@ -18,7 +20,12 @@ The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.projec
 - **Engine purity.** Nothing under `packages/engine` may import `vscode` (or `@cpg/vscode`). This is
   enforced by `no-restricted-imports` in `.oxlintrc.json` and it is a build-breaking gate, not a
   convention. Editor APIs live in `packages/vscode`; plain data crosses into the engine.
-- **Dependency direction.** `cli` and `vscode` may depend on `engine`. `engine` depends on neither.
+- **Dependency direction.** `cli` and `vscode` may depend on `engine`; `engine` depends on
+  `falkordb-service`. Nothing flows back up.
+- **`falkordb-service` independence.** It is published for reuse in other projects, so it must never
+  import `@cpg/*` (or `vscode`). Enforced by `no-restricted-imports` in `.oxlintrc.json`, same as
+  engine purity. Everything cpg-specific reaches it as configuration — see
+  `packages/engine/src/store/falkordb.config.ts`.
 - **Package manager is `bun`.** `bun.lock` is the lockfile; there is no `package-lock.json`.
 - **The integration harness owns its database.** It runs on 127.0.0.1:6381 — not 6379 (the conventional
   dev instance) and not 6380 (taken by the ast-demo benchmark). Before the first test it makes the server
@@ -42,7 +49,7 @@ The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.projec
 | `bun run format:check` | oxfmt in check mode (the CI gate) |
 | `bun run typecheck` | `tsc --build` across the project references, then the no-emit test/tools pass |
 | `bun run watch` | `tsc --build --watch` |
-| `bun run test:unit` | `bun test` for all three packages. DB-free by design |
+| `bun run test:unit` | `bun test` for all four packages. DB-free by design |
 | `bun run db:up` | Start the pinned FalkorDB (docker/falkordb.yml, 127.0.0.1:6381) and verify provenance |
 | `bun run db:down` | Stop it and discard its volume + provenance record |
 | `bun run test:integration` | `bun test` against that live FalkorDB |
@@ -70,12 +77,43 @@ gate fires before a commit exists. `.github/workflows/ci.yml` runs the same four
 ubuntu-latest and macos-latest (job `gates`, deliberately DB-free), plus a ubuntu-only `integration` job
 that brings the pinned FalkorDB up with the same `docker/falkordb.yml` developers use.
 
+## The falkordb-service package
+
+The layout is deliberate and worth keeping:
+
+```
+src/config.ts          the ONLY place the package reads process.env
+src/client.ts          FalkorClient — one connection, timed; no query semantics
+src/service.ts         FalkorService — the facade
+src/services/graph.ts  GraphService  — read/write/scalar/explain, injected with the client
+src/services/admin.ts  AdminService  — listGraphs/configSnapshot/dropGraph/raw
+src/services/server/   the server lifecycle sub-service (acquire, spawn, docker, remote)
+```
+
+Three rules hold it together:
+
+1. **Config is the only env reader.** `defineFalkorConfig()` resolves every parameter — connection,
+   server mode, cache root, timeouts, platform pin — from explicit input, then an env var, then a
+   default. Everything downstream takes a resolved `FalkorConfig` and never calls `process.env`.
+   Adding a knob means adding it to `config.ts`, not reaching for the environment where it is used.
+2. **The facade owns the wiring.** `FalkorService.start()` brings up the server, reads back the
+   endpoint it *actually* bound, connects one client to that, and injects it into the sub-services.
+   Sub-services never open their own connection. This matters because `spawned` and `docker` default
+   to port 0 and let the OS choose — connecting to `config.connection.port` would be wrong.
+3. **Branding is a parameter, not a constant.** Env var names (`FalkorEnvNames`), the cache
+   namespace, and the settings quoted in every error remedy come from `FalkorBranding`. That is how
+   the same failure says "set `engine.db.mode` to `docker`" inside cpg and names another project's
+   setting elsewhere. Remedies live in `src/services/server/remedies.ts`.
+
+cpg's own branding lives in `packages/engine/src/store/falkordb.config.ts`, which preserves the
+documented `CPG_CACHE_DIR`, `CPG_REDIS_SERVER` and `CPG_FALKORDB_PLATFORM` names exactly.
+
 ## FalkorDB acquisition (F3)
 
 FalkorDB publishes **no standalone server binary** — every release asset is a Redis module (`.so`).
 `engine.db.mode: spawned` therefore runs `redis-server --loadmodule <cached .so>` and depends on a
-`redis-server` the FalkorDB project does not ship. `packages/engine/src/server/` holds the
-`ServerManager` interface and the Spawned / Remote / Docker implementations.
+`redis-server` the FalkorDB project does not ship. `packages/falkordb-service/src/services/server/`
+holds the `ServerManager` interface and the Spawned / Remote / Docker implementations.
 
 Two rules in that directory are load-bearing:
 
@@ -89,14 +127,14 @@ Environment overrides: `CPG_CACHE_DIR` (cache root, default `~/.cache/cpg`), `CP
 (redis-server path), `CPG_FALKORDB_PLATFORM` (pin a specific release asset, e.g. `linux-x64-rhel9`).
 
 `test/unit/**` never touches the network — it runs against a local fixture origin and a fake Redis.
-The real download-and-spawn gate lives in `packages/engine/test/integration/`, is excluded from
-`test:unit` by path, and additionally requires `CPG_INTEGRATION_FALKORDB=1`.
+The real download-and-spawn gate lives in `packages/falkordb-service/test/integration/`, is excluded
+from `test:unit` by path, and additionally requires `CPG_INTEGRATION_FALKORDB=1`.
 
 ## TypeScript layout
 
 `tsconfig.base.json` holds the shared compiler options (module/moduleResolution NodeNext, target ES2022,
 `strict`, `composite`, `declaration`). The root `tsconfig.json` is a solution file — `"files": []` plus
-references to the three packages — so `tsc --build` from the root builds everything in dependency order.
+references to the four packages — so `tsc --build` from the root builds everything in dependency order.
 Each package compiles `src/` to `dist/`.
 
 `tsconfig.test.json` is a second, no-emit pass over `packages/*/test/**` and `tools/**`. Those files
@@ -104,6 +142,6 @@ import engine sources by explicit `.ts` path so `bun test` runs them without a p
 `allowImportingTsExtensions`, which needs `noEmit`, which cannot coexist with the composite projects in
 the solution file. `bun run typecheck` runs both passes.
 
-`@cpg/engine` publishes a `"bun"` export condition pointing at `src/index.ts`, so `bun test` resolves the
-engine's source directly and unit tests do not require a prior `tsc --build`. Node and `tsc` resolve the
-built `dist/` output as usual.
+`@cpg/engine` and `falkordb-service` both publish a `"bun"` export condition pointing at
+`src/index.ts`, so `bun test` resolves their sources directly and unit tests do not require a prior
+`tsc --build`. Node and `tsc` resolve the built `dist/` output as usual.

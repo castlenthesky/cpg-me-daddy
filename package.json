@@ -13,9 +13,9 @@
     "typecheck": "tsc --build && tsc -p tsconfig.test.json",
     "watch": "tsc --build --watch",
     "typecheck:clean": "tsc --build --clean",
-    "test:unit": "bun test packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit",
+    "test:unit": "bun test packages/falkordb-service/test/unit packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit",
     "test:integration": "bun test packages/engine/test/integration",
-    "test:integration:network": "bun run --filter @cpg/engine test:integration:network",
+    "test:integration:network": "bun run --filter falkordb-service test:integration:network",
     "db:up": "bun run tools/falkordb-up.ts",
     "db:down": "bun run tools/falkordb-down.ts",
     "prepare": "lefthook install || true"

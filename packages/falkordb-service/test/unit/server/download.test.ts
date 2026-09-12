@@ -4,9 +4,20 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { downloadToFile, isProxyBypassed, resolveProxy } from "../../../src/server/download.ts";
-import { isServerError } from "../../../src/server/types.ts";
+import {
+  downloadToFile,
+  isProxyBypassed,
+  resolveProxy,
+} from "../../../src/services/server/download.ts";
+import { isServerError } from "../../../src/services/server/types.ts";
+import { testConfig } from "../../support/config.ts";
 import { reservedClosedPort, startFixtureServer } from "./fixture-server.ts";
+
+/** downloadToFile now names the host's cache variable in its offline remedy. */
+const BRANDING = {
+  branding: testConfig().branding,
+  cacheDirEnvName: testConfig().envNames.cacheDir,
+};
 
 const temps: string[] = [];
 async function temp(): Promise<string> {
@@ -60,7 +71,7 @@ describe("downloadToFile", () => {
     const dir = await temp();
     let thrown: unknown;
     try {
-      await downloadToFile("http://example.com/x.so", join(dir, "x.so"));
+      await downloadToFile("http://example.com/x.so", join(dir, "x.so"), BRANDING);
     } catch (error) {
       thrown = error;
     }
@@ -79,6 +90,7 @@ describe("downloadToFile", () => {
     const dest = join(dir, "m.so");
     try {
       const result = await downloadToFile(`${fixture.baseUrl}/m.so`, dest, {
+        ...BRANDING,
         allowInsecureUrl: true,
       });
       expect(result.bytes).toBe(body.byteLength);
@@ -88,12 +100,13 @@ describe("downloadToFile", () => {
     }
   });
 
-  test("an HTTP error is reported with the X14(4) remedy, not swallowed", async () => {
+  test("an HTTP error is reported with an actionable remedy, not swallowed", async () => {
     const fixture = await startFixtureServer({ files: {} });
     const dir = await temp();
     let thrown: unknown;
     try {
       await downloadToFile(`${fixture.baseUrl}/missing.so`, join(dir, "m.so"), {
+        ...BRANDING,
         allowInsecureUrl: true,
       });
     } catch (error) {
@@ -105,7 +118,9 @@ describe("downloadToFile", () => {
     if (isServerError(thrown)) {
       expect(thrown.code).toBe("download_failed");
       expect(thrown.message).toContain("HTTP 404");
-      expect(thrown.remedy).toContain("engine.db.mode");
+      // The remedy names whatever the host calls its mode setting.
+      expect(thrown.remedy).toContain(testConfig().branding.modeSetting);
+      expect(thrown.remedy).toContain(testConfig().envNames.cacheDir);
     }
   });
 
@@ -116,6 +131,7 @@ describe("downloadToFile", () => {
     let thrown: unknown;
     try {
       await downloadToFile(`http://127.0.0.1:${port}/m.so`, join(dir, "m.so"), {
+        ...BRANDING,
         allowInsecureUrl: true,
         connectTimeoutMs: 5_000,
       });
@@ -141,6 +157,7 @@ describe("downloadToFile", () => {
     let thrown: unknown;
     try {
       await downloadToFile(`${fixture.baseUrl}/stall.so`, dest, {
+        ...BRANDING,
         allowInsecureUrl: true,
         connectTimeoutMs: 2_000,
         stallTimeoutMs: 300,
@@ -166,6 +183,7 @@ describe("downloadToFile", () => {
     let thrown: unknown;
     try {
       await downloadToFile(`http://127.0.0.1:${port}/m.so`, join(dir, "m.so"), {
+        ...BRANDING,
         allowInsecureUrl: true,
         connectTimeoutMs: 1_000,
         env: { HTTP_PROXY: "http://proxy.invalid:3128" },

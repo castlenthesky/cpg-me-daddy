@@ -4,14 +4,21 @@ import {
   assetUrl,
   FALKORDB_ASSETS,
   FALKORDB_IMAGE,
-  FALKORDB_RELEASE_BASE_URL,
+  releaseBaseUrl,
   FALKORDB_VERSION,
   isPlatformKey,
   PLATFORM_KEYS,
   resolveAsset,
   resolvePlatformKey,
-} from "../../../src/server/manifest.ts";
-import { isServerError } from "../../../src/server/types.ts";
+} from "../../../src/services/server/manifest.ts";
+import { isServerError } from "../../../src/services/server/types.ts";
+import { testConfig } from "../../support/config.ts";
+
+/** resolveAsset/resolvePlatformKey take their remedy wording from the host. */
+const RESOLUTION = {
+  branding: testConfig().branding,
+  platformEnvName: testConfig().envNames.platform,
+};
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -43,7 +50,7 @@ describe("pinned manifest", () => {
 
   test("the release URL and the docker image name the same pinned version", () => {
     expect(FALKORDB_VERSION).toBe("v4.20.4");
-    expect(FALKORDB_RELEASE_BASE_URL).toContain(FALKORDB_VERSION);
+    expect(releaseBaseUrl()).toContain(FALKORDB_VERSION);
     expect(FALKORDB_IMAGE).toBe(`falkordb/falkordb:${FALKORDB_VERSION}`);
     expect(assetUrl(FALKORDB_ASSETS["darwin-arm64"])).toBe(
       "https://github.com/FalkorDB/FalkorDB/releases/download/v4.20.4/falkordb-macos-arm64v8.so",
@@ -58,21 +65,25 @@ describe("pinned manifest", () => {
 
 describe("resolvePlatformKey", () => {
   test("maps the platforms FalkorDB actually publishes for", () => {
-    expect(resolvePlatformKey({ platform: "darwin", arch: "arm64" })).toBe("darwin-arm64");
-    expect(resolvePlatformKey({ platform: "linux", arch: "x64" })).toBe("linux-x64");
-    expect(resolvePlatformKey({ platform: "linux", arch: "arm64" })).toBe("linux-arm64");
-    expect(resolvePlatformKey({ platform: "linux", arch: "x64", musl: true })).toBe(
+    expect(resolvePlatformKey({ platform: "darwin", arch: "arm64" }, RESOLUTION)).toBe(
+      "darwin-arm64",
+    );
+    expect(resolvePlatformKey({ platform: "linux", arch: "x64" }, RESOLUTION)).toBe("linux-x64");
+    expect(resolvePlatformKey({ platform: "linux", arch: "arm64" }, RESOLUTION)).toBe(
+      "linux-arm64",
+    );
+    expect(resolvePlatformKey({ platform: "linux", arch: "x64", musl: true }, RESOLUTION)).toBe(
       "linux-x64-musl",
     );
-    expect(resolvePlatformKey({ platform: "linux", arch: "arm64", musl: true })).toBe(
+    expect(resolvePlatformKey({ platform: "linux", arch: "arm64", musl: true }, RESOLUTION)).toBe(
       "linux-arm64-musl",
     );
   });
 
-  test("X14(3): Windows is refused and pointed at docker/remote", () => {
+  test("Windows is refused and pointed at docker/remote", () => {
     let thrown: unknown;
     try {
-      resolvePlatformKey({ platform: "win32", arch: "x64" });
+      resolvePlatformKey({ platform: "win32", arch: "x64" }, RESOLUTION);
     } catch (error) {
       thrown = error;
     }
@@ -89,14 +100,16 @@ describe("resolvePlatformKey", () => {
   });
 
   test("macOS x64 has no published asset and says so", () => {
-    expect(() => resolvePlatformKey({ platform: "darwin", arch: "x64" })).toThrow(/no macOS x64/);
+    expect(() => resolvePlatformKey({ platform: "darwin", arch: "x64" }, RESOLUTION)).toThrow(
+      /no macOS x64/,
+    );
   });
 
   test("unknown arch and unknown platform are refused, never guessed", () => {
-    expect(() => resolvePlatformKey({ platform: "linux", arch: "riscv64" })).toThrow(
+    expect(() => resolvePlatformKey({ platform: "linux", arch: "riscv64" }, RESOLUTION)).toThrow(
       /no Linux riscv64/,
     );
-    expect(() => resolvePlatformKey({ platform: "sunos", arch: "x64" })).toThrow(
+    expect(() => resolvePlatformKey({ platform: "sunos", arch: "x64" }, RESOLUTION)).toThrow(
       /Unsupported platform 'sunos'/,
     );
   });
@@ -105,17 +118,24 @@ describe("resolvePlatformKey", () => {
 describe("resolveAsset", () => {
   const probe = { platform: "linux", arch: "x64" } as const;
 
-  test("CPG_FALKORDB_PLATFORM reaches the override-only distro assets", () => {
-    const resolved = resolveAsset(probe, { CPG_FALKORDB_PLATFORM: "linux-x64-rhel9" });
+  // The override used to be read from the environment here. It is now parsed
+  // and validated by defineFalkorConfig and arrives as a plain key, so the
+  // "unknown key" and "blank value" cases live in test/unit/config.test.ts.
+  test("an explicit platform key reaches the override-only distro assets", () => {
+    const resolved = resolveAsset(probe, { ...RESOLUTION, platformKey: "linux-x64-rhel9" });
     expect(resolved.key).toBe("linux-x64-rhel9");
     expect(resolved.record.asset).toBe("falkordb-rhel9-x64.so");
     expect(resolved.record.overrideOnly).toBe(true);
   });
 
-  test("an unknown override is refused with the list of valid keys", () => {
+  test("no override falls through to auto-detection", () => {
+    expect(resolveAsset(probe, RESOLUTION).key).toBe("linux-x64");
+  });
+
+  test("a key with no pinned asset is refused with the list of valid keys", () => {
     let thrown: unknown;
     try {
-      resolveAsset(probe, { CPG_FALKORDB_PLATFORM: "linux-ppc64" });
+      resolveAsset(probe, { ...RESOLUTION, platformKey: "linux-x64-rhel9", assets: {} });
     } catch (error) {
       thrown = error;
     }
@@ -126,7 +146,18 @@ describe("resolveAsset", () => {
     }
   });
 
-  test("an empty override falls through to auto-detection", () => {
-    expect(resolveAsset(probe, { CPG_FALKORDB_PLATFORM: "  " }).key).toBe("linux-x64");
+  test("the remedy names the host's own platform variable, not a hard-coded one", () => {
+    let thrown: unknown;
+    try {
+      resolveAsset(probe, {
+        branding: { ...RESOLUTION.branding, productName: "myapp" },
+        platformEnvName: "MYAPP_PLATFORM",
+        platformKey: "linux-x64-rhel9",
+        assets: {},
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(isServerError(thrown) && thrown.remedy).toContain("MYAPP_PLATFORM");
   });
 });

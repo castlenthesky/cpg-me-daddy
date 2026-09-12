@@ -11,8 +11,15 @@ import {
   moduleCacheDir,
   moduleCachePath,
   quarantine,
-  resolveCacheRoot,
-} from "../../../src/server/cache.ts";
+  type CacheRemedyContext,
+} from "../../../src/services/server/cache.ts";
+import { testConfig } from "../../support/config.ts";
+
+/** Cache failures quote the host's own cache-dir variable; these tests use the defaults. */
+const CONTEXT: CacheRemedyContext = {
+  branding: testConfig().branding,
+  cacheDirEnvName: testConfig().envNames.cacheDir,
+};
 
 const temps: string[] = [];
 async function temp(): Promise<string> {
@@ -24,35 +31,10 @@ afterEach(async () => {
   await Promise.all(temps.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe("resolveCacheRoot", () => {
-  test("CPG_CACHE_DIR wins over everything", () => {
-    const root = resolveCacheRoot({
-      env: { CPG_CACHE_DIR: "/tmp/explicit", XDG_CACHE_HOME: "/tmp/xdg" },
-      home: "/home/u",
-    });
-    expect(root).toBe("/tmp/explicit");
-  });
-
-  test("XDG_CACHE_HOME is next, and gets the cpg segment", () => {
-    expect(resolveCacheRoot({ env: { XDG_CACHE_HOME: "/tmp/xdg" }, home: "/home/u" })).toBe(
-      "/tmp/xdg/cpg",
-    );
-  });
-
-  test("default is ~/.cache/cpg as X14(2) specifies", () => {
-    expect(resolveCacheRoot({ env: {}, home: "/home/u" })).toBe("/home/u/.cache/cpg");
-  });
-
-  test("a blank CPG_CACHE_DIR is ignored rather than producing a relative path", () => {
-    expect(resolveCacheRoot({ env: { CPG_CACHE_DIR: "   " }, home: "/home/u" })).toBe(
-      "/home/u/.cache/cpg",
-    );
-  });
-
+describe("module cache paths", () => {
   test("the module path is <root>/falkordb/<version>/<asset>", () => {
-    const options = { env: { CPG_CACHE_DIR: "/c" }, home: "/home/u" };
-    expect(moduleCacheDir("v4.20.4", options)).toBe("/c/falkordb/v4.20.4");
-    expect(moduleCachePath("v4.20.4", "falkordb-macos-arm64v8.so", options)).toBe(
+    expect(moduleCacheDir("/c", "v4.20.4")).toBe("/c/falkordb/v4.20.4");
+    expect(moduleCachePath("/c", "v4.20.4", "falkordb-macos-arm64v8.so")).toBe(
       "/c/falkordb/v4.20.4/falkordb-macos-arm64v8.so",
     );
   });
@@ -72,7 +54,7 @@ describe("ensureExecutable — the 0644 trap", () => {
     await chmod(file, 0o644);
     expect(isExecutableMode((await stat(file)).mode & 0o7777)).toBe(false);
 
-    const result = await ensureExecutable(file);
+    const result = await ensureExecutable(file, CONTEXT);
 
     expect(result.changed).toBe(true);
     expect(result.mode).toBe(0o755);
@@ -84,14 +66,14 @@ describe("ensureExecutable — the 0644 trap", () => {
     const file = join(dir, "falkordb.so");
     await writeFile(file, "x");
     await chmod(file, 0o755);
-    const result = await ensureExecutable(file);
+    const result = await ensureExecutable(file, CONTEXT);
     expect(result.changed).toBe(false);
     expect(result.mode).toBe(0o755);
   });
 
   test("a missing file fails with a remedy instead of a raw errno", async () => {
     const dir = await temp();
-    const promise = ensureExecutable(join(dir, "absent.so"));
+    const promise = ensureExecutable(join(dir, "absent.so"), CONTEXT);
     await expect(promise).rejects.toThrow(/Cannot stat cached FalkorDB module/);
   });
 });

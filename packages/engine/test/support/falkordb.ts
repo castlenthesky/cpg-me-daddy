@@ -37,7 +37,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { Client, type ClientConfig } from "../../src/store/client.ts";
+import { FalkorService } from "../../../falkordb-service/src/index.ts";
+import { defineCpgFalkorConfig } from "../../src/store/falkordb.config.ts";
 
 /** Graph keys the harness owns. Anything else on the instance is foreign. */
 export const HARNESS_GRAPH_PREFIX = "cpg_test_";
@@ -102,13 +103,13 @@ function readRecordedNonce(): string | undefined {
   return typeof nonce === "string" && nonce.length > 0 ? nonce : undefined;
 }
 
-async function verifyInstance(client: Client, target: HarnessTarget): Promise<void> {
+async function verifyInstance(falkor: FalkorService, target: HarnessTarget): Promise<void> {
   const where = `${target.host}:${target.port}`;
 
   // (a) provenance nonce — proves this TCP port reaches the container we started.
   const expected = readRecordedNonce();
   if (expected !== undefined) {
-    const actual = await client.raw<string | null>(["GET", HARNESS_NONCE_KEY]);
+    const actual = await falkor.admin.raw<string | null>(["GET", HARNESS_NONCE_KEY]);
     if (actual !== expected) {
       throw new Error(
         `Refusing to run: the FalkorDB at ${where} is NOT the instance this harness started.\n` +
@@ -121,7 +122,7 @@ async function verifyInstance(client: Client, target: HarnessTarget): Promise<vo
   }
 
   // (b) config fingerprint — a stock or differently-tuned instance fails here.
-  const config = await client.configSnapshot();
+  const config = await falkor.admin.configSnapshot();
   const wrong: string[] = [];
   for (const [key, want] of Object.entries(HARNESS_GRAPH_CONFIG)) {
     const got = config[key];
@@ -138,7 +139,7 @@ async function verifyInstance(client: Client, target: HarnessTarget): Promise<vo
   }
 
   // (c) graph-key hygiene — refuse an instance that already holds real data.
-  const graphs = await client.listGraphs();
+  const graphs = await falkor.admin.listGraphs();
   const foreign = graphs.filter((g) => !g.startsWith(HARNESS_GRAPH_PREFIX));
   if (foreign.length > 0) {
     throw new Error(
@@ -159,15 +160,9 @@ let verified: Promise<void> | undefined;
  */
 async function ensureVerified(target: HarnessTarget): Promise<void> {
   verified ??= (async () => {
-    let guard: Client;
+    let guard: FalkorService;
     try {
-      guard = await Client.connect({
-        host: target.host,
-        port: target.port,
-        password: target.password,
-        graph: `${HARNESS_GRAPH_PREFIX}guard`,
-        queryTimeoutMs: QUERY_TIMEOUT_MS,
-      });
+      guard = await FalkorService.start(harnessConfig(target, `${HARNESS_GRAPH_PREFIX}guard`));
     } catch (e) {
       // Nothing is listening, or it refused us. Say what to do rather than
       // leaving a bare ECONNREFUSED for the reader to interpret.
@@ -186,9 +181,29 @@ async function ensureVerified(target: HarnessTarget): Promise<void> {
   await verified;
 }
 
+/**
+ * The harness connects to a FalkorDB that `bun run db:up` already started, so
+ * it is `remote` mode: the service checks reachability and owns no lifecycle.
+ * Everything else — the CPG_ env prefix, the cpg-branded remedies — comes from
+ * `defineCpgFalkorConfig`, so the harness exercises the same configuration
+ * path the product does.
+ */
+function harnessConfig(target: HarnessTarget, graph: string) {
+  return defineCpgFalkorConfig({
+    server: { mode: "remote" },
+    connection: {
+      host: target.host,
+      port: target.port,
+      password: target.password,
+      graph,
+      queryTimeoutMs: QUERY_TIMEOUT_MS,
+    },
+  });
+}
+
 /** A test's private graph, and the teardown that removes it. */
 export interface TestGraph {
-  client: Client;
+  falkor: FalkorService;
   /** The isolated graph key. Unique per call. */
   key: string;
   /** Drops the graph key and closes the connection. Safe to call twice. */
@@ -215,14 +230,7 @@ export async function openTestGraph(label: string): Promise<TestGraph> {
   await ensureVerified(target);
 
   const key = uniqueKey(label);
-  const cfg: ClientConfig = {
-    host: target.host,
-    port: target.port,
-    password: target.password,
-    graph: key,
-    queryTimeoutMs: QUERY_TIMEOUT_MS,
-  };
-  const client = await Client.connect(cfg);
+  const falkor = await FalkorService.start(harnessConfig(target, key));
 
   // A graph key does not exist until something writes to it, and FalkorDB
   // answers any read against a missing key with "Invalid graph operation on
@@ -230,19 +238,19 @@ export async function openTestGraph(label: string): Promise<TestGraph> {
   // of on its own assertion, so materialize the key up front: `RETURN 1`
   // creates it with no nodes, which is exactly the empty-but-present state a
   // test expects to start from.
-  await client.write("RETURN 1");
+  await falkor.graph.write("RETURN 1");
 
   let closed = false;
   return {
-    client,
+    falkor,
     key,
     close: async (): Promise<void> => {
       if (closed) {
         return;
       }
       closed = true;
-      await client.dropGraph();
-      await client.close();
+      await falkor.admin.dropGraph();
+      await falkor.close();
     },
   };
 }

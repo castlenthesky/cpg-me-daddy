@@ -1,5 +1,5 @@
 /**
- * `engine.db.mode: docker` — run the pinned `falkordb/falkordb` image.
+ * `docker` mode — run the pinned `falkordb/falkordb` image.
  *
  * This is the only mode that needs neither a platform-specific release asset
  * nor a local `redis-server`, which is why it is the recommended fallback in
@@ -8,20 +8,12 @@
 
 import { execFile } from "node:child_process";
 
-import { FALKORDB_IMAGE } from "./manifest";
+import type { FalkorConfig } from "../../config";
 import { findFreePort, sendCommand, waitForReady } from "./redis";
+import { dockerMissingRemedy, dockerStartRemedy } from "./remedies";
 import { ServerError, type ServerHandle, type ServerManager } from "./types";
 
-export interface DockerServerOptions {
-  image?: string;
-  host?: string;
-  /** 0 or omitted means "pick a free port". */
-  port?: number;
-  /** Docker executable. Default `docker` resolved via PATH. */
-  dockerPath?: string;
-  readyTimeoutMs?: number;
-  /** Extra `docker run` arguments, e.g. FalkorDB tuning flags. */
-  runArgs?: readonly string[];
+export interface DockerServerDeps {
   log?: (message: string) => void;
 }
 
@@ -43,19 +35,18 @@ function run(
 
 export class DockerServerManager implements ServerManager {
   readonly mode = "docker" as const;
-  private readonly options: DockerServerOptions;
 
-  constructor(options: DockerServerOptions = {}) {
-    this.options = options;
-  }
+  constructor(
+    private readonly config: FalkorConfig,
+    private readonly deps: DockerServerDeps = {},
+  ) {}
 
   async start(): Promise<ServerHandle> {
-    const docker = this.options.dockerPath ?? "docker";
-    const image = this.options.image ?? FALKORDB_IMAGE;
-    const host = this.options.host ?? "127.0.0.1";
-    const log = this.options.log ?? ((): void => {});
-    const port =
-      this.options.port && this.options.port > 0 ? this.options.port : await findFreePort(host);
+    const { image, dockerPath: docker, runArgs, readyTimeoutMs } = this.config.server;
+    const { host } = this.config.connection;
+    const log = this.deps.log ?? ((): void => {});
+    const configured = this.config.connection.port;
+    const port = configured > 0 ? configured : await findFreePort(host);
 
     let result: { code: number; stdout: string; stderr: string };
     try {
@@ -65,22 +56,18 @@ export class DockerServerManager implements ServerManager {
         "--rm",
         "--publish",
         `${host}:${port}:6379`,
-        ...(this.options.runArgs ?? []),
+        ...runArgs,
         image,
       ]);
     } catch (cause) {
       throw new ServerError("docker_not_found", `Could not execute '${docker}'.`, {
-        remedy:
-          "Install Docker and make sure the daemon is running, or switch `engine.db.mode` to " +
-          "`spawned` (needs a local redis-server) or `remote`.",
+        remedy: dockerMissingRemedy(this.config.branding),
         cause,
       });
     }
     if (result.code !== 0) {
       throw new ServerError("server_start_failed", `\`docker run ${image}\` failed.`, {
-        remedy:
-          "Check that the Docker daemon is running and that the image can be pulled, then retry. " +
-          "`engine.db.mode: remote` avoids Docker entirely.",
+        remedy: dockerStartRemedy(this.config.branding),
         detail: (result.stderr || result.stdout).trim().slice(-2_000),
       });
     }
@@ -90,9 +77,10 @@ export class DockerServerManager implements ServerManager {
 
     try {
       await waitForReady({
+        branding: this.config.branding,
         host,
         port,
-        readyTimeoutMs: this.options.readyTimeoutMs ?? 30_000,
+        readyTimeoutMs,
         onGiveUp: () => `container ${containerId.slice(0, 12)}`,
       });
     } catch (error) {
