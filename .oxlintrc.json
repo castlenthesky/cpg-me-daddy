@@ -4,13 +4,13 @@
     "**/dist/**",
     "**/out/**",
     "**/node_modules/**",
-    "build/**",
-    "design/**",
-    "media/**",
-    "resources/**",
-    "scripts/**",
-    "src/**",
-    "test/**"
+    "/build/**",
+    "/design/**",
+    "/media/**",
+    "/resources/**",
+    "/scripts/**",
+    "/src/**",
+    "/test/**"
   ],
   "categories": {
     "correctness": "error",
