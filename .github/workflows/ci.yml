@@ -44,6 +44,9 @@ jobs:
       - name: Unit tests (bun test)
         run: bun run test:unit
 
+      - name: Schema conformance (bun run test:schema)
+        run: bun run test:schema
+
   integration:
     name: Integration (FalkorDB, ubuntu-latest)
     runs-on: ubuntu-latest

@@ -63,7 +63,7 @@ Extension-host tests use `@vscode/test-cli` (`packages/vscode/.vscode-test.mjs`)
 Every PR keeps these green, not just its own new test:
 
 ```
-bun run lint && bun run format:check && bun run typecheck && bun run test:unit
+bun run lint && bun run format:check && bun run typecheck && bun run test:unit && bun run test:schema
 ```
 
 The integration suite is separate because it needs a database:
@@ -72,10 +72,22 @@ The integration suite is separate because it needs a database:
 bun run db:up && bun run test:integration && bun run db:down
 ```
 
-`lefthook.yml` runs lint + format check on `pre-commit` and typecheck + unit tests on `pre-push`, so the
-gate fires before a commit exists. `.github/workflows/ci.yml` runs the same four commands on
-ubuntu-latest and macos-latest (job `gates`, deliberately DB-free), plus a ubuntu-only `integration` job
-that brings the pinned FalkorDB up with the same `docker/falkordb.yml` developers use.
+`lefthook.yml` runs lint + format check on `pre-commit` and typecheck + unit tests + the schema gate on
+`pre-push`, so the gate fires before a commit exists. `.github/workflows/ci.yml` runs the same five
+commands on ubuntu-latest and macos-latest (job `gates`, deliberately DB-free), plus a ubuntu-only
+`integration` job that brings the pinned FalkorDB up with the same `docker/falkordb.yml` developers use —
+every integration test ends by asserting both `assertGraphInvariants()` and `assertSchemaConformance()`.
+
+## The v1 CPG schema
+
+`packages/engine/src/schema/` (`nodes.ts`, `edges.ts`, `schema.ts`, `serialize.ts`, `validate.ts`) is the
+single source of truth for the graph vocabulary: 14 node labels, 13 edge types, each carrying its Joern
+alignment, ownership class (`filesystem` | `file-owned` | `identity` | `overlay` | `graph-singleton`) and
+write mechanism. It feeds the `test:schema` gate, the golden serializer (M0.6+), and the future
+`cpg://schema` MCP resource (M2) from one object — never a second, hand-maintained copy. Full narrative
+and the Joern divergence table: `.agent/knowledge/planning-sessions/2026-09-11.project-outline/50-schema.md`.
+Adding, renaming or reshaping a label or edge means editing `packages/engine/src/schema/`, not reaching
+for a Cypher string in the extractor or store — an undeclared label fails `test:schema`.
 
 ## The falkordb-service package
 

@@ -6,12 +6,17 @@
  * extension host, the CLI and a headless daemon, so it may not depend on any
  * editor API.
  */
+import { CPG_SCHEMA } from "./schema/index";
 
 /** Semantic version of the engine package. */
 export const ENGINE_VERSION = "0.0.1";
 
-/** Schema version of the graph the engine reads and writes. */
-export const SCHEMA_VERSION = 0;
+/**
+ * Schema version of the graph the engine reads and writes. Sourced from
+ * `CPG_SCHEMA.version` (M0.0) so there is exactly one number, not two —
+ * `schema.test.ts` asserts this identity holds.
+ */
+export const SCHEMA_VERSION = CPG_SCHEMA.version;
 
 /** Identifies the engine build in logs and in the `cpg://schema` resource. */
 export function engineIdentity(): string {
@@ -19,4 +24,5 @@ export function engineIdentity(): string {
 }
 
 export * from "./parser/index";
+export * from "./schema/index";
 export * from "./store/falkordb.config";

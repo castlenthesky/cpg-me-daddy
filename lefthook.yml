@@ -23,3 +23,6 @@ pre-push:
 
     - name: unit tests
       run: bun run test:unit
+
+    - name: schema gate
+      run: bun run test:schema

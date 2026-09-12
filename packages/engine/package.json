@@ -15,6 +15,7 @@
   },
   "scripts": {
     "test:unit": "bun test test/unit",
+    "test:schema": "bun test test/unit/schema",
     "test:integration": "bun test test/integration",
     "test:integration:network": "CPG_INTEGRATION_FALKORDB=1 bun test test/integration"
   },
