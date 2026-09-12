@@ -19,3 +19,4 @@ export function engineIdentity(): string {
 }
 
 export * from "./parser/index";
+export * from "./store/falkordb.config";

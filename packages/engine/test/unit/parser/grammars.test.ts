@@ -5,6 +5,7 @@ import {
   EXTENSION_TO_GRAMMAR,
   GRAMMAR_IDS,
   GRAMMARS,
+  type GrammarId,
   grammarForExtension,
   grammarForPath,
   isGrammarId,
@@ -34,7 +35,7 @@ describe("grammar registry", () => {
 
 describe("extension routing", () => {
   // 40-research.yaml adopted_defaults.parsing.grammars.
-  const cases: ReadonlyArray<readonly [string, string]> = [
+  const cases: ReadonlyArray<readonly [string, GrammarId]> = [
     [".ts", "typescript"],
     [".mts", "typescript"],
     [".cts", "typescript"],

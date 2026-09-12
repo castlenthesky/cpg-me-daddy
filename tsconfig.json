@@ -2,6 +2,7 @@
   "//": "Solution file. Builds every workspace package: `tsc --build` from the repo root.",
   "files": [],
   "references": [
+    { "path": "packages/falkordb-service" },
     { "path": "packages/engine" },
     { "path": "packages/cli" },
     { "path": "packages/vscode" }

@@ -1,0 +1,20 @@
+{
+  "//": [
+    "Typechecks the trees `tsc --build` cannot: test files and the tools/ scripts.",
+    "They import engine sources by explicit .ts path so bun runs them without a prior build,",
+    "which needs allowImportingTsExtensions, which needs noEmit, which is incompatible with the",
+    "composite projects in the solution file. So they get their own no-emit pass instead of",
+    "going unchecked — the harness under test/support is real code and deserves a compiler."
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node"]
+  },
+  "include": ["packages/*/test/**/*.ts", "tools/**/*.ts"]
+}
