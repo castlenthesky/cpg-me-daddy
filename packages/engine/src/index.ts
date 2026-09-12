@@ -17,3 +17,5 @@ export const SCHEMA_VERSION = 0;
 export function engineIdentity(): string {
   return `@cpg/engine@${ENGINE_VERSION} (schema v${SCHEMA_VERSION})`;
 }
+
+export * from "./parser/index";
