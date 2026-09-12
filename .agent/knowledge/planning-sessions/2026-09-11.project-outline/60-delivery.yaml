@@ -1,0 +1,580 @@
+# Delivery plan — the M0–M4 ladder cut into verifiable units of work
+# Parent: 00-vision.yaml. Converts the agreed milestone ladder into PR-sized units, each gated on
+# executable verification that lands in the same PR.
+# IDs: F# (foundation), M0.#, M1.# (sliced), M2/M3/M4 (outlined).
+# Status vocabulary: draft | agreed | rejected | deferred
+
+meta:
+  session_date: 2026-09-11
+  parent: ./00-vision.yaml
+  siblings: [10-graph-engine.yaml, 20-visualization.yaml, 30-mcp-server.yaml, 40-research.yaml]
+  scope_summary: >
+    The milestone ladder in 00-vision.yaml describes OUTCOMES ("Live graph", "Agent wedge"), not units of
+    work. Each rung is months of code and cannot be reviewed, tested, or merged as a single change. This file
+    converts it into discrete units of functional code, each one a single unit of logic a human can review in
+    one sitting, gated on executable verification, and ordered so its dependencies are already merged.
+  decisions_taken_this_session:
+    - { id: DL1, text: "Correctness fixture lives IN-REPO under test/fixtures/, not the external ast-demo.", source: survey_findings.SF1 }
+    - { id: DL2, text: "Foundation + M0 + M1 are sliced PR-by-PR; M2-M4 are named with exit criteria and sliced later.", rationale: "Downstream unit boundaries are guesses until the engine's real shape exists." }
+    - { id: DL3, text: "GitHub Actions CI is stood up in the first unit, so every subsequent unit has somewhere to be gated.", note: "Repo has no .github/workflows today." }
+    - { id: DL4, text: "Adopt the packages/engine + packages/cli + packages/vscode layout now (R5 recommendation). Resolves 40-research.yaml open_after_research item 3." }
+    - { id: DL5, text: "Lint/format/hooks are oxlint + oxfmt + lefthook, replacing eslint + typescript-eslint." }
+    - { id: DL6, text: "INHERITS_FROM{relation: extends|implements} adopted, merging EXTENDS/IMPLEMENTS into one edge.", source: "R6-ontology-debate-synthesis.md Next Steps #1, visionary sign-off 2026-09-11" }
+    - { id: DL7, text: "Per-file replace write mechanism is split by node class, not one global choice: file-owned structural nodes (MODULE/TYPE_DECL/METHOD/PARAM/MEMBER/CALL/IMPORT) are DELETE+CREATE per save; SYMBOL nodes are MERGE-on-fqn (upsert), since they are the cross-file-shared anchor other files' edges point into.", source: "R6-ontology-debate-synthesis.md Next Steps #2, visionary sign-off 2026-09-11", note: "Formalizes the shape already sketched informally in M1.2's delivers line." }
+    - { id: DL8, text: "TARGETS/DEPENDS_ON rebuild trigger is periodic + computed_at (same contract as COMMUNITY), plus a manual refresh escape hatch. Rejected: recompute on every save of either endpoint's file.", source: "R6-ontology-debate-synthesis.md Next Steps #3, visionary sign-off 2026-09-11" }
+    - { id: DL9, text: "REJECT CONFIG_FILE, CLOSURE_BINDING, DEPENDENCY, TEMPLATE_DOM (the four Joern node types the ontology debate never addressed) for v1. No identified need.", source: "R6-ontology-debate-synthesis.md Next Steps #4, visionary sign-off 2026-09-11" }
+    - { id: DL10, text: "TYPE_PARAMETER/TYPE_ARGUMENT/BINDS/EVAL_TYPE (generics-aware graph traversal) deferred to v2, not rejected outright. v1 keeps folding generic type info into a type_text string property.", source: "R6-ontology-debate-synthesis.md Next Steps #5, visionary sign-off 2026-09-11", tracked_in: v2_backlog }
+    - { id: DL11, text: "FILE.status=error and UNKNOWN nodes are unified with CALL.status=unresolved/IMPORT.status=unresolved into one triage surface via a shared needs_triage TAG (TAGGED_BY) — no new mechanism, reuses the TAG node already in v1 scope.", source: "R6-ontology-debate-synthesis.md Next Steps #6, visionary sign-off 2026-09-11" }
+
+# ------------------------------------------------------------------------------------------------------
+# What the code survey found that CHANGED this plan.
+survey_findings:
+  - id: SF1
+    finding: "ast-demo cannot be the CI correctness oracle."
+    evidence: >
+      It is a separate git repo (/Users/brianhenson/projects/demos/ast-demo, HEAD 069cff2) and its only
+      TypeScript is the FalkorDB benchmark harness (bench/src/*.ts) — there is NO layered TS application in
+      it. Its non-bench source is 6 Python files. GE-NFR7 ("golden snapshot checked in, CI diff on every
+      change") cannot be satisfied by a second repo's mutable history.
+    consequence: "Supersedes Q2/Q12's assumption that ast-demo is the dogfood fixture. See DL1."
+  - id: SF2
+    finding: "This repo already has most of the correctness-fixture pattern."
+    evidence: >
+      test/fixtures/code_examples/python/src/ is a genuine api -> services -> database layered app;
+      test/__snapshots__/ already holds golden CST and UAST JSON for 6 languages;
+      scripts/generate-snapshots.ts already regenerates them. Fixtures total 924 LOC (the "~875 LOC" claim
+      in README was close). The gap is a layered TypeScript fixture — only hello_world.ts exists.
+    consequence: "Building the TS fixture is an explicit unit (M0.5), not an assumption."
+  - id: SF3
+    finding: "ast-demo/bench/src/verify.ts is the most reusable asset in either repo."
+    evidence: >
+      59 lines already encoding the invariants that make an incremental CPG correct — cross-file CALLS
+      survive a replace, no orphan SYMBOLs among touched fqns, no duplicate SYMBOL fqns, no FILE left
+      non-ready, per-file node/edge/DEFINES/CALLS counts match the DiffGraph written.
+    consequence: "Promoted from benchmark-only code into a standing, always-on invariant suite (F2)."
+  - id: SF4
+    finding: "The previous implementation adopted the Joern CPG spec outright; the v1 schema has walked off it without a recorded decision."
+    evidence: >
+      src/types/cpg.ts opens with "Joern CPG (Code Property Graph) type system. Defines all node types, edge
+      types, and their properties per the Joern specification" and declares 38 node types (META_DATA,
+      NAMESPACE_BLOCK, METHOD_PARAMETER_IN/OUT, METHOD_RETURN, TYPE_PARAMETER, JUMP_TARGET, BINDING,
+      ANNOTATION_PARAMETER_ASSIGN, ...) and 21 edge types (AST, CFG, CDG, REACHING_DEF, DOMINATE,
+      POST_DOMINATE, EVAL_TYPE, BINDS_TO, INHERITS_FROM, RECEIVER, ARGUMENT, CAPTURE, ...) with Joern's exact
+      property names (fullName, typeFullName, dispatchType, evaluationStrategy, argumentIndex, astParentType,
+      controlStructureType, dynamicTypeHintFullName).
+      10-graph-engine.yaml's v1_schema renames NAMESPACE_BLOCK -> MODULE, METHOD_PARAMETER_IN -> PARAM, drops
+      METHOD_RETURN, replaces the AST edge with DECLARES, adds an IMPORT node Joern lacks, and points CALLS at
+      a SCIP-style SYMBOL rather than at a METHOD via Joern's CALL edge.
+    consequence: "New gated unit M0.0 ahead of the store and every golden snapshot. See units.m0[0]."
+  - id: SF5
+    finding: "'Joern UAST' conflates two projects."
+    evidence: >
+      UAST (Universal AST) is the Babelfish / source{d} spec; source{d} shut down around 2019. Joern's spec
+      is the CPG schema at cpg.joern.io. The old code's src/graph/cpg/uast/ directory used "UAST" loosely for
+      its own intermediate representation while emitting Joern-flavoured node types.
+    consequence: "Terminology corrected in M0.0. The alignment question is about Joern's CPG spec, not UAST."
+
+# ------------------------------------------------------------------------------------------------------
+ground_rules:
+  - id: GR1
+    name: One unit = one branch = one PR
+    text: >
+      The loop is always: do the unit -> run its gate locally -> verify it passes -> only then push and open
+      the PR. Nothing is pushed to be debugged in CI; CI is a second opinion, not the first run. Merge to
+      master only after the gate is green there too.
+  - id: GR2
+    name: The gate ships with the code
+    text: >
+      A unit's tests are written in the same PR as the code they verify. A PR that adds capability without
+      adding its gate is not done.
+  - id: GR3
+    name: Size target
+    text: >
+      Roughly 200-500 lines of reviewable change per unit, excluding generated snapshots and fixture data
+      (reviewed by diff, not by line). If a unit heads past that, it is two units — the tables below already
+      split the obvious cases (adapters split declarations from calls/imports; the watcher splits event
+      normalization from the replace it triggers). A reviewer should hold one unit's entire logic in their
+      head and say yes or no without opening a second PR for context.
+  - id: GR4
+    name: Snapshot discipline
+    text: >
+      Golden files are the human-audit surface. A PR that changes a snapshot must paste the snapshot diff into
+      its description and get explicit sign-off. `npm run test:update-goldens` never runs in CI — only
+      locally, deliberately.
+  - id: GR5
+    name: Manual gates are real gates
+    text: >
+      Units marked manual_gate have a step only the visionary can perform (signing off a hand-audited graph,
+      driving real editors, looking at a rendered pane). The PR does not merge until that check happens.
+  - id: GR6
+    name: Spikes are units too
+    text: >
+      The 14 spikes in 40-research.yaml are not separate from delivery. Each is folded into the unit it
+      de-risks, and its pass/fail threshold IS that unit's gate. SP1, SP2, SP3, SP11 land in Foundation/M0 as
+      agreed in 00-vision.yaml next_steps.
+
+standing_gates:
+  # Every PR from F1 onward keeps these green, not just its own new test.
+  - { gate: lint,                command: "oxlint",                                  introduced: F1 }
+  - { gate: format,              command: "oxfmt --check",                            introduced: F1 }
+  - { gate: typecheck,           command: "tsc --build",                              introduced: F1 }
+  - { gate: engine_unit_tests,   command: "bun test packages/engine/test/unit",        introduced: F1 }
+  - { gate: graph_invariants,    command: "part of the integration run",               introduced: F2 }
+  - { gate: schema_conformance,  command: "bun run test:schema",                       introduced: M0.0 }
+  - { gate: golden_snapshot_diff, command: "bun run test:goldens",                     introduced: M0.6 }
+  - { gate: extension_host_tests, command: "vscode-test",                              introduced: M3 }
+
+standing_gates_tooling_note: >
+  oxlint + oxfmt (Rust-based, ~50-100x faster than ESLint/Prettier) with lefthook running them pre-commit,
+  so the gate fires before a commit exists rather than after a push. Replaces eslint.config.mjs and the
+  typescript-eslint dependency. The one rule worth preserving is the engine-purity check (packages/engine
+  must never import vscode); oxlint's no-restricted-imports should cover it — verify during F1 and keep a
+  minimal ESLint pass only if it does not.
+
+verification_spine:
+  # Four layers, each introduced by a Foundation unit and reused by everything after.
+  - id: VS1
+    layer: Unit tests
+    runner: bun test
+    covers: "Pure functions — config precedence, id derivation, interface hashing, debounce and event coalescing. No DB; no filesystem beyond a temp dir."
+  - id: VS2
+    layer: Golden snapshots
+    runner: "checked-in JSON + scripts/generate-snapshots.ts"
+    covers: >
+      Deterministic serialization of extractor output per fixture file, and of the whole graph after a full
+      index. The correctness oracle and the human-audit surface. Extends the existing test/__snapshots__/
+      pattern (SF2).
+  - id: VS3
+    layer: Graph invariants
+    runner: "live FalkorDB, end of every integration test"
+    covers: >
+      assertGraphInvariants(), ported from bench/src/verify.ts (SF3). Cross-file edges survived; no orphan or
+      duplicate SYMBOLs; no file stuck non-ready; counts match the DiffGraph written.
+  - id: VS4
+    layer: Budget gates
+    runner: "live FalkorDB, scale fixture"
+    covers: "p95/p100 latency and memory assertions from GE-NFR1-NFR5. Scheduled and at milestone exits, not every PR."
+
+# ------------------------------------------------------------------------------------------------------
+units:
+  foundation:
+    - id: F1
+      name: Monorepo skeleton + CI
+      delivers: >
+        packages/engine (pure TS, zero vscode imports), packages/cli, packages/vscode. npm workspaces,
+        tsconfig project references. oxlint + oxfmt + lefthook; bun test for engine unit and integration;
+        @vscode/test-cli for the host (R5 packaging recommendation). Resolve the duplicate bun.lock /
+        package-lock.json — pick one, delete the other. Retire eslint.config.mjs and typescript-eslint.
+        Stand up .github/workflows/ci.yml: lint, format check, typecheck, unit tests on ubuntu + macos.
+      gate: >
+        CI green on a trivial passing test in each package; `lefthook install` wires pre-commit and the hook
+        is proven to fire on a deliberately misformatted commit. A no-restricted-imports rule fails the build
+        if anything under packages/engine imports vscode — add a deliberately-violating file, watch the build
+        go red, then remove it. A rule nobody has seen fail is not a gate.
+      status: draft
+
+    - id: F2
+      name: FalkorDB test harness + invariant suite
+      delivers: >
+        Port ast-demo/bench/src/client.ts (RESP wrapper over GRAPH.QUERY / GRAPH.RO_QUERY) to
+        packages/engine/src/store/client.ts. Test helper giving each test an isolated graph key against a
+        pinned falkordb/falkordb:v4.20.4 — docker-compose locally (port and FALKORDB_ARGS copied from
+        bench/docker-compose.yml, including TIMEOUT_DEFAULT/CACHE_SIZE/NODE_CREATION_BUFFER and port 6380 so
+        it never touches a dev instance), GitHub Actions service container in CI. Port globalInvariants() to
+        assertGraphInvariants().
+      gate: >
+        An integration test connects, writes a handful of nodes, reads them back, asserts invariants, and
+        tears its graph down — green on Linux (CI) and macOS (local). Two tests running concurrently must not
+        see each other's data.
+      derisks: [SF3]
+      status: draft
+
+    - id: F3
+      name: FalkorDB acquisition
+      spike: SP11
+      delivers: >
+        ServerManager interface with Spawned / Remote / Docker implementations (README design rule 8).
+        Spawned downloads the pinned version to ~/.cache/cpg/falkordb/<version>/ (honouring CPG_CACHE_DIR),
+        verifies SHA-256 from a manifest pinned in the package, launches it (X14).
+      gate: >
+        Test downloads (or reuses cache), verifies checksum, spawns on an ephemeral port, PINGs, shuts down
+        cleanly. A tampered-checksum test asserts the launch is REFUSED. macOS Gatekeeper path exercised
+        locally. Offline produces the clear error X14(4) describes, not a silent hang.
+      status: draft
+
+    - id: F4
+      name: Grammar loading
+      spike: SP1
+      delivers: >
+        web-tree-sitter 0.27.0 (wasm) with typescript, tsx, javascript, python grammars. Assert
+        Language.version in [MIN_COMPATIBLE, LANGUAGE_VERSION] at load. Keep the parser behind a small
+        ParserBackend interface so native could be added to the headless daemon later.
+      gate: >
+        All four grammars load and parse a smoke file to a non-error root. The ABI assertion fails loudly on a
+        deliberately mismatched grammar — test that failure mode, don't assume it. Day-one fallback if
+        building our own .wasm in CI slips: vendor @vscode/tree-sitter-wasm@0.3.1.
+      rationale_wasm_over_native: >
+        Native IS faster — R4 measured 2.7 ms vs 4.2 ms on a 1000-line TS file (~1.6x). It buys nothing: the
+        whole tree-sitter share of a save is ~6 ms cold / ~2 ms warm against a 2000 ms budget, and the
+        FalkorDB write dominates. Native costs: a MEASURED hard segfault at require('tree-sitter')
+        (0.25.1 darwin-arm64 prebuild) under Node 20.20.2 — a VSIX cannot tolerate crash-on-load depending on
+        the user's Node; nine platform-specific VSIXs instead of one universal build; a stale peer-dep chain
+        (tree-sitter-typescript@0.23.2 peer-depends on tree-sitter@^0.21, needs --legacy-peer-deps); and
+        cursor walks are SLOWER natively (every gotoFirstChild() crosses N-API). VS Code itself ships
+        tree-sitter as wasm. Real wasm hazards are ABI and memory, both gated here and in M1.3.
+      replaces: "the repo's current native tree-sitter ^0.21.0 dependency"
+      status: draft
+
+  m0_milestone_exit: "Snapshot diff is empty and a human has signed off on it. (00-vision.yaml M0)"
+
+  m0:
+    - id: M0.0
+      name: Schema specification + spec-alignment decision
+      manual_gate: true
+      delivers: >
+        A written schema spec committed to this planning corpus, stating for every node label and edge type
+        whether it IS the Joern name, is a DELIBERATE divergence (with the reason), or is ours because Joern
+        has no equivalent. Plus the id rule, the status enum, and the property set per label. Backed by a
+        machine-readable schema definition that becomes the single source of truth for both the cpg://schema
+        MCP resource and the golden serializer.
+      why_first: >
+        The graph shape must be pinned before anything can be tested against it. Golden snapshots,
+        assertGraphInvariants(), cpg://schema and every extractor test encode the node/edge vocabulary.
+        Choosing it late means rewriting all of them. This is also the visionary's stated motive: having the
+        graph shape figured out ahead of time determines what specs the tests should assert.
+      context: "See survey_findings SF4 and SF5."
+      tension: >
+        Some divergence from Joern is load-bearing: the SYMBOL indirection is what makes per-file replace safe
+        (D5), and the sparse structural tier is principle PR1 — Joern's CPG is dense and expression-level,
+        which is precisely what PR1 rejects. Some is drift, and drift is the thing to catch: a renamed label
+        buys nothing and costs interoperability. This unit separates the two, deliberately, once.
+      options_to_weigh:
+        - "(a) Adopt Joern's CPG spec wholesale as the schema."
+        - "(b) Align node/edge NAMES to Joern where they overlap, keep the sparse + SCIP deviations, document every divergence."
+        - "(c) Define our own schema referencing both."
+      decision_inputs_pending: >
+        Deliberately unresolved until research lands: whether Joern's spec is portable outside its
+        Scala/overflowdb engine or tied to it in practice; whether alignment buys anything CONCRETE
+        (importable queries, existing analyses, a test corpus, an importer/exporter) or is purely nominal;
+        and whether any published conformance suite or golden-output fixture set exists that we could run as a
+        test gate — that would be the highest-value find.
+      gate: >
+        A machine-readable schema definition plus `npm run test:schema` asserting that every node and edge
+        written by the engine is declared in it and carries its required properties — an undeclared label
+        fails the build. MANUAL: the visionary signs off on the divergence table, each deviation one they'd
+        defend to someone who knows Joern.
+      blocks: [M0.4, "every golden-snapshot gate after it", "cpg://schema in M2"]
+      does_not_block: [F1, F2, F3, F4]
+      status: draft
+
+    - id: M0.1
+      name: Config loading, manifest discovery, cpg doctor
+      delivers: "cpg.config.yaml schema; precedence CLI > env (CPG_*) > file > manifest discovery > defaults; manifest discovery (package.json workspaces, pyproject/uv, tsconfig references/paths); .gitignore merge. (X11, GE-FR1, GE-FR2, GE-UC9)"
+      gate: "Precedence unit tests per layer; `cpg doctor` golden output; a zero-config fixture resolves to sane defaults."
+      status: draft
+
+    - id: M0.2
+      name: Workspace walker + content hashing
+      delivers: "Walk honouring includes/excludes; SHA-256 per file; emit the file record set. (GE-FR3, GE-FR10)"
+      gate: >
+        Walking test/fixtures/ yields an exactly-asserted file list; node_modules / .venv / __pycache__ proven
+        excluded; hash stable across runs and changes on byte change.
+      status: draft
+
+    - id: M0.3
+      name: Node identity
+      spike: SP2
+      delivers: "path:kind:qualifiedScopePath[:ordinal|:bodyHash] — amendment AM1/D31, which REVERSES README design rule 1."
+      why: >
+        Including the file content hash would change every node id in a file on every save, defeating stable
+        identity and breaking inbound cross-file edges. 40-research.yaml flags AM1 as still needing the
+        visionary's confirmation; this unit is where that confirmation becomes executable, because the spike
+        either measures 0 id changes or it does not.
+      gate: "Insert-above -> 0 id changes; reformat -> 0; file move -> path-prefix change only; symbol rename -> exactly 1 delete + 1 create."
+      status: draft
+
+    - id: M0.4
+      name: "Graph store: schema, indexes, DiffGraph writer"
+      delivers: "IGraphStore seam; schema bootstrap (indexes on CPG.id, CPG.file, FILE.path; UNIQUE SYMBOL.fqn); DiffGraph type; batched parameterized UNWIND $rows writer per label and per edge type. (README rules 4 and 5)"
+      gate: >
+        Write a ~1k-node synthetic DiffGraph, assert counts; GRAPH.EXPLAIN shows INDEX SCAN not label scan on
+        CPG.id / CPG.file / SYMBOL.fqn; re-write is idempotent.
+      depends_on: [M0.0]
+      status: draft
+
+    - id: M0.5
+      name: Layered TypeScript fixture
+      manual_gate: true
+      delivers: "A mirror of the existing layered Python app in TS (api -> services -> database) under test/fixtures/code_examples/typescript/. Fixture content only, no engine code."
+      why_before_the_extractor: "There must be something real to extract. Keep it deliberately small — Q12/D18: fixtures grow only as far as they stay hand-auditable."
+      gate: "It typechecks and runs; the visionary confirms it is small enough to audit by hand."
+      status: draft
+
+    - id: M0.6
+      name: "TS adapter: declarations"
+      delivers: "tree-sitter .scm queries -> MODULE/TYPE_DECL/METHOD/PARAM/MEMBER + DECLARES/HAS_PARAM (names subject to M0.0)."
+      gate: "Per-file golden snapshots for the TS fixture; snapshot generator extended; --update-snapshots is local-only."
+      status: draft
+
+    - id: M0.7
+      name: "TS adapter: imports + calls"
+      delivers: "IMPORT and CALL nodes with properties; IN_METHOD edges."
+      gate: "Golden snapshots; every call site in the fixture appears exactly once; NO bare-name SYMBOLs created for unresolved calls (README rule 2)."
+      status: draft
+
+    - id: M0.8
+      name: "Python adapter: declarations"
+      delivers: "As M0.6, Python, against the existing layered Python fixture."
+      gate: "Per-file golden snapshots."
+      status: draft
+
+    - id: M0.9
+      name: "Python adapter: imports + calls"
+      delivers: "As M0.7, Python."
+      gate: "Golden snapshots; call sites exactly once; no bare-name SYMBOLs."
+      status: draft
+
+    - id: M0.10
+      name: SYMBOL model + adapter-native resolver
+      delivers: >
+        SCIP descriptor grammar as SYMBOL.fqn with scheme/manager/package/version as separate properties
+        (AM5/D34). The Resolver interface sketched in GE-FR20, composed as ChainResolver([adapterNative]).
+        DEFINES/CALLS/IMPORTS/EXTENDS/IMPLEMENTS with status properties.
+      why_the_seam_now: "So a TS-compiler-API or basedpyright resolver plugs in later without a schema change (D26, GE-Q2). v1 only fills it with adapterNative."
+      gate: >
+        Resolution golden snapshot; unresolved-rate metric asserted below threshold (one Cypher GROUP BY over
+        CALLS status properties); SYMBOL.fqn uniqueness holds; cross-file api -> services -> database edges
+        exist in both fixtures.
+      status: draft
+
+    - id: M0.11
+      name: cpg index end-to-end + whole-graph golden
+      manual_gate: true
+      delivers: "Orchestrate walk -> parse pool -> DiffGraph -> write -> resolve pass -> flip FILE.status to ready per file (not at the end, per D22/GE-FR10). Deterministic whole-graph dump."
+      gate: >
+        THE M0 EXIT GATE. `cpg index` over test/fixtures/ produces an EMPTY diff against the checked-in
+        whole-graph snapshot; assertGraphInvariants() passes; and the visionary reads the dumped graph and
+        signs off — every node and edge is one they'd expect, nothing spurious, nothing missing. That
+        signature is the M0 exit.
+      status: draft
+
+    - id: M0.12
+      name: Golden oracle harness
+      spike: SP3
+      delivers: "scip-typescript + scip-python over the fixtures and 1-2 small OSS repos -> precision/recall per RefSite.kind. SCIP is the golden oracle, not a live resolver (AM4)."
+      gate: "Report produced and recorded; the v1 target (>= 90% call sites resolved at >= 95% precision on typed TS) is MEASURED, not necessarily met yet."
+      parallelizable: true
+      status: draft
+
+  m1_milestone_exit: "Body edit -> ready < 2 s with zero cascade; interface edit -> dependents re-resolved; offline edits caught up on restart. (00-vision.yaml M1)"
+
+  m1:
+    - id: M1.1
+      name: Watcher -> normalized change stream
+      spike: SP6
+      delivers: >
+        @parcel/watcher with native ignore globs; 100 ms trailing / 500 ms ceiling debounce; delete->create
+        coalescing; zero-byte guard; rename pairing by ino+dev then content hash; no-op hash filter. Full
+        policy in 40-research.yaml adopted_defaults.watcher. (GE-FR4, D33)
+      manual_gate: true
+      gate: >
+        Real FS ops in a temp dir produce exactly the asserted normalized events. MANUAL: editor save shapes
+        from VS Code / vim / JetBrains / terminal on macOS + Linux each yield ONE change event.
+      status: draft
+
+    - id: M1.2
+      name: Per-file incremental replace, one transaction
+      delivers: >
+        README rule 5 — one atomic Cypher query per save: delete -> nodes -> edges -> SYMBOL merge ->
+        DEFINES/CALLS -> GC, chained with WITH count(*) barriers, bracketed by FILE status/version markers.
+        (GE-FR11, GE-FR12)
+      note: "The benchmark already proved this shape works on FalkorDB 4.20 and is ~3x faster under reader load than a 23-query sequence (24 vs 68 ms p50 at 10^6 nodes)."
+      gate: >
+        Ported verifyFile(): counts match, INBOUND CROSS-FILE CALLS UNCHANGED, zero orphan SYMBOLs among
+        touched fqns, FILE marker ready + version+1. A concurrent reader never observes a torn version.
+      reuses: [SF3]
+      status: draft
+
+    - id: M1.3
+      name: Tree cache + tree.edit for open documents
+      delivers: "Cached trees + tree.edit ONLY for open documents plus LRU(100); everything else full-parses. delete() on eviction. (GE-FR5, AM7)"
+      why_bounded: "A cached tree costs ~1.6 MB RSS per 1000-line file and the wasm heap never shrinks (measured: 500 trees -> +789 MB). Full parse is 4.2 ms, which is fine."
+      gate: "Incremental reparse yields a CST IDENTICAL to a full parse, over the fixture with N randomized edits."
+      status: draft
+
+    - id: M1.4
+      name: interface_hash + cascade gating
+      spike: SP5
+      delivers: "Per-file interface_hash = normalised exported-declaration surface incl. resolved re-export targets (transitive for barrels); propagate while dependents' own hashes change. (GE-FR6, X12)"
+      risk: "RK9 rates the unbounded cascade HIGH severity and says the gating mechanism must be designed in from day one, not retrofitted. This is the highest-risk unit in M1."
+      gate: >
+        Body-only edit -> 0 hash change -> 0 cascade. Export-signature change -> EXACTLY the importing
+        dependents (asserted set, NOT a superset — a superset silently reintroduces the stampede). Barrel
+        re-export propagation.
+      status: draft
+
+    - id: M1.5
+      name: Cascade execution + stale marking + background drain
+      delivers: >
+        Compute the changed SYMBOL set; find dependents via IMPORTS/CALLS/EXTENDS/IMPLEMENTS edges into those
+        symbols only, not every importer of the file; re-resolve; over-budget -> mark stale with stale_reason
+        and drain in the background with a visible count. (GE-FR7, GE-UC3, D21)
+      gate: >
+        Exported-signature edit re-resolves the exact dependent set and re-points edges; a forced over-budget
+        case leaves the saved file ready, dependents stale with reason, and the background drain clears them.
+      status: draft
+
+    - id: M1.6
+      name: Catch-up on start + move detection
+      delivers: "Hash-diff walk on daemon start; missing on disk -> delete subgraph; new with a hash matching a deleted FILE -> relocation, not rebuild. (GE-UC4, GE-UC5, GE-FR8)"
+      gate: >
+        Engine stopped, files edited/added/deleted/moved on disk, restarted -> graph converges to the
+        full-reindex snapshot. A move is a relocation (ids preserved) with importers cascaded.
+      status: draft
+
+    - id: M1.7
+      name: Bulk mode
+      spikes: [SP4, SP7]
+      delivers: >
+        Entry at >= 200 paths OR >= 50 dirs OR .git/index.lock present OR HEAD changed < 2 s ago OR >= 500
+        events/s; exit on 750 ms quiet AND lock gone (cap 10 s) -> one ordered transaction, single analytics
+        refresh. (GE-FR9, GE-UC6, X2)
+      gate: >
+        SP4: git checkout of a large branch diff -> bounded batch count, ZERO node_modules events, converges
+        to the same graph as a full reindex. SP7: kill -9 mid-storm then restart -> getEventsSince +
+        reconciliation walk converge within budget.
+      status: draft
+
+    - id: M1.8
+      name: Status document + event bus
+      delivers: "Local IPC status endpoint and `cpg status`: coverage, counts by status, active cascades, stale counts, versions, DB health. Events: index.start/progress/complete, file.updated, cascade.*, analytics.complete, engine.error. (GE-FR13, GE-FR17)"
+      gate: "A save emits the exact asserted event sequence; the status document's coverage and counts agree with a direct graph count."
+      status: draft
+
+    - id: M1.9
+      name: Save-to-ready budget gate
+      delivers: "Scale fixture built by reusing ast-demo/bench/src/generator.ts (358 lines, already generates realistic file graphs) rather than writing a new one."
+      gate: >
+        THE M1 EXIT GATE. p95 save-to-ready <= 2 s, p100 <= 5 s (GE-NFR2, D17); body-only edits cascade to
+        ZERO files; reader p95 <= 150 ms under concurrent writes (GE-NFR4); no unbounded memory growth over
+        1 h of churn (GE-NFR5).
+      also_decides: "Missing these after tuning is the documented FalkorDB fallback trigger (README), so this gate is also the LadybugDB fallback decision point."
+      status: draft
+
+  m2_outline:
+    name: Agent wedge
+    exit: "An agent orients, checks impact, edits, and verifies the graph updated (MC-UC1-3) on the fixtures with no human help."
+    units_named:
+      - "Daemon lifecycle — engine.json, O_EXCL lock, unix socket, attach-or-spawn (GE-FR15, GE-UC10). Gated by chaos spike SP10."
+      - "Shared query library that both MCP and the pane use (MC-FR3, VZ-FR6)."
+      - "MCP shim skeleton — dual-era serveStdio, static-manifest handshake BEFORE engine attach (Codex 10 s startup timeout), stdio hygiene. Gated by SP8."
+      - "Navigation tools — find_symbol, get_symbol, file_outline, list_files."
+      - "Relationship tools — callers_of, callees_of, imports."
+      - "Analysis tools — impact_of_change, path_between."
+      - "State — graph_status, wait_for_ready, cpg://schema (generated from M0.0's schema definition)."
+      - "query_cypher with write-clause guards + RO_QUERY + timeout + row/byte caps. Gated by SP9."
+      - "Host config generation (`cpg mcp install --host ...`) with >= 2 hosts in CI (MC-NFR5)."
+      - "Query logging (GE-FR21, MC-FR14) — must land here because M3's Query History depends on it."
+    carry_in_decision: "AM3 caps v1 at <= 12 tools (Cursor silently drops tools past ~40 active). Which 2-3 analytics tools survive into the 12 is still open in 40-research.yaml — settle before the tool units."
+    status: draft
+
+  m3_outline:
+    name: Trust surface
+    exit: "A human can see what the agent saw and confirm it was right."
+    units_named:
+      - "Extension activation + attach-or-spawn (never kill on deactivate; gate on workspace.isTrusted)."
+      - "View container with 4 webview views sharing one extension-side store. Gated by SP12."
+      - "Graph rendering — graphology + sigma; ELK layered layout for directional impact/path views (VZ-Q1)."
+      - "Breadcrumb follow-cursor, 150 ms debounce (VZ-UC1)."
+      - "Impact and path views REUSING the M2 query library (VZ-FR6)."
+      - "Node/edge inspector — the human oracle for golden snapshots (VZ-UC7)."
+      - "Query History (VZ-UC10), depending on M2's query logging."
+      - "MCP server definition provider registration (finalized in VS Code 1.101)."
+    constraint: "Per AM2, webview views relocate between primary sidebar / panel / secondary sidebar only; the editor-area surface is a separate WebviewPanel with a serializer."
+    status: draft
+
+  m4_outline:
+    name: Scale and eval
+    exit: "D13 and D17/D20 met on the fixtures."
+    units_named:
+      - "Scale fixture + first-launch <= 10 min gate (D20, GE-NFR1)."
+      - "Analytics projections — import and call graphs — off the hot path (GE-NFR3, D6)."
+      - "Community detection + centrality, results tagged with run_id and computed_at (GE-FR14, D15)."
+      - "Analytics MCP tools, folded per AM3."
+      - "Seeded-bug catalogue — MC-Q4 lists six candidate classes; deferred until M0's clean graph exists, which it now will (D27)."
+      - "Eval runner scoring detection + mitigation with and without MCP; target > 95% (D13, MC-UC9)."
+    status: draft
+
+# ------------------------------------------------------------------------------------------------------
+verification_commands:
+  foundation_once: "docker compose -f docker/falkordb.yml up -d   # pinned falkordb/falkordb:v4.20.4 on 6380"
+  standing: |
+    oxlint && oxfmt --check && tsc --build
+    bun test packages/engine/test/unit
+    bun test packages/engine/test/integration    # live DB + assertGraphInvariants()
+    npm run test:schema                          # every written label is declared
+    npm run test:goldens                         # snapshot diff, must be empty
+  m0_exit: |
+    npx cpg index --workspace test/fixtures
+    npx cpg dump --format golden | diff - test/__snapshots__/graph/fixtures.json   # must be empty
+  m1_exit: |
+    npm run bench:save-latency          # asserts p95 <= 2s, p100 <= 5s
+    npm run bench:reader-under-write    # asserts reader p95 <= 150ms
+    npm run bench:churn -- --duration 1h  # asserts no unbounded memory growth
+  golden_updates: "npm run test:update-goldens — local and deliberate only; never in CI. Paste the diff into the PR."
+
+files_touched_first:
+  - { path: "package.json, tsconfig.json", change: "split into workspace roots + per-package configs" }
+  - { path: "eslint.config.mjs", change: "retired in favour of oxlint + oxfmt + lefthook" }
+  - { path: ".github/workflows/ci.yml", change: "NEW (F1)" }
+  - { path: "packages/engine/src/store/client.ts", change: "ported from ast-demo/bench/src/client.ts" }
+  - { path: "packages/engine/test/support/invariants.ts", change: "ported from ast-demo/bench/src/verify.ts" }
+  - { path: "docker/falkordb.yml", change: "ported from ast-demo/bench/docker-compose.yml" }
+  - { path: "test/fixtures/code_examples/typescript/", change: "NEW layered TS app (M0.5)" }
+  - { path: "test/fixtures/code_examples/python/src/", change: "kept as-is; becomes the Python oracle" }
+  - { path: "test/__snapshots__/, scripts/generate-snapshots.ts", change: "extended to graph-level goldens" }
+  - { path: "src/ (current 5,364 LOC)", change: "reference only, not migrated. Native tree-sitter and falkordblite dependencies dropped in favour of web-tree-sitter (R4) and an own spawner (F3)." }
+  - { path: "src/types/cpg.ts", change: "NOT migrated, but it is the primary input to M0.0's divergence table — it is the existing Joern-spec adoption (SF4)." }
+
+# ------------------------------------------------------------------------------------------------------
+evolution:
+  # The visionary's instruction, 2026-09-11: "evolve it based on the spec/network topology we uncover in
+  # future research."
+  principle: >
+    The unit boundaries here are a working decomposition, not a contract. Revise them as research lands.
+    When research changes a decision, amend this file and say what moved and why — the way 40-research.yaml
+    records its seven amendments against the vision. A unit that turns out to be two, or three that collapse
+    into one, is the plan working, not the plan failing.
+  expect_to_move:
+    - "M0.4 and every golden-snapshot gate depend on M0.0's spec-alignment outcome."
+    - "M2's daemon-lifecycle and shim units depend on the process/network topology research (how daemon, shim, and DB connections actually compose)."
+    - "M1.9's budget gate is also the FalkorDB-vs-LadybugDB fallback decision point."
+
+# ------------------------------------------------------------------------------------------------------
+v2_backlog:
+  # Explicitly deferred beyond the M0-M4 v1 ladder — not rejected, not forgotten. Revisit each only when
+  # its trigger condition is met; pulling one in early is scope creep against DL2's sliced-later principle.
+  - id: V2.1
+    name: Type System pass — TYPE_PARAMETER, TYPE_ARGUMENT, BINDS, EVAL_TYPE
+    text: >
+      Give generics first-class graph representation (TYPE_ARGUMENT nodes, a BINDS-equivalent edge for
+      parameterized instantiation) instead of folding them into a type_text string property. Enables
+      graph-native queries like "every instantiation of Repository<T> with T=Order" that string matching
+      cannot answer.
+    why_deferred: >
+      No Type System lens was included in the R6 ontology debate (Graph Analytics flagged this gap in
+      Round 1); the current REJECT verdict on these types is adjacent-lens consensus, not a considered
+      type-system judgment (Standards flagged this itself). None of the M2 agent-wedge tools
+      (find_symbol, callers_of, impact_of_change, etc.) require generics-aware traversal to function.
+    trigger: "A concrete agent workflow needs generics-aware graph queries, or scale/eval work in M4 surfaces a real gap that a type_text substring match cannot cover."
+    depends_on: "A dedicated Type System lens pass, not just folding these into the existing schema ad hoc."
+    source: "R6-ontology-debate-synthesis.md Next Steps #5, visionary decision 2026-09-11 (DL10)"
+    status: deferred
+
+open_items:
+  # None block starting F1. Each must be settled before the unit that depends on it.
+  - { id: OI1, text: "Schema spec alignment — adopt Joern wholesale, align names and document divergences, or define our own referencing both. Research in flight.", blocks: [M0.0, M0.4], status: open }
+  - { id: OI2, text: "AM1 (id scheme without file content hash) — confirmed executably by M0.3's spike gate.", blocks: [M0.3], status: open }
+  - { id: OI3, text: "AM3 — which 2-3 analytics tools make the 12.", blocks: ["M2 tool units"], status: open }
+  - { id: OI4, text: "SSPL review for a FOSS repo that spawns, but does not redistribute, FalkorDB binaries. Needed before F3 ships publicly, not before it is written.", blocks: ["F3 public release"], status: open }
+  - { id: OI5, text: "falkordb-dev MCP server failed to connect during research, so FalkorDB TIMEOUT syntax and RO_QUERY behaviour with side-effecting procedures are unverified live. That is spike SP9, in M2.", blocks: ["M2 query_cypher"], status: open }
