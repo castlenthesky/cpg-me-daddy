@@ -46,6 +46,7 @@ The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.projec
 | `bun run db:up` | Start the pinned FalkorDB (docker/falkordb.yml, 127.0.0.1:6381) and verify provenance |
 | `bun run db:down` | Stop it and discard its volume + provenance record |
 | `bun run test:integration` | `bun test` against that live FalkorDB |
+| `bun run test:integration:network` | Also runs F3's download + redis-server spawn suite. Opt-in, never in CI. |
 
 Run the extension with the "Run Extension" launch configuration (F5); it points at `packages/vscode`.
 Extension-host tests use `@vscode/test-cli` (`packages/vscode/.vscode-test.mjs`) and land in M3.
@@ -68,6 +69,28 @@ bun run db:up && bun run test:integration && bun run db:down
 gate fires before a commit exists. `.github/workflows/ci.yml` runs the same four commands on
 ubuntu-latest and macos-latest (job `gates`, deliberately DB-free), plus a ubuntu-only `integration` job
 that brings the pinned FalkorDB up with the same `docker/falkordb.yml` developers use.
+
+## FalkorDB acquisition (F3)
+
+FalkorDB publishes **no standalone server binary** — every release asset is a Redis module (`.so`).
+`engine.db.mode: spawned` therefore runs `redis-server --loadmodule <cached .so>` and depends on a
+`redis-server` the FalkorDB project does not ship. `packages/engine/src/server/` holds the
+`ServerManager` interface and the Spawned / Remote / Docker implementations.
+
+Two rules in that directory are load-bearing:
+
+- **Nothing launches unverified.** The cached module's SHA-256 must match `manifest.ts`, which pins
+  real hashes for the v4.20.4 assets. A mismatch quarantines the file and refuses to launch — it
+  never silently re-downloads.
+- **The cached module is always `chmod +x`.** A download lands at mode 0644 and redis-server aborts
+  with `Module <path> failed to load: It does not have execute permissions.` This is regression-tested.
+
+Environment overrides: `CPG_CACHE_DIR` (cache root, default `~/.cache/cpg`), `CPG_REDIS_SERVER`
+(redis-server path), `CPG_FALKORDB_PLATFORM` (pin a specific release asset, e.g. `linux-x64-rhel9`).
+
+`test/unit/**` never touches the network — it runs against a local fixture origin and a fake Redis.
+The real download-and-spawn gate lives in `packages/engine/test/integration/`, is excluded from
+`test:unit` by path, and additionally requires `CPG_INTEGRATION_FALKORDB=1`.
 
 ## TypeScript layout
 

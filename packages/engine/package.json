@@ -15,7 +15,8 @@
   },
   "scripts": {
     "test:unit": "bun test test/unit",
-    "test:integration": "bun test test/integration"
+    "test:integration": "bun test test/integration",
+    "test:integration:network": "CPG_INTEGRATION_FALKORDB=1 bun test test/integration"
   },
   "dependencies": {
     "@vscode/tree-sitter-wasm": "0.3.1",
