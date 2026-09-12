@@ -4,42 +4,61 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a VS Code extension project called "codegraph" that provides a graph representation of code symbols. The extension is built with TypeScript and targets VS Code 1.107.0+.
+`cpg-me-daddy` builds a Code Property Graph over TypeScript/JavaScript/Python and exposes it to editors
+and agents. It is a **bun workspace monorepo**:
+
+- `packages/engine` (`@cpg/engine`) — the pure TypeScript core. Parsing, graph construction, storage.
+- `packages/cli` (`@cpg/cli`) — the `cpg` command line interface.
+- `packages/vscode` (`@cpg/vscode`) — the VS Code extension (manifest, activation, UI).
+
+The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.project-outline/60-delivery.yaml`.
+
+## Hard rules
+
+- **Engine purity.** Nothing under `packages/engine` may import `vscode` (or `@cpg/vscode`). This is
+  enforced by `no-restricted-imports` in `.oxlintrc.json` and it is a build-breaking gate, not a
+  convention. Editor APIs live in `packages/vscode`; plain data crosses into the engine.
+- **Dependency direction.** `cli` and `vscode` may depend on `engine`. `engine` depends on neither.
+- **Package manager is `bun`.** `bun.lock` is the lockfile; there is no `package-lock.json`.
+- **Legacy trees are reference only.** The top-level `src/`, `test/`, `scripts/`, `out/`, `media/`,
+  `resources/`, `build/` are the pre-monorepo prototype. They are excluded from the workspace build,
+  from oxlint and from oxfmt. Do not extend them; later M0 units consume `src/types/cpg.ts` and then
+  delete the tree.
 
 ## Development Commands
 
-### Build and Compilation
-- `npm run compile` - Compile TypeScript to JavaScript (output to `out/` directory)
-- `npm run watch` - Watch mode compilation for development
-- `npm run vscode:prepublish` - Production build (runs compile)
+| Command | What it does |
+| --- | --- |
+| `bun install` | Install workspace dependencies and (via `prepare`) install the git hooks |
+| `bun run lint` | oxlint over `packages/**` |
+| `bun run format` | oxfmt, writing in place |
+| `bun run format:check` | oxfmt in check mode (the CI gate) |
+| `bun run typecheck` | `tsc --build` across the project references |
+| `bun run watch` | `tsc --build --watch` |
+| `bun run test:unit` | `bun test` for all three packages |
 
-### Testing and Linting
-- `npm test` - Run tests using vscode-test (runs pretest automatically)
-- `npm run pretest` - Compile and lint (runs before tests)
-- `npm run lint` - Run ESLint on the src directory
+Run the extension with the "Run Extension" launch configuration (F5); it points at `packages/vscode`.
+Extension-host tests use `@vscode/test-cli` (`packages/vscode/.vscode-test.mjs`) and land in M3.
 
-### Running the Extension
-Use VS Code's debugger with the "Run Extension" launch configuration (F5) to test the extension in an Extension Development Host window.
+## The standing gates
 
-## Architecture
+Every PR keeps these green, not just its own new test:
 
-### Project Structure
-- `src/extension.ts` - Main extension entry point with activate/deactivate lifecycle hooks
-- `src/test/extension.test.ts` - Test suite using Mocha
-- `out/` - Compiled JavaScript output (git-ignored)
-- `.vscode/launch.json` - Debug configurations for running extension and tests
+```
+bun run lint && bun run format:check && bun run typecheck && bun run test:unit
+```
 
-### Extension Activation
-The extension activates based on events defined in `package.json` activationEvents. Currently registers the `codegraph.helloWorld` command.
+`lefthook.yml` runs lint + format check on `pre-commit` and typecheck + unit tests on `pre-push`, so the
+gate fires before a commit exists. `.github/workflows/ci.yml` runs the same four commands on
+ubuntu-latest and macos-latest.
 
-### TypeScript Configuration
-- Module system: Node16
-- Target: ES2022
-- Strict mode enabled
-- Source maps generated for debugging
+## TypeScript layout
 
-### Linting Rules
-ESLint configured with typescript-eslint:
-- Naming conventions enforced (camelCase/PascalCase for imports)
-- Requires curly braces, strict equality (===), semicolons
-- Warns on throwing literals
+`tsconfig.base.json` holds the shared compiler options (module/moduleResolution NodeNext, target ES2022,
+`strict`, `composite`, `declaration`). The root `tsconfig.json` is a solution file — `"files": []` plus
+references to the three packages — so `tsc --build` from the root builds everything in dependency order.
+Each package compiles `src/` to `dist/`.
+
+`@cpg/engine` publishes a `"bun"` export condition pointing at `src/index.ts`, so `bun test` resolves the
+engine's source directly and unit tests do not require a prior `tsc --build`. Node and `tsc` resolve the
+built `dist/` output as usual.

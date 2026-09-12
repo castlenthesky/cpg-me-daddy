@@ -1,0 +1,58 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/out/**",
+    "**/node_modules/**",
+    "build/**",
+    "design/**",
+    "media/**",
+    "resources/**",
+    "scripts/**",
+    "src/**",
+    "test/**"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "env": {
+    "es2022": true,
+    "node": true
+  },
+  "rules": {
+    "curly": "error",
+    "eqeqeq": "error",
+    "no-throw-literal": "error",
+    "no-var": "error",
+    "prefer-const": "error"
+  },
+  "overrides": [
+    {
+      // Engine purity (F1 gate). packages/engine is the pure core: it runs
+      // unchanged inside the extension host, the CLI and a headless daemon, so
+      // it must never reach for an editor API.
+      "files": ["packages/engine/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "vscode",
+                "message": "Engine purity: packages/engine must never import 'vscode'. Keep editor APIs in packages/vscode and pass plain data into the engine."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["vscode/*", "@cpg/vscode", "@cpg/vscode/**"],
+                "message": "Engine purity: packages/engine must never depend on the VS Code extension package."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
