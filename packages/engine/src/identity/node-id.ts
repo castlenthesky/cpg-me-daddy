@@ -18,14 +18,16 @@
  * Ranges are never part of this — PR1 (sparse by design): identity is for
  * addressing a thing, ranges are for navigating to it.
  *
- * Known limitation, currently unreachable: `qualifiedScopePath` joins frame
- * NAMES only, not `(kind, name)` pairs, so a `TYPE_DECL "A"` containing a
- * `METHOD "b"` and a `METHOD "A"` containing a nested `METHOD "b"` would
- * produce the same id. This cannot happen yet — `extract/walk.ts` never
- * descends into a METHOD's own body, so a METHOD is always a leaf in every
- * delta this engine produces today. Revisit frame encoding (e.g. a
- * kind-tagged join, SCIP-style) before any unit adds nested
- * declarations/closures.
+ * Known limitation, kept unreachable by construction: `qualifiedScopePath`
+ * joins frame NAMES only, not `(kind, name)` pairs, so a `TYPE_DECL "A"`
+ * containing a `METHOD "b"` and a `METHOD "A"` containing a nested
+ * `METHOD "b"` would produce the same id. `extract/walk.ts` now DOES
+ * descend into a METHOD's own body (M0.7/M0.9, calls/data-flow), so a
+ * METHOD is no longer always a leaf — but a nested NAMED function/class
+ * declaration is a hard stop there for exactly this reason: it is what
+ * keeps this collision unreachable rather than a coincidence of scope.
+ * Revisit frame encoding (e.g. a kind-tagged join, SCIP-style) before any
+ * unit lifts that barrier and adds real nested declarations/closures.
  */
 
 /**

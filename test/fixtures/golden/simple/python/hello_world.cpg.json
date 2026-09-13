@@ -36,7 +36,7 @@
     {
       "labels": ["SYMBOL"],
       "properties": {
-        "fqn": "hello_world.py`DISPLAY_TEXT.",
+        "fqn": "`hello_world.py`/DISPLAY_TEXT.",
         "kind": "variable",
         "language": "python"
       }
@@ -66,7 +66,7 @@
       "fromLabel": "MEMBER",
       "toLabel": "SYMBOL",
       "fromKey": "hello_world.py:MEMBER:DISPLAY_TEXT",
-      "toKey": "hello_world.py`DISPLAY_TEXT.",
+      "toKey": "`hello_world.py`/DISPLAY_TEXT.",
       "properties": {}
     },
     {

@@ -1,8 +1,11 @@
 /**
- * Hello-world sparse CPG goldens (schema v2).
+ * Hello-world sparse CPG goldens (schema v3).
  *
- * Hand-authored contracts under test/fixtures/golden/simple/ — not produced by
- * an extractor yet. Future M0.6–M0.10 adapters must match these.
+ * Hand-authored contracts under test/fixtures/golden/simple/ — asserted
+ * against the schema and their own internal shape here; asserted against
+ * REAL extractor output in the sibling extractor-matches-golden.test.ts
+ * (M0.7/M0.9), which is what actually closes this file's original
+ * "not produced by an extractor yet" gap.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

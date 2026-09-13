@@ -11,6 +11,7 @@ export class Greeter {
   }
 
   greet(name: string): string {
+    console.log(name);
     return `${this.prefix}, ${name}`;
   }
 }

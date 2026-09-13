@@ -89,7 +89,7 @@ export const EDGE_TYPES = [
         "resolution-completeness fix. Conditional on the SYMBOL GC/lifecycle mechanism covering PARAM too.",
       source: "R6 edge table",
     },
-    firstWrittenIn: "M0.10",
+    firstWrittenIn: "M0.7",
     doc: "",
   },
   {
@@ -122,7 +122,7 @@ export const EDGE_TYPES = [
         "dropped in favour of this status enum.",
       source: "R6 edge table",
     },
-    firstWrittenIn: "M0.10",
+    firstWrittenIn: "M0.7",
     doc: "CALL site to the SYMBOL it resolves to. R2: unresolved rate = one GROUP BY over `status`.",
   },
   {
@@ -174,7 +174,7 @@ export const EDGE_TYPES = [
         "`resolved` bool on CALL/IMPORT nodes vs. a rich enum on CALLS). The bare booleans are dropped.",
       source: "R6 edge table",
     },
-    firstWrittenIn: "M0.10",
+    firstWrittenIn: "M0.7",
     doc: "",
   },
   {

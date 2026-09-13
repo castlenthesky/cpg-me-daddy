@@ -159,7 +159,7 @@ standing_gates:
   - { gate: engine_unit_tests,   command: "bun test packages/engine/test/unit",        introduced: F1 }
   - { gate: graph_invariants,    command: "part of the integration run",               introduced: F2 }
   - { gate: schema_conformance,  command: "bun run test:schema",                       introduced: M0.0 }
-  - { gate: golden_snapshot_diff, command: "bun run test:goldens",                     introduced: M0.6, gap_found_2026-09-12: "This script does not exist in root package.json. The golden test (packages/engine/test/unit/golden/hello-world.cpg.test.ts) runs today only incidentally inside test:unit — the named standing gate itself has never been run. Add the script." }
+  - { gate: golden_snapshot_diff, command: "bun run test:goldens",                     introduced: M0.6, gap_found_2026-09-12: "This script does not exist in root package.json. The golden test (packages/engine/test/unit/golden/hello-world.cpg.test.ts) runs today only incidentally inside test:unit — the named standing gate itself has never been run. Add the script.", resolved_2026-09-13: "Script added (bun test packages/engine/test/unit/golden). Now also runs extractor-matches-golden.test.ts (M0.7/M0.9) — the first test to compare real extractor output against the checked-in goldens byte-exactly, not just the goldens' own shape." }
   - { gate: extension_host_tests, command: "vscode-test",                              introduced: M3 }
 
 standing_gates_tooling_note: >
@@ -572,7 +572,29 @@ units:
         case); every call site in the fixture appears exactly once; NO bare-name SYMBOLs created for
         unresolved calls (README rule 2); REACHING_DEF emitted for every MEMBER/PARAM whose value
         reaches a CALL argument in the fixture.
-      status: not_started
+      status: in_progress
+      verified_2026-09-13: >
+        CALL nodes, IN_SCOPE, minimal SYMBOL minting (MEMBER/METHOD/TYPE_DECL DEFINES; bare-name
+        and receiver-qualified callee attribution via local-name/local-this/builtin, README rule 2
+        preserved structurally — an unattributable call mints no SYMBOL and no CALLS edge), and
+        sparse REACHING_DEF all landed together with M0.9 (the shared walk.ts spine, per the
+        M0.6+M0.8 precedent). `extract/index.ts`'s extractFile now reproduces both hello-world
+        goldens byte-exactly (packages/engine/test/unit/golden/extractor-matches-golden.test.ts) —
+        the loop `entanglement_found_2026-09-12` left open. Two golden defects found and fixed by
+        real parse, both signed off (GR4): the TS golden's CALL range was the `expression_statement`
+        extent (2:0-2:26, including the `;`), not the `call_expression`'s (2:0-2:25); and both
+        goldens' local SYMBOL fqn was missing its opening backtick and `/` against R2 §158(b)'s
+        canonical SCIP form. IMPORT/IMPORTS remain — status stays in_progress until they land.
+      known_gap_2026-09-13: >
+        SYMBOL garbage collection does not exist yet. A workspace-local SYMBOL's `merge-on-key`
+        write mechanism means nothing ever deletes it once its DEFINES source is gone (a rename, a
+        deleted/moved file) — `assertGraphInvariants()`'s orphan-SYMBOL check now has something
+        real to catch, and does: packages/engine/test/integration/indexer.test.ts's file-move test
+        asserts this SPECIFIC, understood orphan by name rather than silently accepting or masking
+        it. This is M1.2's stated gate ("zero orphan SYMBOLs among touched fqns"), for the
+        incremental/watcher-driven replace path M1 builds — not deferred by oversight, but a real
+        consequence of M0.7/M0.9 minting SYMBOLs before M1.2 exists to collect them, surfaced here
+        so it isn't lost between units.
       entanglement_found_2026-09-12: >
         As originally written, this unit cannot pass its own gate: the hand-authored
         hello_world.cpg.json goldens require SYMBOL nodes (with SCIP-descriptor fqns) plus
@@ -651,7 +673,16 @@ units:
       gate: >
         Golden snapshots (test/fixtures/golden/simple/python/hello_world.cpg.json is the smoke case);
         call sites exactly once; no bare-name SYMBOLs; REACHING_DEF emitted per M0.7's gate.
-      status: not_started
+      status: in_progress
+      verified_2026-09-13: >
+        Landed together with M0.7 in the same PR (the shared walk.ts spine, per the M0.6+M0.8
+        precedent) — see that unit's verified_2026-09-13 note for the shared design, the two golden
+        defects found and fixed, and the known SYMBOL-GC gap. Python-specific: `self.foo()` is
+        text-detected (`self` is a plain bound identifier here, not its own node type the way TS's
+        `this` is); only BARE Python builtins resolve (`print`, `len`, …) — no stdlib-module-name
+        table exists yet, so a qualified call like `os.path.join(...)` is unattributed in this
+        slice, unlike TS's bare-global table reaching qualified `console.*` calls too. IMPORT/
+        IMPORTS remain — status stays in_progress until they land.
       entanglement_found_2026-09-12: "Same fix as M0.7 (see that unit's entanglement_found note) — the Python hello_world golden requires the same minimal SYMBOL minting, folded in here rather than waiting on M0.10."
 
     - id: M0.10
