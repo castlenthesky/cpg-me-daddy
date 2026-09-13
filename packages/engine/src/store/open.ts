@@ -73,6 +73,14 @@ export async function openCpgStore(
 
   const falkor = await FalkorService.start(config, options.deps);
   try {
+    // A graph key does not exist on FalkorDB until something writes to it —
+    // any read against a missing key (including `bootstrapSchema`'s own
+    // `CALL db.indexes()`) fails with "Invalid graph operation on empty
+    // key". `RETURN 1` materializes the key with no nodes, the same
+    // workaround `test/support/falkordb.ts`'s `openTestGraph` already uses
+    // for the exact same reason.
+    await falkor.graph.write("RETURN 1");
+
     const store = new FalkorGraphStore({
       graph: falkor.graph,
       admin: falkor.admin,

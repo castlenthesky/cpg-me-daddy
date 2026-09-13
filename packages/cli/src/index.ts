@@ -2,14 +2,9 @@
  * @cpg/cli — the `cpg` command line interface.
  *
  * Depends on @cpg/engine; the dependency never points the other way.
+ * `main.ts` is the actual `bin` entry (a shebang wrapper around `run`); this
+ * file must not self-execute — `test/unit/version.test.ts` imports it.
  */
 
-import { engineIdentity } from "@cpg/engine";
-
-/** Semantic version of the CLI package. */
-export const CLI_VERSION = "0.0.1";
-
-/** The string printed by `cpg --version`. */
-export function versionBanner(): string {
-  return `@cpg/cli@${CLI_VERSION} / ${engineIdentity()}`;
-}
+export { CLI_VERSION, versionBanner } from "./version";
+export { run } from "./run";

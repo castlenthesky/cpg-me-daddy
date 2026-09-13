@@ -23,6 +23,7 @@
     "db:dev:stop": "docker compose -f docker/falkordb.dev.yml stop",
     "db:dev:down": "bun run tools/falkordb-dev-down.ts",
     "db:dev:reset": "bun run tools/falkordb-dev-down.ts --destroy",
+    "cpg": "bun run packages/cli/src/main.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {

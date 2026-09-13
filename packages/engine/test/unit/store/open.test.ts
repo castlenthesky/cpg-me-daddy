@@ -17,7 +17,13 @@ function config(overrides: Parameters<typeof defineFalkorConfig>[0] = {}): Falko
 }
 
 function fakeClient(): FalkorClient {
-  return { graphName: "cpg", close: async () => {} } as unknown as FalkorClient;
+  return {
+    graphName: "cpg",
+    // openCpgStore materializes the graph key with a `RETURN 1` write
+    // before anything else — the fake must answer it.
+    query: async () => ({ data: [], wallMs: 0, serverMs: 0, raw: [] }),
+    close: async () => {},
+  } as unknown as FalkorClient;
 }
 
 describe("assertNotTestHarness", () => {

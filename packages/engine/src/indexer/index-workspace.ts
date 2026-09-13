@@ -25,7 +25,7 @@ import type { GrammarId } from "../parser/grammars";
 import { assertGraphDeltaValid, type GraphDelta, type NodeRow } from "../schema/validate";
 import type { IGraphStore, WriteReport } from "../store/store";
 import { hashBytes } from "../workspace/hash";
-import { walkWorkspace } from "../workspace/walker";
+import { type WalkStats, walkWorkspace } from "../workspace/walker";
 
 export interface IndexWorkspaceDeps {
   readonly store: IGraphStore;
@@ -67,6 +67,8 @@ export interface IndexHooks {
 
 export interface IndexReport {
   readonly root: string;
+  /** The walk's own counts (candidates seen, excluded, unsupported, too large) — computed once, here. */
+  readonly walk: WalkStats;
   readonly filesIndexed: number;
   readonly nodesWritten: number;
   readonly edgesWritten: number;
@@ -135,7 +137,7 @@ export async function indexWorkspace(
   let filesIndexed = 0;
   let cancelled = false;
 
-  const { files } = await walkWorkspace(config.walk);
+  const { files, stats: walkStats } = await walkWorkspace(config.walk);
 
   hooks.onProgress?.({
     phase: "walk",
@@ -240,6 +242,7 @@ export async function indexWorkspace(
 
   return {
     root: config.root,
+    walk: walkStats,
     filesIndexed,
     nodesWritten,
     edgesWritten,
