@@ -24,6 +24,14 @@
  *     never itself a problem — only a registry hit with a live, non-zero
  *     count is. This is exactly the class of gotcha `open_items.OI5` warns
  *     about, hence verifying live rather than trusting the docs.
+ *   - **`db.indexes()` returns ONE row per label**, with every indexed
+ *     property on that label merged into a single `properties` array —
+ *     `CPG(id)` + `CPG(file)` come back as one row `CPG [id, file]`, never
+ *     two. `checkBootstrap` below matches by containment for this reason,
+ *     not by exact array equality (M0.4a bug fix — the original matcher
+ *     would report every multi-index label's entries missing even after a
+ *     correct bootstrap). `db.constraints()` genuinely is one row per
+ *     constraint, so that half stays a deep-equality match.
  */
 import type { GraphService } from "../../../falkordb-service/src/index.ts";
 import {
@@ -45,7 +53,7 @@ import type { NodeLabelSpec, VerifyResult } from "../../src/schema/index.ts";
 const NODE_SPECS: readonly NodeLabelSpec[] = NODE_LABELS;
 
 export interface ConformanceOptions {
-  /** M0.4 flips this on once the bootstrap creates the declared indexes/constraints. Off here. */
+  /** M0.4a flips this on once the bootstrap creates the declared indexes/constraints. Off here. */
   requireIndexes?: boolean;
 }
 
@@ -232,12 +240,25 @@ async function checkBootstrap(graph: GraphService): Promise<string[]> {
     graph.read<{ type: string; label: string; properties: string[] }>("CALL db.constraints()"),
   ]);
   const problems: string[] = [];
+  // FalkorDB's db.indexes() returns ONE row per label, with every indexed
+  // property on that label merged into a single `properties` array (verified
+  // live: `CPG(id)` + `CPG(file)` come back as one row `CPG [id, file]`, not
+  // two rows). Two separately-declared SCHEMA_INDEXES entries on the same
+  // label therefore share one row — matching by exact array equality would
+  // report both as missing even after a correct bootstrap. Match by
+  // containment instead: every property this spec declares must appear
+  // somewhere in that label's row.
+  const indexedPropsByLabel = new Map<string, Set<string>>();
+  for (const row of indexes.data) {
+    const set = indexedPropsByLabel.get(row.label) ?? new Set<string>();
+    for (const p of row.properties) {
+      set.add(p);
+    }
+    indexedPropsByLabel.set(row.label, set);
+  }
   for (const spec of SCHEMA_INDEXES) {
-    const found = indexes.data.some(
-      (row) =>
-        row.label === spec.label &&
-        JSON.stringify(row.properties) === JSON.stringify(spec.properties),
-    );
+    const indexed = indexedPropsByLabel.get(spec.label);
+    const found = indexed !== undefined && spec.properties.every((p) => indexed.has(p));
     if (!found) {
       problems.push(`missing declared index on ${spec.label}(${spec.properties.join(", ")})`);
     }
