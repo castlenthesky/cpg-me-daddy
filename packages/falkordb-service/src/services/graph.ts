@@ -37,8 +37,15 @@ export class GraphService {
     return typeof v === "number" ? v : Number(v);
   }
 
-  /** Query plan, as FalkorDB renders it. */
-  async explain(query: string): Promise<string[]> {
-    return this.client.explain(query);
+  /**
+   * Query plan, as FalkorDB renders it. `params`, when given, is sent the
+   * same way `GRAPH.EXPLAIN` requires it — as a `CYPHER key=value ...`
+   * prefix on the query text, since `GRAPH.EXPLAIN` has no native parameter
+   * channel. Needed for a query whose planner consumes a param directly
+   * (e.g. an indexed-property match), which errors "Missing parameters"
+   * without one — see `FalkorClient.explain`.
+   */
+  async explain(query: string, params?: Record<string, unknown>): Promise<string[]> {
+    return this.client.explain(query, params);
   }
 }

@@ -467,7 +467,7 @@ units:
         while silently breaking); ends by asserting assertGraphInvariants() and
         assertSchemaConformance({requireIndexes: true}).
       depends_on: [M0.0, M0.4a]
-      status: not_started
+      status: done
       note: >
         Depends on M0.4a because its EXPLAIN assertions require the indexes that unit creates —
         a real prerequisite, not a slice boundary invented to fit GR3's budget. The legacy
@@ -477,6 +477,33 @@ units:
         label-less (the exact All-Node-Scan shape this gate forbids), uses DETACH DELETE, and
         indexes properties — METHOD.fullName, IDENTIFIER.name — that don't exist in the v1
         schema. Not portable; useful only as a named negative reference in the PR description.
+      verified_2026-09-12: >
+        Two corrections to this unit's own text, found while implementing and verifying its gate
+        live against 127.0.0.1:6381:
+        (1) "EXPLAIN of each generated op contains 'Node By Index Scan'" is not universally true —
+        a delete-create node op (`UNWIND $rows AS row CREATE (n:CPG:LABEL) SET n = row`) has no
+        scan at all (`Update / Create / Unwind`), since there is nothing indexed to look up. The
+        assertion is per-op-kind: `edge`/`node-merge`/`scope-delete` must show
+        "Node By Index Scan"; every op must show neither "All Node Scan" nor "Label Scan"; `edge`
+        additionally shows "Project" (the WITH barrier); `node-create` shows no scan at all.
+        (2) The "DETACH DELETE destroys inbound cross-file edges" framing is about the MATCH
+        clause's label scope, not the DELETE keyword: verified live that `MATCH (n:CPG
+        {file:$file}) DELETE n` and the identical match with `DETACH DELETE n` behave IDENTICALLY
+        — both remove exactly the matched node's own relationships and leave a shared SYMBOL and
+        a cross-file CALLS edge into it untouched. The real hazard is an over-broad or label-less
+        MATCH (the legacy FalkorDBStore.ts shape named above), not this keyword alone.
+        `planDelta` still emits plain DELETE per the original spec. Also implemented beyond the
+        delivers text: edges dispatch on `edgeSpec().write` the same way nodes dispatch on
+        `nodeSpec().write` (CREATE for delete-create edges, MERGE for merge-on-key edges like
+        ALIAS_OF/TAGGED_BY) — not explicit in this unit's original delivers line, but the schema
+        module already declares a `write` field per edge type, and MERGE is needed there to avoid
+        accumulating duplicate relationships on a re-resolve pass between two nodes neither of
+        which is necessarily scope-deleted together. Gate green: lint/format:check/typecheck/
+        test:unit (278 tests, +23 from this unit)/test:schema, plus test:integration (30 tests,
+        +6) including a ~1k-node delta with EXPLAIN asserted per op kind, a cross-file-CALLS-
+        survives-a-rewrite-of-the-defining-file case, and two negative controls (a kind-labeled
+        endpoint plans as a Label Scan; a missing WITH barrier plans as a Cartesian Product) run
+        live and pasted into the PR.
 
     - id: M0.5
       name: Layered TypeScript fixture

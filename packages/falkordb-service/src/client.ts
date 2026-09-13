@@ -93,8 +93,23 @@ export class FalkorClient {
     return this.wrap<T>(res as never, t0);
   }
 
-  async explain(query: string): Promise<string[]> {
-    const r: unknown = await this.graph.explain(query);
+  /**
+   * `GRAPH.EXPLAIN` — a query plan, never executed. `GRAPH.EXPLAIN` has no
+   * native parameter channel (unlike `GRAPH.QUERY`/`GRAPH.RO_QUERY`), and a
+   * query referencing a runtime-only param like `$rows` (an `UNWIND`
+   * source) plans fine without a value — but a param the PLANNER consumes
+   * directly, such as an indexed property match `{file: $file}`, fails with
+   * "Missing parameters" unless a value is supplied (verified live against
+   * the pinned v4.20.4 image). So when `params` is given, this builds the
+   * same `CYPHER key=value ... <query>` prefix `query()`/`roQuery()` build
+   * via the driver's own (unexported) parameter serializer, reimplemented
+   * here — `queryParamToString` below matches it exactly — and prepends it
+   * before calling the read-only driver method that takes no params of its
+   * own.
+   */
+  async explain(query: string, params?: Record<string, unknown>): Promise<string[]> {
+    const text = params ? `CYPHER ${queryParamsToString(params)} ${query}` : query;
+    const r: unknown = await this.graph.explain(text);
     return Array.isArray(r) ? r.map(String) : [String(r)];
   }
 
@@ -121,4 +136,44 @@ export class FalkorClient {
   async close(): Promise<void> {
     await this.db.close();
   }
+}
+
+/**
+ * `CYPHER key1=value1 key2=value2 ...` — the exact prefix format the
+ * `falkordb` driver itself builds internally for `query()`/`roQuery()`
+ * (`queryParamsToString`/`queryParamToString` in its own
+ * `commands/index.js`), reimplemented here because that module is internal
+ * to the package and not part of its public exports. Kept in lockstep with
+ * the upstream form: string quoting/escaping, numbers and booleans as-is,
+ * arrays as `[...]`, plain objects as `{key:value,...}`. Exported (rather
+ * than kept module-private) so its escaping edge cases have a DB-free unit
+ * test of their own, not just incidental coverage from an `explain()` call
+ * against a live server.
+ */
+export function queryParamsToString(params: Record<string, unknown>): string {
+  return Object.entries(params)
+    .map(([key, value]) => `${key}=${queryParamToString(value)}`)
+    .join(" ");
+}
+
+function queryParamToString(param: unknown): string {
+  if (param === null) {
+    return "null";
+  }
+  if (typeof param === "string") {
+    return `"${param.replace(/["\\]/g, "\\$&")}"`;
+  }
+  if (typeof param === "number" || typeof param === "boolean") {
+    return String(param);
+  }
+  if (Array.isArray(param)) {
+    return `[${param.map(queryParamToString).join(",")}]`;
+  }
+  if (typeof param === "object") {
+    const body = Object.entries(param as Record<string, unknown>).map(
+      ([key, value]) => `${key}:${queryParamToString(value)}`,
+    );
+    return `{${body.join(",")}}`;
+  }
+  throw new TypeError(`Unexpected param type ${typeof param}: ${String(param)}`);
 }
