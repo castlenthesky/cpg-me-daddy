@@ -376,12 +376,15 @@ outside that node's own per-file replace transaction (`MEMBER_OF`, `TARGETS`, `D
 periodic-recompute overlay — its own `computed_at`/`status`, explicitly stale-tolerant, never a
 correctness dependency of the per-file write path.
 
-**Schema version.** `packages/engine/src/schema/schema.ts`'s `CPG_SCHEMA.version` is `1` as of this
-unit (bumped from the placeholder `0`, sourced into `SCHEMA_VERSION` so there is one number, not two).
+**Schema version.** `packages/engine/src/schema/schema.ts`'s `CPG_SCHEMA.version` is `2` as of
+2026-09-12 (bumped from `1` by the M0.0d REACHING_DEF amendment, DL13; originally bumped from the
+placeholder `0` by this unit, sourced into `SCHEMA_VERSION` so there is one number, not two).
 The graph is a cache (design rule 7) — there is no migration path, only rebuild: any change to a
 label, edge type, required property or enum value set bumps the version; on start the daemon reads
 `META_DATA.schema_version` and, on mismatch, drops and re-indexes (GE-FR18, GE-UC1's "no `.cpg/data`
-or a schema-version mismatch" trigger). M0.4 owns the read-compare-rebuild logic.
+or a schema-version mismatch" trigger). M0.4a owns the read-compare logic (schema-bootstrap split,
+DL14); the rebuild-on-mismatch action itself is left to M0.4a's caller, not performed inside
+bootstrap.
 
 ---
 

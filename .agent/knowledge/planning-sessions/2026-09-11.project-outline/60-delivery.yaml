@@ -30,6 +30,23 @@ meta:
     - { id: DL11, text: "FILE.status=error and UNKNOWN nodes are unified with CALL.status=unresolved/IMPORT.status=unresolved into one triage surface via a shared needs_triage TAG (TAGGED_BY) — no new mechanism, reuses the TAG node already in v1 scope.", source: "R6-ontology-debate-synthesis.md Next Steps #6, visionary sign-off 2026-09-11" }
     - { id: DL12, text: "M0.0 schema alignment: option (b) — align node/edge names to Joern where they overlap, keep the sparse-tier and SCIP divergences, document every divergence with a specific reason. Spec at 50-schema.md. One deliberate divergence from R6's literal edge table: INHERITS_FROM points TYPE_DECL -> SYMBOL, not TYPE_DECL -> TYPE_DECL, preserving per-file-replace safety (D5) and GE-FR7's cascade traversal.", source: "M0.0 / research/R6-ontology-debate-synthesis.md §1, user-confirmed 2026-09-12" }
     - { id: DL13, text: "Sparse REACHING_DEF (MEMBER|PARAM -> CALL, variable property) is in v1 — structural-tier data flow. CFG and remaining PDG (CDG/DOMINATE) stay deferred; expression-tier nodes (LOCAL/IDENTIFIER/LITERAL) stay rejected. Amends D23/R6's blanket PDG deferral for this edge alone.", source: "visionary amendment 2026-09-12 (hello-world CPG golden)", note: "Aligns with D10's 'structural-tier data flow'. Schema version bumped to 2." }
+    - id: DL14
+      text: >
+        Critical-path resequencing, 2026-09-12: the near-term target is a queryable STATIC graph
+        (`cpg index` + `cpg query` against a cpg-owned FalkorDB instance), not the full M1
+        (incremental)/M2 (daemon + MCP) agent wedge that D13 specifies as v1 acceptance. Neither
+        M1's watcher/cascade machinery nor M2's daemon lifecycle/MCP shim is needed to judge
+        whether the graph is a quality representation of the code — a one-shot index answers that,
+        and it de-risks M0.11's manual sign-off, which requires reading the graph by hand
+        regardless.
+      rationale: "Stated priority: start getting real data into the graph as quality representations of our code, by the shortest honest route."
+      consequence: >
+        M0.4 (split into M0.4a/M0.4b below), a thin M0.1/M0.2, and a new M0.11-lite checkpoint are
+        promoted ahead of M0.7/M0.9/M0.10 as a walking skeleton. M0.7/M0.9 fold in the minimal
+        SYMBOL/fqn minting M0.10 would otherwise own exclusively (see those units' amendment
+        notes). M1/M2/M3 remain fully specified below but are explicitly NOT on this near-term
+        path — see units_named under m2_outline/m3_outline for what stays deferred.
+      source: "visionary session 2026-09-12; plan recorded at ~/.claude/plans/what-is-our-critical-typed-kazoo.md"
 
 # ------------------------------------------------------------------------------------------------------
 # What the code survey found that CHANGED this plan.
@@ -104,7 +121,7 @@ ground_rules:
     name: Snapshot discipline
     text: >
       Golden files are the human-audit surface. A PR that changes a snapshot must paste the snapshot diff into
-      its description and get explicit sign-off. `npm run test:update-goldens` never runs in CI — only
+      its description and get explicit sign-off. `bun run test:update-goldens` never runs in CI — only
       locally, deliberately.
   - id: GR5
     name: Manual gates are real gates
@@ -126,7 +143,7 @@ standing_gates:
   - { gate: engine_unit_tests,   command: "bun test packages/engine/test/unit",        introduced: F1 }
   - { gate: graph_invariants,    command: "part of the integration run",               introduced: F2 }
   - { gate: schema_conformance,  command: "bun run test:schema",                       introduced: M0.0 }
-  - { gate: golden_snapshot_diff, command: "bun run test:goldens",                     introduced: M0.6 }
+  - { gate: golden_snapshot_diff, command: "bun run test:goldens",                     introduced: M0.6, gap_found_2026-09-12: "This script does not exist in root package.json. The golden test (packages/engine/test/unit/golden/hello-world.cpg.test.ts) runs today only incidentally inside test:unit — the named standing gate itself has never been run. Add the script." }
   - { gate: extension_host_tests, command: "vscode-test",                              introduced: M3 }
 
 standing_gates_tooling_note: >
@@ -292,27 +309,35 @@ units:
         written by the engine is declared in it and carries its required properties — an undeclared label
         fails the build. MANUAL: the visionary signs off on the divergence table, each deviation one they'd
         defend to someone who knows Joern.
-      blocks: [M0.4, "every golden-snapshot gate after it", "cpg://schema in M2"]
+      blocks: [M0.4a, M0.4b, "every golden-snapshot gate after it", "cpg://schema in M2"]
       does_not_block: [F1, F2, F3, F4]
-      status: blocked
-      blocked_on: "GR5 manual gate — visionary sign-off read of the generated divergence table, not yet performed."
+      status: done
       verified_2026-09-12: >
         Machine half, fully green: packages/engine/src/schema/ declares all 14 R6-approved node labels
-        and 13 edge types with Joern alignment, ownership class and write mechanism; bun run test:schema
-        green (validator + live conformance against 127.0.0.1:6381 + exhaustiveness + spec-doc
-        freshness, 51 tests); lint/format/typecheck/test:unit/test:integration all green on the branch.
-        Negative controls run and reverted: an undeclared label, a file property on SYMBOL, an overlay
-        edge inside a per-file replace, and a hand-edited divergence-table row were each confirmed to
-        fail the gate before being reverted. Manual half, ready but not yet exercised: divergence table
-        (50-schema.md §5/§10) generated from the schema module by tools/schema-doc.ts; the one
-        deliberate divergence from R6's literal text (INHERITS_FROM -> SYMBOL, not TYPE_DECL) confirmed
-        with the user during planning. Flips to done once the visionary reads and signs the table (GR5).
+        and 14 edge types (13 plus the M0.0d REACHING_DEF amendment) with Joern alignment, ownership
+        class and write mechanism; bun run test:schema green (validator + live conformance against
+        127.0.0.1:6381 + exhaustiveness + spec-doc freshness, 51 tests); lint/format/typecheck/
+        test:unit/test:integration all green on the branch. Negative controls run and reverted: an
+        undeclared label, a file property on SYMBOL, an overlay edge inside a per-file replace, and a
+        hand-edited divergence-table row were each confirmed to fail the gate before being reverted.
+      manual_gate_signed_2026-09-12: >
+        GR5 satisfied. The visionary read the generated divergence table (50-schema.md §5: 28 declared
+        names — 10 unchallenged, 3 name-only renames, 5 gap-fill additions, 9 semantic extensions, and
+        SYMBOL's one structural-incompatibility divergence — plus §10's 51-name Joern rejection list)
+        and signed it without requesting changes, including the one deliberate divergence from R6's
+        literal text (INHERITS_FROM -> SYMBOL, not TYPE_DECL, confirmed with the user during planning).
+        Resolves the contradiction_found_2026-09-12 note this file previously carried: the read had not
+        happened when 50-schema.md's header first claimed "approved" in commit 324e40e; it has now.
 
     - id: M0.1
       name: Config loading, manifest discovery, cpg doctor
       delivers: "cpg.config.yaml schema; precedence CLI > env (CPG_*) > file > manifest discovery > defaults; manifest discovery (package.json workspaces, pyproject/uv, tsconfig references/paths); .gitignore merge. (X11, GE-FR1, GE-FR2, GE-UC9)"
       gate: "Precedence unit tests per layer; `cpg doctor` golden output; a zero-config fixture resolves to sane defaults."
       status: not_started
+      promoted_thin_subset_2026-09-12: >
+        Per DL14, only enough of this unit to resolve includes/excludes and a DB target is needed
+        ahead of M0.11-lite. Full precedence layering and `cpg doctor` are not on that path and can
+        land as this unit's remaining scope afterward.
 
     - id: M0.2
       name: Workspace walker + content hashing
@@ -321,6 +346,10 @@ units:
         Walking test/fixtures/ yields an exactly-asserted file list; node_modules / .venv / __pycache__ proven
         excluded; hash stable across runs and changes on byte change.
       status: not_started
+      promoted_2026-09-12: >
+        Per DL14, this unit is promoted ahead of M0.7/M0.9/M0.10 — `cpg index` needs a file list
+        before it needs calls/imports. Excludes must additionally cover the legacy top-level src/,
+        out/, dist/ (none of which exist anywhere in packages/*/src today).
 
     - id: M0.3
       name: Node identity
@@ -341,14 +370,96 @@ units:
         re-verified against a REAL parse in M0.6/M0.8's PR (mutate the real fixture source, reparse,
         diff the id set) once an extractor existed to produce them. Commit ed848e8.
 
-    - id: M0.4
-      name: "Graph store: schema, indexes, DiffGraph writer"
-      delivers: "IGraphStore seam; schema bootstrap (indexes on CPG.id, CPG.file, FILE.path; UNIQUE SYMBOL.fqn); DiffGraph type; batched parameterized UNWIND $rows writer per label and per edge type. (README rules 4 and 5)"
+    - id: M0.4a
+      name: "Graph store: schema bootstrap"
+      supersedes: "the bootstrap half of the original single M0.4 (split 2026-09-12, DL14 — the combined unit ran to ~900 lines with its gate against GR3's 200–500)"
+      delivers: >
+        `bootstrapSchema()` in packages/engine/src/store/: creates the indexes declared in
+        SCHEMA_INDEXES via plain `CREATE INDEX FOR (n:Label) ON (n.prop)` Cypher (index creation
+        is NOT idempotent — reads `CALL db.indexes()` first and creates only what's missing).
+        FIXES a real bug found in review: SCHEMA_INDEXES is currently missing a `SYMBOL(fqn)`
+        entry, and FalkorDB refuses a UNIQUE constraint without a supporting exact-match index on
+        the same properties — the declared constraint cannot be created until this is added.
+        Then the UNIQUE SYMBOL.fqn constraint — NOT Cypher on FalkorDB; it is the Redis command
+        `GRAPH.CONSTRAINT CREATE <graph> UNIQUE NODE SYMBOL PROPERTIES 1 fqn` via
+        `AdminService.raw()` (falkordb-service's documented escape hatch for driver commands the
+        typed client doesn't model), whose reply is the literal string `PENDING` — bootstrap polls
+        `CALL db.constraints()` to OPERATIONAL/FAILED (bounded, ~5s) rather than treating PENDING
+        as done. Then a META_DATA singleton write + read-compare against CPG_SCHEMA.version
+        (50-schema.md §8's "read-compare-rebuild logic", owned here per that spec but omitted from
+        this file's delivers until now). Flips
+        packages/engine/test/support/schema-conformance.ts's `requireIndexes` flag on — it exists
+        today for exactly this: "M0.4 flips this on once the bootstrap creates the declared
+        indexes/constraints. Off here."
       gate: >
-        Write a ~1k-node synthetic DiffGraph, assert counts; GRAPH.EXPLAIN shows INDEX SCAN not label scan on
-        CPG.id / CPG.file / SYMBOL.fqn; re-write is idempotent.
+        Bootstrap run twice is a no-op the second time and reports zero created; `db.indexes()`
+        and `db.constraints()` match the declared sets; the constraint reaches OPERATIONAL; a
+        duplicate SYMBOL.fqn insert is rejected BY THE SERVER, not by a test — the tripwire the
+        constraint exists for actually firing, which nothing in this repo has demonstrated yet;
+        assertSchemaConformance(g, {requireIndexes: true}) and assertGraphInvariants(g) both green.
       depends_on: [M0.0]
+      constraint: "Must not import `falkordb` directly — writes go through GraphService, the constraint command through AdminService.raw; falkordb-service stays the only place that knows the driver exists."
       status: not_started
+      note: >
+        Verified against this repo's OWN benchmark record
+        (.agent/knowledge/planning-sessions/2026-09-11.database-research/benchmark-results/structural-1e6.json),
+        which already ran all four index DDL statements plus the constraint against
+        falkordb/falkordb:v4.20.4 and recorded the PENDING reply — so the mechanism above is
+        proven on this exact pinned image, not speculative. Still to verify live once db:up runs
+        again: `CREATE RANGE INDEX`'s explicit-kind form (the untyped form is proven; treat
+        SchemaIndexSpec.kind as documentation until a second kind exists), and the exact
+        `db.constraints()` column set.
+
+    - id: M0.4b
+      name: "Graph store: IGraphStore seam + DiffGraph writer"
+      delivers: >
+        packages/engine/src/store/{store.ts, cypher.ts, falkordb-store.ts, index.ts}. `IGraphStore`
+        (bootstrap/writeDelta/deleteFile/readMetadata/close — deliberately no read()/explain():
+        FalkorService.graph already is the read surface, and widening the seam now is how it
+        stops being one). `cypher.ts` is a PURE function `planDelta(delta, opts): CypherOp[]` with
+        no client, so the whole batching/grouping strategy is unit-testable DB-free and the
+        integration gate can EXPLAIN the exact strings the writer sends. Batched parameterized
+        `UNWIND $rows` writer, grouped per node KIND — not per raw label array; the label array is
+        a pure function of kind via `nodeSpec()`, so grouping by kind is equivalent and caps at 14
+        groups — and per resolved edge match-shape (type + endpoint match-label + key-property,
+        which collapses e.g. DEFINES's five source labels into one query instead of five). Edge
+        endpoints MATCH on the indexed key — `:CPG {id: ...}` (never the kind label, which would
+        be a label scan — the single easiest way to fail this unit's own gate while looking more
+        precise, not less) or `:SYMBOL {fqn: ...}` — with a `WITH s, row` barrier between the two
+        MATCHes (this repo's own benchmark measured this as the fix for a 700ms → 1ms planner
+        trap). Per-kind write dispatch driven by `nodeSpec()`'s own `write` field: delete-create
+        for structural, file-owned kinds vs merge-on-key with a client-side-pruned `SET n += row`
+        for SYMBOL and other identity nodes — pruning null/undefined keys before the SET is
+        load-bearing, not cosmetic: an unpruned caller-side write would silently null out a
+        definer's SYMBOL properties on every save of the calling file. Idempotence via a
+        `MATCH (n:CPG {file:$file}) DELETE n` scope delete (not DETACH DELETE, which destroys
+        inbound cross-file edges — named in 50-schema.md as the exact bug this design avoids)
+        issued before re-create, NOT via MERGE-everything (which would pass "idempotent" while
+        contradicting DL7). Batch size default 5000 rows/query (this repo's benchmark pushed
+        ~3k nodes/~10k edges in one query with no limit hit; chunk the rows array, not the query
+        list — M1.7 bulk mode is where a lower value might matter, not here).
+      gate: >
+        Write a ~1k-node synthetic GraphDelta — `GraphDelta` from schema/validate.ts IS the
+        "DiffGraph type"; no second type is introduced, correcting this file's prior wording —
+        assert counts; EXPLAIN of each generated op contains "Node By Index Scan" (the actual
+        FalkorDB operator name; corrects this file's prior "INDEX SCAN" wording) on CPG.id /
+        CPG.file / SYMBOL.fqn AND contains NEITHER "All Node Scan" NOR "Label Scan" — assert the
+        negative, because a plan can contain both and the positive alone is satisfiable by a bad
+        plan; re-write yields identical counts; a cross-file-CALLS-survives-a-rewrite-of-the-
+        defining-file case (the one case a DETACH-DELETE-shaped writer would pass "idempotent"
+        while silently breaking); ends by asserting assertGraphInvariants() and
+        assertSchemaConformance({requireIndexes: true}).
+      depends_on: [M0.0, M0.4a]
+      status: not_started
+      note: >
+        Depends on M0.4a because its EXPLAIN assertions require the indexes that unit creates —
+        a real prerequisite, not a slice boundary invented to fit GR3's budget. The legacy
+        src/services/storage/FalkorDBStore.ts was evaluated as a port candidate and rejected: it
+        imports vscode directly (hard engine-purity violation), opens its own connection,
+        string-interpolates values into Cypher instead of parameterizing, matches every node
+        label-less (the exact All-Node-Scan shape this gate forbids), uses DETACH DELETE, and
+        indexes properties — METHOD.fullName, IDENTIFIER.name — that don't exist in the v1
+        schema. Not portable; useful only as a named negative reference in the PR description.
 
     - id: M0.5
       name: Layered TypeScript fixture
@@ -388,6 +499,21 @@ units:
         unresolved calls (README rule 2); REACHING_DEF emitted for every MEMBER/PARAM whose value
         reaches a CALL argument in the fixture.
       status: not_started
+      entanglement_found_2026-09-12: >
+        As originally written, this unit cannot pass its own gate: the hand-authored
+        hello_world.cpg.json goldens require SYMBOL nodes (with SCIP-descriptor fqns) plus
+        DEFINES and CALLS edges, but SYMBOL minting was assigned entirely to the later M0.10.
+        Amendment: this unit owns MINIMAL SYMBOL minting sufficient to satisfy its own goldens —
+        a local variable/method's own fqn, plus an external-scheme fqn for unresolved
+        stdlib/library calls (see the golden's `site:node\`console.log().`) — via the same
+        SCIP-descriptor grammar M0.10 formalizes. M0.10 remains the owner of the general
+        Resolver/ChainResolver interface, cross-file resolution across the layered fixtures, and
+        the unresolved-rate metric; only the two adapters' own goldens' minimal case moves here.
+        `LanguageAdapter`'s `DeclarationInfo` union (extract/adapter.ts) currently has no case for
+        a call or import at all and must be extended; `walk.ts` deliberately never descends into a
+        method body today (its own comment: "A METHOD's body is never descended into in this
+        slice") and needs a bounded body descent for CALL nodes without drifting into the
+        expression tier PR1 rejects.
 
     - id: M0.8
       name: "Python adapter: declarations"
@@ -406,6 +532,33 @@ units:
         (not synthetic) M0.3 stability gate: reparsing with a comment prepended and with a sibling
         declaration inserted above, asserting the id set is unaffected.
 
+    - id: M0.11-lite
+      name: "cpg index + cpg query — walking skeleton (declarations only)"
+      added_2026-09-12: "New unit per DL14, not in the original ladder. Promoted ahead of M0.7/M0.9/M0.10 because none of M1's incremental machinery or M2's daemon/MCP is needed to get real, inspectable data into the graph — and this checkpoint is what turns M0.4b from a synthetic-delta gate into a graph of an actual codebase."
+      delivers: >
+        Orchestrates walk (M0.2) → parse (F4) → extractDeclarations (M0.6/M0.8) → writeDelta
+        (M0.4b), against a cpg-owned FalkorDB instance — explicitly NOT 127.0.0.1:6381, which is
+        the integration harness and hard-errors on any graph key not prefixed `cpg_test_`
+        (packages/engine/test/support/falkordb.ts) — reached via F3's ServerManager and
+        defineCpgFalkorConfig, both already built and unused by the engine today. Introduces the
+        `cpg` CLI's actual command surface (packages/cli/src/index.ts is currently a 15-line
+        version banner with a wired `bin` entry and zero arg parsing): `cpg index --workspace
+        <path>` and a thin `cpg query "<cypher>"` over GraphService.read() (~50 lines) — the
+        natural precursor to M2's guarded query_cypher tool.
+      why_before_calls_and_imports: >
+        The graph this produces is declarations-only (modules, types, methods, params, members) —
+        an outline, not yet a CPG. That is deliberate: it proves the whole pipeline end to end at
+        real repo scale, surfaces walker/exclude and id-stability problems against actual code
+        rather than a two-line fixture, and gives M0.7/M0.9 a live graph to enrich instead of only
+        the hand-authored hello-world goldens.
+      gate: >
+        `cpg index --workspace .` against this repo, then `cpg query` sanity checks: a MODULE
+        count matching packages/*/src's file count (47 .ts files as of 2026-09-12); every METHOD
+        has an inbound DECLARES edge. Informal — no manual sign-off required at this checkpoint;
+        the full M0.11 sign-off below is the real exit gate, once calls/imports/symbols exist too.
+      depends_on: [M0.4b, M0.2, M0.1-thin-subset]
+      status: not_started
+
     - id: M0.9
       name: "Python adapter: imports + calls"
       delivers: "As M0.7, Python — including sparse REACHING_DEF (DL13)."
@@ -413,6 +566,7 @@ units:
         Golden snapshots (test/fixtures/golden/simple/python/hello_world.cpg.json is the smoke case);
         call sites exactly once; no bare-name SYMBOLs; REACHING_DEF emitted per M0.7's gate.
       status: not_started
+      entanglement_found_2026-09-12: "Same fix as M0.7 (see that unit's entanglement_found note) — the Python hello_world golden requires the same minimal SYMBOL minting, folded in here rather than waiting on M0.10."
 
     - id: M0.10
       name: SYMBOL model + adapter-native resolver
@@ -426,6 +580,12 @@ units:
         CALLS status properties); SYMBOL.fqn uniqueness holds; cross-file api -> services -> database edges
         exist in both fixtures.
       status: not_started
+      narrowed_2026-09-12: >
+        M0.7/M0.9 now mint the minimal per-adapter SYMBOL case needed for their own goldens (see
+        their entanglement_found notes). This unit's remaining, still-substantial scope: the
+        general Resolver/ChainResolver interface, cross-file resolution across the LAYERED
+        fixtures (api -> services -> database, not just hello-world), the unresolved-rate metric,
+        and status properties at scale.
 
     - id: M0.11
       name: cpg index end-to-end + whole-graph golden
@@ -436,6 +596,13 @@ units:
         whole-graph snapshot; assertGraphInvariants() passes; and the visionary reads the dumped graph and
         signs off — every node and edge is one they'd expect, nothing spurious, nothing missing. That
         signature is the M0 exit.
+      depends_on: [M0.4b, M0.7, M0.9, M0.10]
+      relationship_to_M0.11-lite_2026-09-12: >
+        M0.11-lite (inserted earlier in this file, after M0.8) is the walking-skeleton checkpoint:
+        the same orchestration, declarations-only, no manual sign-off. THIS unit is the real exit
+        gate and cannot be satisfied by that checkpoint alone — it needs the call/import/symbol
+        graph M0.7/M0.9/M0.10 add, and the manual read genuinely requires a CPG worth reading, not
+        an outline.
       status: not_started
 
     - id: M0.12
@@ -592,16 +759,28 @@ verification_commands:
     oxlint && oxfmt --check && tsc --build
     bun test packages/engine/test/unit
     bun test packages/engine/test/integration    # live DB + assertGraphInvariants()
-    npm run test:schema                          # every written label is declared
-    npm run test:goldens                         # snapshot diff, must be empty
+    bun run test:schema                          # every written label is declared
+    bun run test:goldens                         # snapshot diff, must be empty
+  m0_checkpoint_walking_skeleton: |
+    # After M0.11-lite. Declarations only — sanity, not the exit gate.
+    cpg index --workspace .                                                        # NOT 127.0.0.1:6381 — that's the test harness
+    cpg query "MATCH (n:CPG) RETURN labels(n)[1] AS label, count(*) ORDER BY count(*) DESC"
+    cpg query "MATCH (m:METHOD) WHERE NOT (m)<-[:DECLARES]-() RETURN m.id"          # expect empty
+  m0_dogfood_check: |
+    # After M0.7/M0.9/M0.10 — now there is a call graph worth interrogating.
+    cpg query "MATCH (c:CALL)-[:CALLS]->(s:SYMBOL) RETURN s.fqn, count(*) ORDER BY count(*) DESC LIMIT 20"
+    cpg query "MATCH (a:MODULE)-[:DECLARES]->()-[:CALLS|IMPORTS]->(s:SYMBOL)<-[:DEFINES]-()<-[:DECLARES]-(b:MODULE)
+               WHERE a <> b RETURN a.name, b.name, count(*) ORDER BY count(*) DESC LIMIT 20"
+    # Should reproduce CLAUDE.md's stated dependency direction: cli/vscode -> engine -> falkordb-service,
+    # nothing flowing back up. If the graph disagrees with the architecture we know we have, the extractor is wrong.
   m0_exit: |
-    npx cpg index --workspace test/fixtures
-    npx cpg dump --format golden | diff - test/__snapshots__/graph/fixtures.json   # must be empty
+    bunx cpg index --workspace test/fixtures
+    bunx cpg dump --format golden | diff - test/__snapshots__/graph/fixtures.json   # must be empty
   m1_exit: |
-    npm run bench:save-latency          # asserts p95 <= 2s, p100 <= 5s
-    npm run bench:reader-under-write    # asserts reader p95 <= 150ms
-    npm run bench:churn -- --duration 1h  # asserts no unbounded memory growth
-  golden_updates: "npm run test:update-goldens — local and deliberate only; never in CI. Paste the diff into the PR."
+    bun run bench:save-latency          # asserts p95 <= 2s, p100 <= 5s
+    bun run bench:reader-under-write    # asserts reader p95 <= 150ms
+    bun run bench:churn -- --duration 1h  # asserts no unbounded memory growth
+  golden_updates: "bun run test:update-goldens — local and deliberate only; never in CI. Paste the diff into the PR."
 
 files_touched_first:
   - { path: "package.json, tsconfig.json", change: "split into workspace roots + per-package configs" }
@@ -615,6 +794,11 @@ files_touched_first:
   - { path: "test/__snapshots__/, scripts/generate-snapshots.ts", change: "extended to graph-level goldens" }
   - { path: "src/ (current 5,364 LOC)", change: "reference only, not migrated. Native tree-sitter and falkordblite dependencies dropped in favour of web-tree-sitter (R4) and an own spawner (F3)." }
   - { path: "src/types/cpg.ts", change: "NOT migrated, but it is the primary input to M0.0's divergence table — it is the existing Joern-spec adoption (SF4)." }
+  - { path: "packages/engine/src/schema/schema.ts", change: "M0.4a — add the missing SYMBOL(fqn) entry to SCHEMA_INDEXES (bug fix, no version bump needed)." }
+  - { path: "packages/engine/src/store/{bootstrap,store,cypher,falkordb-store,index}.ts", change: "NEW (M0.4a/M0.4b) — the graph writer this file's 'critical next step' section identifies as missing entirely." }
+  - { path: "packages/engine/test/support/schema-conformance.ts", change: "M0.4a flips requireIndexes: true (the flag already exists, parked for this)." }
+  - { path: "packages/cli/src/index.ts", change: "M0.11-lite — first real command surface (index, query) over the current 15-line version banner; bin entry already wired." }
+  - { path: "root package.json", change: "add the missing `test:goldens` script (gap found 2026-09-12, see standing_gates note)." }
 
 # ------------------------------------------------------------------------------------------------------
 evolution:
@@ -658,3 +842,4 @@ open_items:
   - { id: OI3, text: "AM3 — which 2-3 analytics tools make the 12.", blocks: ["M2 tool units"], status: open }
   - { id: OI4, text: "SSPL review for a FOSS repo that spawns, but does not redistribute, FalkorDB binaries. Needed before F3 ships publicly, not before it is written.", blocks: ["F3 public release"], status: open }
   - { id: OI5, text: "falkordb-dev MCP server failed to connect during research, so FalkorDB TIMEOUT syntax and RO_QUERY behaviour with side-effecting procedures are unverified live. That is spike SP9, in M2.", blocks: ["M2 query_cypher"], status: open }
+  - { id: OI6, text: "The falkordb-local / falkordb-dev MCP servers available in Claude Code sessions on this machine are a DIFFERENT FalkorDB integration, unrelated to this project. Never read or write this project's graphs through them — interrogate only the instance this project's own tooling spins up (docker/falkordb.yml's 127.0.0.1:6381 test harness, which itself refuses any non-cpg_test_-prefixed graph; or a cpg-owned instance for real data, per M0.11-lite). CLAUDE.md should record this explicitly; not yet done.", blocks: [], status: open }

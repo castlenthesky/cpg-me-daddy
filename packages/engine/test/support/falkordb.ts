@@ -15,7 +15,7 @@
  *    colleague's dev database, passes, and leaves test nodes behind. So before
  *    the first test runs we make the instance prove it is ours, three ways:
  *
- *      a. **Provenance nonce** (strongest, local only). `scripts/falkordb-up.ts`
+ *      a. **Provenance nonce** (strongest, local only). `tools/falkordb-up.ts`
  *         writes a random nonce into the container over the container's *own*
  *         loopback via `docker exec`, then records it in .tmp/. If reading that
  *         key back over the published TCP port returns the same nonce, the port
@@ -51,7 +51,7 @@ export const HARNESS_GRAPH_CONFIG: Readonly<Record<string, string>> = {
   NODE_CREATION_BUFFER: "65536",
 };
 
-/** Key that scripts/falkordb-up.ts stamps with the provenance nonce. */
+/** Key that tools/falkordb-up.ts stamps with the provenance nonce. */
 export const HARNESS_NONCE_KEY = "cpg:harness:instance";
 
 const INSTANCE_FILE = ".tmp/falkordb-instance.json";
