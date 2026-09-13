@@ -35,7 +35,7 @@ services:
     container_name: cpg-test-falkordb
     ports:
       - "127.0.0.1:6381:6379"
-      - "127.0.0.1:${CPG_TEST_FALKORDB_UI_PORT:-3000}:3000"
+      - "127.0.0.1:${CPG_TEST_FALKORDB_UI_PORT:-3033}:3000"
     environment:
       FALKORDB_ARGS: ${FALKORDB_ARGS:-TIMEOUT_DEFAULT 30000 TIMEOUT_MAX 60000 CACHE_SIZE 200 NODE_CREATION_BUFFER 65536}
       REDIS_ARGS: ${REDIS_ARGS:---save "" --appendonly no}
