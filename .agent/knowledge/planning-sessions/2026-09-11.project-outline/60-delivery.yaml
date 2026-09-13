@@ -399,7 +399,7 @@ units:
         assertSchemaConformance(g, {requireIndexes: true}) and assertGraphInvariants(g) both green.
       depends_on: [M0.0]
       constraint: "Must not import `falkordb` directly — writes go through GraphService, the constraint command through AdminService.raw; falkordb-service stays the only place that knows the driver exists."
-      status: not_started
+      status: done
       note: >
         Verified against this repo's OWN benchmark record
         (.agent/knowledge/planning-sessions/2026-09-11.database-research/benchmark-results/structural-1e6.json),
@@ -409,6 +409,23 @@ units:
         again: `CREATE RANGE INDEX`'s explicit-kind form (the untyped form is proven; treat
         SchemaIndexSpec.kind as documentation until a second kind exists), and the exact
         `db.constraints()` column set.
+      verified_2026-09-12: >
+        Both to-verify items above confirmed live against 127.0.0.1:6381: `db.constraints()`
+        columns are `type, label, properties, entitytype, status` (matching what
+        `checkBootstrap` already reads); `db.indexes()` was found to return ONE MERGED ROW PER
+        LABEL, not one row per declared index — a second bug beyond the SYMBOL(fqn) gap this
+        unit already knew about. `checkBootstrap`'s matcher compared `row.properties` by exact
+        array equality against each single-property SCHEMA_INDEXES entry, so a label with two
+        declared indexes (CPG.id, CPG.file) would have reported BOTH missing even after a
+        correct bootstrap — `requireIndexes: true` could never have passed. Fixed to per-label
+        property containment; regression-tested in test/unit/store/bootstrap.test.ts against a
+        synthetic merged row. `bootstrapSchema()` implemented against narrower structural
+        interfaces (`BootstrapGraph`/`BootstrapAdmin`) than the literal `FalkorService` signature
+        above, so DB-free tests can pass plain fakes. `.oxlintrc.json`'s `falkordb` restriction
+        proven red with a deliberately-violating file, then reverted, per F1's gate-must-be-seen-
+        to-fail rule. Gate green: lint/format:check/typecheck/test:unit/test:schema, plus
+        test:integration (24 tests) including the live duplicate-SYMBOL.fqn-rejected-by-the-
+        server case and a requireIndexes:true before/after flip across bootstrapSchema.
 
     - id: M0.4b
       name: "Graph store: IGraphStore seam + DiffGraph writer"
