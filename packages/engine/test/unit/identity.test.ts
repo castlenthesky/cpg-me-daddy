@@ -10,8 +10,10 @@ describe("engineIdentity", () => {
   // Bumped 0 -> 1 in M0.0: the v1 schema (research/R6-ontology-debate-synthesis.md,
   // visionary sign-off 2026-09-11) now exists. Bumped here, not in M0.4, so a
   // schema-version change never lands inside a store PR.
+  // Bumped 2 -> 3 (2026-09-13): the SOURCE_FILE edge (MODULE -> FILE) and
+  // IMPORT.status were added, connecting the filesystem and :CPG tiers.
   test("pins the schema version the goldens are generated against", () => {
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
   });
 
   test("is sourced from CPG_SCHEMA.version, not a second number", () => {

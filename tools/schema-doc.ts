@@ -174,12 +174,6 @@ export const REJECTED_JOERN_EDGES: readonly RejectedName[] = [
     reason: "receiver is already a CALL property, not a child node (PR1)",
   },
   {
-    name: "SOURCE_FILE",
-    group: "redundant with an existing, benchmark-load-bearing property",
-    reason:
-      "`file` is a property on every :CPG node — the 13x indexed-delete speedup depends on it staying a property, not an edge",
-  },
-  {
     name: "PARAMETER_LINK",
     group: "unused without its counterpart",
     reason: "no referent without METHOD_PARAMETER_OUT, correctly omitted",

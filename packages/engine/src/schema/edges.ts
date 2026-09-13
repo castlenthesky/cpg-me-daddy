@@ -363,6 +363,30 @@ export const EDGE_TYPES = [
       "Sparse data-flow: a MEMBER or PARAM definition reaches a CALL that uses that binding " +
       "(e.g. as an argument). Not full PDG — no CDG, no expression-tier hops.",
   },
+  {
+    type: "SOURCE_FILE",
+    from: ["MODULE"],
+    to: ["FILE"],
+    ownership: "file-owned",
+    write: "delete-create",
+    properties: [],
+    joern: {
+      verdict: "adopt_as_is",
+      joernName: "SOURCE_FILE",
+      divergenceClass: "semantic",
+      rationale:
+        "Reverses this schema's own earlier REJECT verdict (50-schema.md \u00a710, 2026-09-12): 'file' " +
+        "stayed a property on every :CPG node for the indexed-delete speedup, which is unaffected by also " +
+        "having an edge \u2014 the two are independent, and the property is untouched here. Narrowed from " +
+        "Joern's real shape (one SOURCE_FILE edge per AST node) to exactly one per file, from the MODULE " +
+        "root: everything else in the file is already reachable via DECLARES, and a per-node edge is the " +
+        "density PR1 rejects. Restores the graph's connectivity \u2014 previously the only join between " +
+        "the filesystem tier and the :CPG tier was the string equality MODULE.file == FILE.path.",
+      source: "visionary decision 2026-09-13",
+    },
+    firstWrittenIn: "M0.7",
+    doc: "One per file, from its MODULE root. Written by the indexer alongside the filesystem tier, not by extractDeclarations.",
+  },
 ] as const satisfies readonly EdgeTypeSpec[];
 
 export type EdgeType = (typeof EDGE_TYPES)[number]["type"];

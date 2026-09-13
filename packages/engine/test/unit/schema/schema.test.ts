@@ -36,7 +36,7 @@ describe("v1 schema shape", () => {
     expect(labels.toSorted()).toEqual(expected.toSorted());
   });
 
-  test("declares exactly the 14 v1 edge types (R6 + sparse REACHING_DEF)", () => {
+  test("declares exactly the 15 v1 edge types (R6 + sparse REACHING_DEF + SOURCE_FILE)", () => {
     const types: string[] = EDGE_TYPES.map((e) => e.type);
     const expected: string[] = [
       "ALIAS_OF",
@@ -51,6 +51,7 @@ describe("v1 schema shape", () => {
       "INHERITS_FROM",
       "MEMBER_OF",
       "REACHING_DEF",
+      "SOURCE_FILE",
       "TAGGED_BY",
       "TARGETS",
     ];

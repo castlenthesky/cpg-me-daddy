@@ -420,6 +420,14 @@ export const NODE_LABELS = [
       { name: "is_type_only", type: "bool", cardinality: "one", golden: "include", doc: "" },
       { name: "file", type: "string", cardinality: "one", golden: "include", doc: "" },
       { name: "range", type: "string", cardinality: "one", golden: "include", doc: "" },
+      {
+        name: "status",
+        type: "string",
+        cardinality: "one",
+        enumValues: NODE_STATUS,
+        golden: "include",
+        doc: "",
+      },
     ],
     joern: {
       verdict: "adopt_as_is",

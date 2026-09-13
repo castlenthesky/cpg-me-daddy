@@ -137,12 +137,19 @@ comments don't repeat.
 
 ## §4. Edge type catalogue
 
-Fourteen edge types. Endpoint label sets, properties, ownership and write mechanism live in
+Fifteen edge types. Endpoint label sets, properties, ownership and write mechanism live in
 `packages/engine/src/schema/edges.ts`.
 
 - **`HAS_ENTRY`** (was `CONTAINS`) — `DIRECTORY -> DIRECTORY|FILE`. Renamed to resolve the
   section-6 collision with Joern's real, near-opposite-meaning `CONTAINS`. `CONTAINS` itself stays
   **permanently reserved and unclaimed**, to be adopted as-is if/when the CFG tier ships.
+- **`SOURCE_FILE`** (2026-09-13, reverses the §10 REJECT below) — `MODULE -> FILE`, one per file,
+  from its MODULE root. Adopted as-is from Joern's name; narrowed in shape from Joern's real edge
+  (one per AST node) to exactly one per file — everything else in the file is already reachable via
+  `DECLARES`, and a per-node edge is the density PR1 rejects. Bridges the filesystem tier to the
+  `:CPG` tier, which previously had no edge between them at all — only the string equality
+  `MODULE.file == FILE.path`. Written by the indexer (`attachSourceFile`), not by
+  `extractDeclarations`: the extractor has no access to `content_hash`/`loc`/`indexed_at`.
 - **`DECLARES`** — `MODULE|TYPE_DECL|METHOD -> TYPE_DECL|METHOD|MEMBER|IMPORT` (extended to `IMPORT`
   in M0.7). Lexical nesting; Joern's `AST` is too generic to adopt directly.
 - **`HAS_PARAM`** — `METHOD -> PARAM`.
@@ -240,6 +247,7 @@ schema module.
 | `IN_SCOPE` | edge | `adopt_renamed` | CONTAINS | `semantic` | Was IN_METHOD, METHOD-only. Module-level/top-level calls (route registration, decorator-as-call, module init) had no home under that shape; broadened to MODULE and renamed so the old name targeting MODULE would not mislead an agent about the target label. Deliberately not merged into DECLARES: 'declared inside' and 'called inside' diverge exactly at inline callbacks not themselves declared. | R6 edge table |
 | `MEMBER_OF` | edge | `extend` | — | `gap-fill` | No Joern equivalent. Unrestricted target set (FILE/METHOD/TYPE_DECL), governed by the overlay-edge classification rule: any edge landing on a :CPG node from outside that node's own per-file replace transaction is a periodic-recompute overlay, never a correctness dependency of the write path. | R6 edge table |
 | `REACHING_DEF` | edge | `extend` | REACHING_DEF | `semantic` | Pulled into v1 as sparse structural-tier data flow (visionary amendment 2026-09-12), aligning with D10's 'structural-tier data flow' and superseding the blanket PDG deferral in D23/R6 for this edge alone. Joern's REACHING_DEF spans expression-tier nodes (IDENTIFIER/LITERAL/LOCAL); ours keeps PR1 sparsity by endpointing at MEMBER\|PARAM (definitions) and CALL (use sites). CFG, CDG, DOMINATE, and expression-tier nodes remain deferred. Intra-file only — both endpoints are file-owned :CPG nodes, so no SYMBOL indirection is required. | Joern PDG; visionary amendment 2026-09-12 (hello-world CPG golden) |
+| `SOURCE_FILE` | edge | `adopt_as_is` | SOURCE_FILE | `semantic` | Reverses this schema's own earlier REJECT verdict (50-schema.md §10, 2026-09-12): 'file' stayed a property on every :CPG node for the indexed-delete speedup, which is unaffected by also having an edge — the two are independent, and the property is untouched here. Narrowed from Joern's real shape (one SOURCE_FILE edge per AST node) to exactly one per file, from the MODULE root: everything else in the file is already reachable via DECLARES, and a per-node edge is the density PR1 rejects. Restores the graph's connectivity — previously the only join between the filesystem tier and the :CPG tier was the string equality MODULE.file == FILE.path. | visionary decision 2026-09-13 |
 | `TAGGED_BY` | edge | `adopt_as_is` | TAGGED_BY | `semantic` | Primary anchor SYMBOL, not CALL (Identity's correction, adopted by Security: sink/source classification is a fact about callee identity, stable across every caller's file-save cycle, and inherited for free via the existing CALLS -> SYMBOL hop). Secondary anchor MEMBER (local secrets); CALL-level tags reserved narrowly for per-call-site sanitizer/verified-safe annotations. Also the mechanism for the unified triage surface (see UNKNOWN/TAG). | R6 edge table |
 | `TARGETS` | edge | `extend` | CALL | `semantic` | Joern's Shortcuts-layer CALL edge is linker-created and its frontend MUST NOT create it. Ours is a one-hop shortcut past the CALL -> SYMBOL <- DEFINES tax on centrality/PageRank/impact-of-change traversal, materialized ONLY when the underlying resolution is status=resolved, resolved through ALIAS_OF* to the canonical SYMBOL first. Mandatory constraints: computed by an async periodic overlay job, the same contract as COMMUNITY, never written inside the per-file replace transaction; and must be a pure projection of the same resolver call that sets CALLS.status/IMPORTS.status — never an independent fast-path resolver. Rebuild trigger: periodic tick + computed_at, same as COMMUNITY, plus a manual refresh escape hatch. Rejected: recompute on every save of either endpoint's file. | R6 edge table; R6 Next Steps #3, DL8 |
 
@@ -281,7 +289,6 @@ schema module.
 | `BINDS_TO` | edge | Joern's linker mechanism, rejected as a mechanism | vtable-style polymorphic dispatch resolution |
 | `ARGUMENT` | edge | folded into existing CALL properties | args are already CALL properties, not child nodes (PR1) |
 | `RECEIVER` | edge | folded into existing CALL properties | receiver is already a CALL property, not a child node (PR1) |
-| `SOURCE_FILE` | edge | redundant with an existing, benchmark-load-bearing property | `file` is a property on every :CPG node — the 13x indexed-delete speedup depends on it staying a property, not an edge |
 | `PARAMETER_LINK` | edge | unused without its counterpart | no referent without METHOD_PARAMETER_OUT, correctly omitted |
 | `CFG` | edge | deferred tier, names reserved | CFG tier |
 | `CDG` | edge | deferred tier, names reserved | PDG tier |
@@ -443,11 +450,6 @@ Cross-Language, Standards independently): `BINDING`, `BINDS`, `BINDS_TO` — Joe
 polymorphic dispatch resolution, requiring whole-type-hierarchy computation, structurally
 incompatible with a 24ms single-file replace under concurrent readers.
 
-**Redundant with an existing, benchmark-load-bearing property:** `SOURCE_FILE` — `file` is already a
-property on every `:CPG` node, precisely the indexed-delete mechanism the benchmark measured a 13x
-speedup on (3.1ms vs. 40.3ms). Trading that property for an edge would undercut the schema's own
-incrementality claim.
-
 **Unused without its counterpart:** `PARAMETER_LINK` (no referent without `METHOD_PARAMETER_OUT`,
 correctly omitted), `METHOD_PARAMETER_OUT` itself (no by-ref out-params in TS/Python — a legitimate
 omission, not a gap).
@@ -590,3 +592,15 @@ Amendments follow `was:` / `now:` / `why:`, per `40-research.yaml`'s convention.
   now: `status: resolved` — option (b), per §1.
   why: the research had already landed as R6 before this unit started; only the status line was
   stale. M0.0 was transcription, formalization and gate-building, not research.
+- **§10's `SOURCE_FILE` REJECT verdict.**
+  was: rejected — "redundant with an existing, benchmark-load-bearing property"; `file` stays a
+  property on every `:CPG` node, and adding an edge was framed as trading that property away.
+  now: adopted (§4), `MODULE -> FILE`, one per file. The property is untouched — `file` still backs
+  the indexed-delete path — the edge is additive, not a substitute.
+  why: the original rejection conflated *keeping* the `file` property with *not also having* an
+  edge; the two are independent. Without the edge, the filesystem tier and the `:CPG` tier were two
+  disconnected components in the live graph, joined only by the string equality
+  `MODULE.file == FILE.path` — real cost to graph traversal and visualization tools that expect one
+  connected graph. Narrowed from Joern's real shape (an edge per AST node) to one per file, from the
+  MODULE root, so it stays within PR1's sparse-structural-tier density budget.
+  source: visionary decision 2026-09-13.
