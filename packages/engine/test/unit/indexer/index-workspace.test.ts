@@ -114,6 +114,23 @@ describe("indexWorkspace", () => {
       for (const id of methodIds) {
         expect(delta.edges.some((e) => e.type === "DECLARES" && e.toKey === id)).toBe(true);
       }
+
+      // Every delta's MODULE root also carries a SOURCE_FILE edge to its own
+      // FILE node — the bridge that connects the filesystem tier to the
+      // :CPG tier (previously the only join was the `file` property).
+      const moduleNode = delta.nodes.find((n) => n.labels.includes("MODULE"))!;
+      const moduleId = moduleNode.properties["id"] as string;
+      const fileNode = delta.nodes.find((n) => n.labels.includes("FILE"))!;
+      expect(fileNode.labels).toEqual(["FILE"]);
+      expect(fileNode.properties["path"]).toBe(moduleNode.properties["file"]);
+      expect(
+        delta.edges.some(
+          (e) =>
+            e.type === "SOURCE_FILE" &&
+            e.fromKey === moduleId &&
+            e.toKey === fileNode.properties["path"],
+        ),
+      ).toBe(true);
     }
 
     // The filesystem tier still carries every file's content hash.

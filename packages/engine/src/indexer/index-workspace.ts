@@ -36,6 +36,7 @@ import type { IGraphStore, WriteReport } from "../store/store";
 import { hashBytes } from "../workspace/hash";
 import { baseName, ROOT_DIR_PATH } from "../workspace/paths";
 import { type DirEntry, type WalkStats, walkWorkspace } from "../workspace/walker";
+import { attachSourceFile } from "./source-file";
 
 export interface IndexWorkspaceDeps {
   readonly store: IGraphStore;
@@ -61,7 +62,12 @@ export interface IndexProgress {
 }
 
 export interface IndexWarning {
-  readonly kind: "unsupported-grammar" | "parse-failed" | "read-failed" | "write-failed";
+  readonly kind:
+    | "unsupported-grammar"
+    | "parse-failed"
+    | "read-failed"
+    | "write-failed"
+    | "bridge-failed";
   readonly path?: string;
   readonly language?: string;
   readonly message: string;
@@ -198,17 +204,19 @@ export async function indexWorkspace(
     const loc = text.length === 0 ? 0 : text.split("\n").length;
 
     // Every walked file gets a FILE node via the filesystem phase below,
-    // parseable or not — that tier doesn't gate on adapter support.
-    fsFiles.push(
-      fsFileRow({
-        path: entry.path,
-        parent: entry.parent,
-        language: entry.language,
-        contentHash,
-        loc,
-        indexedAt: now(),
-      }),
-    );
+    // parseable or not — that tier doesn't gate on adapter support. The same
+    // row is reused below to bridge a successful extraction's MODULE root to
+    // this FILE via `attachSourceFile` (SOURCE_FILE), so the two tiers are
+    // never plumbed from two different property sets.
+    const fileRow = fsFileRow({
+      path: entry.path,
+      parent: entry.parent,
+      language: entry.language,
+      contentHash,
+      loc,
+      indexedAt: now(),
+    });
+    fsFiles.push(fileRow);
 
     // AST/CPG extraction only applies to files with both a registered
     // grammar and a declaration adapter for it.
@@ -232,6 +240,15 @@ export async function indexWorkspace(
           });
         }
         if (delta !== undefined) {
+          const bridged = attachSourceFile(delta, fileRow);
+          delta = bridged.delta;
+          if (!bridged.attached) {
+            warn({
+              kind: "bridge-failed",
+              path: entry.path,
+              message: "extraction delta has no MODULE root; SOURCE_FILE not attached",
+            });
+          }
           if (validate) {
             assertGraphDeltaValid(delta);
           }

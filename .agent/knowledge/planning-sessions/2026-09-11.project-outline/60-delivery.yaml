@@ -47,6 +47,22 @@ meta:
         notes). M1/M2/M3 remain fully specified below but are explicitly NOT on this near-term
         path — see units_named under m2_outline/m3_outline for what stays deferred.
       source: "visionary session 2026-09-12; plan recorded at ~/.claude/plans/what-is-our-critical-typed-kazoo.md"
+    - id: DL15
+      text: >
+        Reverses M0.0's own SOURCE_FILE REJECT verdict (50-schema.md §10): ship it, named
+        SOURCE_FILE to align with Joern, direction MODULE -> FILE, one edge per file from the
+        MODULE root. The original rejection ("redundant with an existing, benchmark-load-bearing
+        property") conflated keeping the `file` property with not also having an edge; they are
+        independent, and the property is untouched. Without the edge, `cpg index` against this
+        repo produced a graph with two disconnected components — the filesystem tier and the
+        `:CPG` tier joined only by the string equality `MODULE.file == FILE.path` — which is what
+        "the AST layer is disconnected" (the report that started this unit) actually was.
+      rationale: >
+        Wanted for later graph data science (whole-graph traversal, visualization) that a
+        property-only join can't serve directly. Narrowed from Joern's real per-AST-node shape to
+        one per file — everything else in the file is already reachable via DECLARES, so a denser
+        edge would be the density PR1 rejects.
+      source: "visionary decision 2026-09-13; plan recorded at ~/.claude/plans/our-current-graph-builds-precious-fern.md"
 
 # ------------------------------------------------------------------------------------------------------
 # What the code survey found that CHANGED this plan.
@@ -333,11 +349,19 @@ units:
       name: Config loading, manifest discovery, cpg doctor
       delivers: "cpg.config.yaml schema; precedence CLI > env (CPG_*) > file > manifest discovery > defaults; manifest discovery (package.json workspaces, pyproject/uv, tsconfig references/paths); .gitignore merge. (X11, GE-FR1, GE-FR2, GE-UC9)"
       gate: "Precedence unit tests per layer; `cpg doctor` golden output; a zero-config fixture resolves to sane defaults."
-      status: not_started
+      status: in_progress
       promoted_thin_subset_2026-09-12: >
         Per DL14, only enough of this unit to resolve includes/excludes and a DB target is needed
         ahead of M0.11-lite. Full precedence layering and `cpg doctor` are not on that path and can
         land as this unit's remaining scope afterward.
+      verified_2026-09-13: >
+        The thin subset landed (commit 9c46bcf, "M0.1-thin — config, DB target, and a store
+        factory"): packages/engine/src/config/workspace-config.ts's defineCpgConfig resolves
+        includes/excludes and a FalkorConfig from explicit input, layered over engine/workspace
+        defaults. Its own module doc is explicit about what remains: no cpg.config.yaml parsing, no
+        manifest discovery (package.json workspaces / pyproject / uv / tsconfig references), no
+        .gitignore merge, no cpg doctor, no CLI > env > file > manifest > defaults precedence —
+        status stays in_progress until that remaining scope lands.
 
     - id: M0.2
       name: Workspace walker + content hashing
@@ -345,11 +369,17 @@ units:
       gate: >
         Walking test/fixtures/ yields an exactly-asserted file list; node_modules / .venv / __pycache__ proven
         excluded; hash stable across runs and changes on byte change.
-      status: not_started
+      status: done
       promoted_2026-09-12: >
         Per DL14, this unit is promoted ahead of M0.7/M0.9/M0.10 — `cpg index` needs a file list
         before it needs calls/imports. Excludes must additionally cover the legacy top-level src/,
         out/, dist/ (none of which exist anywhere in packages/*/src today).
+      verified_2026-09-13: >
+        Landed (commit deee95c, "M0.2 — workspace walker + content hashing"):
+        packages/engine/src/workspace/{walker,glob,defaults,hash,paths}.ts. Confirmed live against
+        this repo via `cpg index --workspace .` against the cpg-owned dev instance
+        (127.0.0.1:6382): 283 FILE + 83 DIRECTORY nodes, node_modules/.git/dist excluded, content
+        hashes stable across re-runs.
 
     - id: M0.3
       name: Node identity
@@ -601,7 +631,19 @@ units:
         has an inbound DECLARES edge. Informal — no manual sign-off required at this checkpoint;
         the full M0.11 sign-off below is the real exit gate, once calls/imports/symbols exist too.
       depends_on: [M0.4b, M0.2, M0.1-thin-subset]
-      status: not_started
+      status: done
+      verified_2026-09-13: >
+        Landed as two PRs (a72f7f1 "4a — adapter registry + indexWorkspace orchestrator", a8b7df1
+        "4b — cpg index and cpg query"), plus the vscode "CPG: Index Workspace" command
+        (6a9be76/c6917b7/6ea21e8). Confirmed live against the cpg-owned dev instance
+        (127.0.0.1:6382, `cpg` graph): `cpg index --workspace .` produced 173 MODULE, 496 METHOD,
+        678 PARAM, 224 MEMBER, 31 TYPE_DECL nodes over 166 TypeScript + 7 Python FILEs (173 total,
+        matching the MODULE count exactly); zero METHODs lack an inbound DECLARES. This unit's own
+        gate passes. What "the AST layer is disconnected" (the report that reopened this area)
+        actually meant: the filesystem tier (DIRECTORY/FILE/HAS_ENTRY) and the `:CPG` tier this
+        unit writes shared no edge — see DL15 (SOURCE_FILE) — and M0.7/M0.9 (calls/imports/SYMBOL)
+        were simply not built yet, so CALL/IMPORT/SYMBOL counts were zero. Neither is a defect in
+        this unit; both are exactly the next work this file already named.
 
     - id: M0.9
       name: "Python adapter: imports + calls"
