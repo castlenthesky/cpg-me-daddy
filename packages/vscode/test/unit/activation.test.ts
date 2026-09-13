@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   activationSummary,
   EXTENSION_VERSION,
+  INDEX_WORKSPACE_COMMAND,
   LOG_CHANNEL_NAME,
   SHOW_LOG_COMMAND,
+  SHOW_VERSION_COMMAND,
 } from "../../src/index.ts";
 
 describe("activationSummary", () => {
@@ -35,9 +39,16 @@ describe("activationSummary", () => {
   });
 });
 
-describe("SHOW_LOG_COMMAND", () => {
-  test("command id matches the one contributed in package.json", () => {
-    expect(SHOW_LOG_COMMAND).toBe("cpg.showLog");
+describe("every *_COMMAND constant is actually contributed", () => {
+  test("SHOW_VERSION_COMMAND, SHOW_LOG_COMMAND and INDEX_WORKSPACE_COMMAND all appear in package.json's contributes.commands", () => {
+    const manifest = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf8")) as {
+      contributes: { commands: readonly { command: string }[] };
+    };
+    const contributed = manifest.contributes.commands.map((c) => c.command);
+
+    for (const id of [SHOW_VERSION_COMMAND, SHOW_LOG_COMMAND, INDEX_WORKSPACE_COMMAND]) {
+      expect(contributed).toContain(id);
+    }
   });
 });
 

@@ -26,6 +26,12 @@ import {
   type FalkorEnvNames,
 } from "falkordb-service";
 
+// Re-exported so `packages/cli`/`packages/vscode` — which depend only on
+// `@cpg/engine`, never on `falkordb-service` directly — can name these types
+// (e.g. building a `FalkorConfigInput` from resolved settings) without a
+// second workspace dependency.
+export type { FalkorConfig, FalkorConfigInput };
+
 /** How falkordb-service should name cpg's settings when it reports a failure. */
 export const CPG_BRANDING: FalkorBranding = {
   productName: "cpg",

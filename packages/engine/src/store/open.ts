@@ -5,11 +5,23 @@
  * this repo was a test. `cpg index`, the extension's index command, and
  * `cpg query` all go through this, so the wiring exists exactly once.
  */
-import { FalkorService, type FalkorConfig, type FalkorServiceDeps } from "falkordb-service";
+import {
+  FalkorService,
+  isServerError,
+  ServerError,
+  type FalkorConfig,
+  type FalkorServiceDeps,
+} from "falkordb-service";
 
 import type { BootstrapReport } from "./bootstrap";
 import { FalkorGraphStore } from "./falkordb-store";
 import type { IGraphStore } from "./store";
+
+// Re-exported so a caller (the CLI, the extension) can recognize a
+// connection failure and surface its `remedy` without a direct dependency
+// on falkordb-service — engine purity is about imports, not runtime, and
+// packages/vscode already depends only on @cpg/engine.
+export { isServerError, ServerError };
 
 /** The port the integration harness owns. See `CLAUDE.md` and `test/support/falkordb.ts`. */
 export const TEST_HARNESS_PORT = 6381;
