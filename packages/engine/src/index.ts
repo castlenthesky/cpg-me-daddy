@@ -26,6 +26,7 @@ export function engineIdentity(): string {
 export * from "./config/index";
 export * from "./extract/index";
 export * from "./identity/index";
+export * from "./indexer/index";
 export * from "./parser/index";
 export * from "./schema/index";
 export * from "./store/index";
