@@ -20,7 +20,7 @@
  */
 
 export * from "./config";
-export { FalkorClient, now, type Timed } from "./client";
+export { FalkorClient, now, queryParamsToString, type Timed } from "./client";
 export { FalkorService, type FalkorServiceDeps } from "./service";
 export { GraphService } from "./services/graph";
 export { AdminService } from "./services/admin";

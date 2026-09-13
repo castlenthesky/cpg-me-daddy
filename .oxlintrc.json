@@ -61,6 +61,30 @@
       }
     },
     {
+      // M0.4a: packages/engine must reach FalkorDB only through
+      // falkordb-service's typed client/services (FalkorService, GraphService,
+      // AdminService), never the raw `falkordb` driver package directly. Scoped
+      // to packages/engine ONLY — falkordb-service itself legitimately depends
+      // on `falkordb` (that dependency is the whole point of the package). Per
+      // F1's rule that a gate nobody has seen fail is not a gate, this one is
+      // proven red with a deliberately-violating file before being reverted
+      // (M0.4a's PR).
+      "files": ["packages/engine/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "falkordb",
+                "message": "packages/engine must never import the raw 'falkordb' driver directly. Go through falkordb-service's FalkorService/GraphService/AdminService instead."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       // Package independence. falkordb-service is published for reuse in other
       // projects, so it must not know this one exists: no @cpg/* import, ever.
       // Everything cpg-specific reaches it as configuration — see

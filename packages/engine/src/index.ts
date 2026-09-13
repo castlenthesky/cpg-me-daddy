@@ -7,9 +7,9 @@
  * editor API.
  */
 import { CPG_SCHEMA } from "./schema/index";
+import { ENGINE_VERSION } from "./version";
 
-/** Semantic version of the engine package. */
-export const ENGINE_VERSION = "0.0.1";
+export { ENGINE_VERSION } from "./version";
 
 /**
  * Schema version of the graph the engine reads and writes. Sourced from
@@ -27,4 +27,4 @@ export * from "./extract/index";
 export * from "./identity/index";
 export * from "./parser/index";
 export * from "./schema/index";
-export * from "./store/falkordb.config";
+export * from "./store/index";

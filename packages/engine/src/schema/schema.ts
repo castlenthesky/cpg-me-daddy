@@ -17,12 +17,18 @@ import type { EdgeTypeSpec, NodeLabelSpec, SchemaConstraintSpec, SchemaIndexSpec
  */
 export const ID_RULE = "path:kind:qualifiedScopePath[:ordinal|:bodyHash]";
 
-/** Feeds the M0.4 bootstrap and the live conformance check's optional index assertion. */
+/**
+ * Feeds the M0.4a bootstrap and the live conformance check's optional index
+ * assertion. `SYMBOL(fqn)` is here, not just implied by the UNIQUE constraint
+ * below: FalkorDB refuses a UNIQUE constraint without a supporting exact-match
+ * index on the same properties (M0.4a bug fix — this entry was missing).
+ */
 export const SCHEMA_INDEXES: readonly SchemaIndexSpec[] = [
   { label: "CPG", properties: ["id"], kind: "RANGE" },
   { label: "CPG", properties: ["file"], kind: "RANGE" },
   { label: "FILE", properties: ["path"], kind: "RANGE" },
   { label: "DIRECTORY", properties: ["path"], kind: "RANGE" },
+  { label: "SYMBOL", properties: ["fqn"], kind: "RANGE" },
 ];
 
 export const SCHEMA_CONSTRAINTS: readonly SchemaConstraintSpec[] = [
