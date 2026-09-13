@@ -27,10 +27,16 @@
       {
         "command": "cpg.showVersion",
         "title": "CPG: Show Version"
+      },
+      {
+        "command": "cpg.showLog",
+        "title": "CPG: Show Log"
       }
     ]
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "engines": {
     "vscode": "^1.107.0"
   }

@@ -34,6 +34,7 @@ const COMPOSE_FILE = "docker/falkordb.yml";
 const SERVICE = "falkordb";
 const INSTANCE_FILE = ".tmp/falkordb-instance.json";
 const READY_TIMEOUT_MS = 30_000;
+const DEFAULT_UI_PORT = 3000;
 
 function die(message: string): never {
   process.stderr.write(`\nFalkorDB harness did not start.\n${message}\n\n`);
@@ -167,6 +168,18 @@ async function main(): Promise<void> {
   process.stdout.write(
     `FalkorDB harness ready: ${record.image} on ${target.host}:${target.port} ` +
       `(container ${containerId.slice(0, 12)}, provenance verified).\n`,
+  );
+
+  // The Browser is a nice-to-have, not part of the provenance guarantee above:
+  // report whatever compose actually published, falling back to the configured
+  // default if the query fails, rather than failing the whole script over it.
+  const uiPortEnv = Number(process.env.CPG_TEST_FALKORDB_UI_PORT);
+  const configuredUiPort = Number.isFinite(uiPortEnv) ? uiPortEnv : DEFAULT_UI_PORT;
+  const publishedUi = compose("port", SERVICE, "3000").stdout.trim();
+  const uiPort = Number(publishedUi.split(":").pop());
+  const uiHost = target.host;
+  process.stdout.write(
+    `FalkorDB Browser (read-only, cpg_test_* graphs only): http://${uiHost}:${Number.isFinite(uiPort) ? uiPort : configuredUiPort}\n`,
   );
 }
 
