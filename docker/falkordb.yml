@@ -4,7 +4,7 @@
 # 6380 is taken by the ast-demo benchmark on at least one machine here, so both
 # are off limits: a harness that binds a busy port gets "port is already
 # allocated" from Docker while `PING` on that port still answers — from the
-# *foreign* container. See scripts/falkordb-up.ts, which fails loudly on that
+# *foreign* container. See tools/falkordb-up.ts, which fails loudly on that
 # case, and packages/engine/test/support/falkordb.ts, which refuses to run
 # against an instance that is not this one.
 #

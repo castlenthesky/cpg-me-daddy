@@ -121,7 +121,7 @@ ground_rules:
     name: Snapshot discipline
     text: >
       Golden files are the human-audit surface. A PR that changes a snapshot must paste the snapshot diff into
-      its description and get explicit sign-off. `npm run test:update-goldens` never runs in CI — only
+      its description and get explicit sign-off. `bun run test:update-goldens` never runs in CI — only
       locally, deliberately.
   - id: GR5
     name: Manual gates are real gates
@@ -309,31 +309,25 @@ units:
         written by the engine is declared in it and carries its required properties — an undeclared label
         fails the build. MANUAL: the visionary signs off on the divergence table, each deviation one they'd
         defend to someone who knows Joern.
-      blocks: [M0.4, "every golden-snapshot gate after it", "cpg://schema in M2"]
+      blocks: [M0.4a, M0.4b, "every golden-snapshot gate after it", "cpg://schema in M2"]
       does_not_block: [F1, F2, F3, F4]
-      status: blocked
-      blocked_on: "GR5 manual gate — visionary sign-off read of the generated divergence table, not yet performed."
+      status: done
       verified_2026-09-12: >
         Machine half, fully green: packages/engine/src/schema/ declares all 14 R6-approved node labels
-        and 13 edge types with Joern alignment, ownership class and write mechanism; bun run test:schema
-        green (validator + live conformance against 127.0.0.1:6381 + exhaustiveness + spec-doc
-        freshness, 51 tests); lint/format/typecheck/test:unit/test:integration all green on the branch.
-        Negative controls run and reverted: an undeclared label, a file property on SYMBOL, an overlay
-        edge inside a per-file replace, and a hand-edited divergence-table row were each confirmed to
-        fail the gate before being reverted. Manual half, ready but not yet exercised: divergence table
-        (50-schema.md §5/§10) generated from the schema module by tools/schema-doc.ts; the one
-        deliberate divergence from R6's literal text (INHERITS_FROM -> SYMBOL, not TYPE_DECL) confirmed
-        with the user during planning. Flips to done once the visionary reads and signs the table (GR5).
-      contradiction_found_2026-09-12: >
-        50-schema.md's own header claims "status: approved / approved_by: visionary / approved_on:
-        2026-09-12" — written in the SAME commit (324e40e) that recorded THIS unit's status as
-        blocked on that exact sign-off. One of the two is stale. Left as `blocked` here (the
-        conservative reading, and GR5's own text: "manual gates are real gates... the PR does not
-        merge until that check happens") pending an explicit visionary read of the divergence
-        table and a status flip in THIS file — not just a header edit in 50-schema.md. Whoever
-        resolves this: if the read already happened, flip status to done and add a
-        verified_-dated note; if not, the fastest unblock is reading 50-schema.md §5/§10 (the
-        divergence table), which is generated and ready.
+        and 14 edge types (13 plus the M0.0d REACHING_DEF amendment) with Joern alignment, ownership
+        class and write mechanism; bun run test:schema green (validator + live conformance against
+        127.0.0.1:6381 + exhaustiveness + spec-doc freshness, 51 tests); lint/format/typecheck/
+        test:unit/test:integration all green on the branch. Negative controls run and reverted: an
+        undeclared label, a file property on SYMBOL, an overlay edge inside a per-file replace, and a
+        hand-edited divergence-table row were each confirmed to fail the gate before being reverted.
+      manual_gate_signed_2026-09-12: >
+        GR5 satisfied. The visionary read the generated divergence table (50-schema.md §5: 28 declared
+        names — 10 unchallenged, 3 name-only renames, 5 gap-fill additions, 9 semantic extensions, and
+        SYMBOL's one structural-incompatibility divergence — plus §10's 51-name Joern rejection list)
+        and signed it without requesting changes, including the one deliberate divergence from R6's
+        literal text (INHERITS_FROM -> SYMBOL, not TYPE_DECL, confirmed with the user during planning).
+        Resolves the contradiction_found_2026-09-12 note this file previously carried: the read had not
+        happened when 50-schema.md's header first claimed "approved" in commit 324e40e; it has now.
 
     - id: M0.1
       name: Config loading, manifest discovery, cpg doctor
@@ -765,8 +759,8 @@ verification_commands:
     oxlint && oxfmt --check && tsc --build
     bun test packages/engine/test/unit
     bun test packages/engine/test/integration    # live DB + assertGraphInvariants()
-    npm run test:schema                          # every written label is declared
-    npm run test:goldens                         # snapshot diff, must be empty
+    bun run test:schema                          # every written label is declared
+    bun run test:goldens                         # snapshot diff, must be empty
   m0_checkpoint_walking_skeleton: |
     # After M0.11-lite. Declarations only — sanity, not the exit gate.
     cpg index --workspace .                                                        # NOT 127.0.0.1:6381 — that's the test harness
@@ -780,13 +774,13 @@ verification_commands:
     # Should reproduce CLAUDE.md's stated dependency direction: cli/vscode -> engine -> falkordb-service,
     # nothing flowing back up. If the graph disagrees with the architecture we know we have, the extractor is wrong.
   m0_exit: |
-    npx cpg index --workspace test/fixtures
-    npx cpg dump --format golden | diff - test/__snapshots__/graph/fixtures.json   # must be empty
+    bunx cpg index --workspace test/fixtures
+    bunx cpg dump --format golden | diff - test/__snapshots__/graph/fixtures.json   # must be empty
   m1_exit: |
-    npm run bench:save-latency          # asserts p95 <= 2s, p100 <= 5s
-    npm run bench:reader-under-write    # asserts reader p95 <= 150ms
-    npm run bench:churn -- --duration 1h  # asserts no unbounded memory growth
-  golden_updates: "npm run test:update-goldens — local and deliberate only; never in CI. Paste the diff into the PR."
+    bun run bench:save-latency          # asserts p95 <= 2s, p100 <= 5s
+    bun run bench:reader-under-write    # asserts reader p95 <= 150ms
+    bun run bench:churn -- --duration 1h  # asserts no unbounded memory growth
+  golden_updates: "bun run test:update-goldens — local and deliberate only; never in CI. Paste the diff into the PR."
 
 files_touched_first:
   - { path: "package.json, tsconfig.json", change: "split into workspace roots + per-package configs" }

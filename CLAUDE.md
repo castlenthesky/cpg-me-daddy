@@ -34,6 +34,11 @@ The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.projec
   `cpg_test_`. Any of the three failing is a hard error. Never relax this into "something answered on the
   port" — `docker compose up` can fail with *port is already allocated* while `PING` on that port still
   answers, from the container that already owns it.
+- **The `falkordb-local` / `falkordb-dev` MCP servers are a different FalkorDB integration, unrelated
+  to this project.** Never read or write this project's graphs through them. Interrogate only the
+  instance this project's own tooling spins up: the integration harness above (127.0.0.1:6381, which
+  itself refuses any non-`cpg_test_`-prefixed graph key), or a cpg-owned instance for real data
+  (`defineCpgFalkorConfig`, M0.11-lite's `cpg index`/`cpg query`).
 - **Legacy trees are reference only.** The top-level `src/`, `test/`, `scripts/`, `out/`, `media/`,
   `resources/`, `build/` are the pre-monorepo prototype. They are excluded from the workspace build,
   from oxlint and from oxfmt. Do not extend them; later M0 units consume `src/types/cpg.ts` and then
