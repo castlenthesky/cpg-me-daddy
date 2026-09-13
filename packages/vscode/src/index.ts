@@ -7,7 +7,7 @@
  */
 
 import {
-  defineCpgFalkorConfig,
+  defineCpgDevFalkorConfig,
   engineIdentity,
   isServerError,
   type FalkorConfigInput,
@@ -46,9 +46,15 @@ export interface ActivationContext {
  * This only *resolves and reports* the db config; it never connects.
  * Indexing is a deliberate, user-invoked action (`cpg.indexWorkspace`), not
  * something activation does on its own.
+ *
+ * Uses `defineCpgDevFalkorConfig`, the same resolution `cpg.indexWorkspace`
+ * itself uses — not the bare `defineCpgFalkorConfig`, whose own `remote`-mode
+ * default is 127.0.0.1:6379. Logging one target while indexing another is
+ * exactly the kind of mismatch that makes "why is the graph empty" hard to
+ * debug.
  */
 export function activationSummary(context: ActivationContext): readonly string[] {
-  const db = defineCpgFalkorConfig();
+  const db = defineCpgDevFalkorConfig();
   const folders =
     context.workspaceFolders.length === 0
       ? "no workspace folder open"

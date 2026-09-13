@@ -35,6 +35,11 @@ describe("activationSummary", () => {
     expect(dbLine).toContain("mode=");
     expect(dbLine).toContain("host=");
     expect(dbLine).toContain("port=");
+    // The cpg dev instance default (6382), matching what cpg.indexWorkspace
+    // itself targets — never 6379 (defineCpgFalkorConfig's own bare default)
+    // or 6381 (the integration test harness). A mismatch here is exactly
+    // what makes "why is the graph empty" hard to debug.
+    expect(dbLine).toContain("port=6382");
     expect(dbLine).toContain("graph=cpg");
   });
 });
