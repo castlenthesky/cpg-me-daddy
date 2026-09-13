@@ -28,3 +28,4 @@ export * from "./identity/index";
 export * from "./parser/index";
 export * from "./schema/index";
 export * from "./store/index";
+export * from "./workspace/index";
