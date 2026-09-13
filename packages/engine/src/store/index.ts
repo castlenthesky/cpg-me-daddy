@@ -6,4 +6,5 @@ export * from "./bootstrap";
 export * from "./cypher";
 export * from "./falkordb-store";
 export * from "./falkordb.config";
+export * from "./open";
 export * from "./store";

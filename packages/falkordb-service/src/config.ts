@@ -188,6 +188,22 @@ export interface FalkorConfigInput {
   readonly connection?: Overrides<FalkorConnectionConfig>;
   readonly server?: Overrides<FalkorServerConfig>;
   readonly acquisition?: Overrides<FalkorAcquisitionConfig>;
+  /**
+   * Host-application defaults: consulted AFTER an explicit `input.*` value and
+   * AFTER the branded env var, but BEFORE this package's own hard-coded
+   * default (127.0.0.1, graph "falkordb", mode "remote", remote port 6379).
+   *
+   * This is what lets a host application supply its own sensible defaults —
+   * e.g. cpg's dev FalkorDB at 127.0.0.1:6382 — without them shadowing the
+   * env var a user actually set. Passing a value as `connection`/`server`
+   * directly does shadow the env var (`input ?? env`, by design, since an
+   * explicit override must win); `defaults` exists precisely for values a
+   * host wants to suggest, not force.
+   */
+  readonly defaults?: {
+    readonly connection?: Overrides<FalkorConnectionConfig>;
+    readonly server?: Overrides<FalkorServerConfig>;
+  };
 }
 
 const SERVER_MODES: readonly ServerMode[] = ["spawned", "remote", "docker"];
@@ -273,34 +289,61 @@ export function defineFalkorConfig(input: FalkorConfigInput = {}): FalkorConfig 
   const names: FalkorEnvNames = { ...envNames(branding.envPrefix), ...input.envNames };
   const home = input.home ?? homedir();
 
+  const defaults = input.defaults;
   const platformRaw = input.acquisition?.platformKey ?? str(env, names.platform);
   const version = input.acquisition?.version ?? str(env, names.version) ?? FALKORDB_VERSION;
-  const serverMode = input.server?.mode ?? mode(env, names.mode) ?? "remote";
+  const serverMode =
+    input.server?.mode ?? mode(env, names.mode) ?? defaults?.server?.mode ?? "remote";
   // `remote` talks to a server someone else configured, so it assumes the
   // conventional Redis port. The modes that start their own server ask the OS
-  // for a free one instead, so two runs cannot fight over 6379.
+  // for a free one instead, so two runs cannot fight over 6379. A host
+  // default (below) is consulted before this package fallback fires.
   const defaultPort = serverMode === "remote" ? 6379 : 0;
 
   return {
     branding,
     envNames: names,
     connection: {
-      host: input.connection?.host ?? str(env, names.host) ?? "127.0.0.1",
-      port: input.connection?.port ?? int(env, names.port) ?? defaultPort,
-      password: input.connection?.password ?? str(env, names.password),
-      graph: input.connection?.graph ?? str(env, names.graph) ?? "falkordb",
-      queryTimeoutMs: input.connection?.queryTimeoutMs ?? int(env, names.queryTimeoutMs) ?? 30_000,
+      host:
+        input.connection?.host ?? str(env, names.host) ?? defaults?.connection?.host ?? "127.0.0.1",
+      port:
+        input.connection?.port ?? int(env, names.port) ?? defaults?.connection?.port ?? defaultPort,
+      password:
+        input.connection?.password ?? str(env, names.password) ?? defaults?.connection?.password,
+      graph:
+        input.connection?.graph ??
+        str(env, names.graph) ??
+        defaults?.connection?.graph ??
+        "falkordb",
+      queryTimeoutMs:
+        input.connection?.queryTimeoutMs ??
+        int(env, names.queryTimeoutMs) ??
+        defaults?.connection?.queryTimeoutMs ??
+        30_000,
     },
     server: {
       mode: serverMode,
-      readyTimeoutMs: input.server?.readyTimeoutMs ?? int(env, names.readyTimeoutMs) ?? 15_000,
-      connectTimeoutMs: input.server?.connectTimeoutMs ?? 2_000,
-      probe: input.server?.probe ?? true,
-      redisServerPath: input.server?.redisServerPath ?? str(env, names.redisServer),
-      extraArgs: input.server?.extraArgs ?? [],
-      image: input.server?.image ?? str(env, names.image) ?? FALKORDB_IMAGE,
-      dockerPath: input.server?.dockerPath ?? str(env, names.dockerPath) ?? "docker",
-      runArgs: input.server?.runArgs ?? [],
+      readyTimeoutMs:
+        input.server?.readyTimeoutMs ??
+        int(env, names.readyTimeoutMs) ??
+        defaults?.server?.readyTimeoutMs ??
+        15_000,
+      connectTimeoutMs:
+        input.server?.connectTimeoutMs ?? defaults?.server?.connectTimeoutMs ?? 2_000,
+      probe: input.server?.probe ?? defaults?.server?.probe ?? true,
+      redisServerPath:
+        input.server?.redisServerPath ??
+        str(env, names.redisServer) ??
+        defaults?.server?.redisServerPath,
+      extraArgs: input.server?.extraArgs ?? defaults?.server?.extraArgs ?? [],
+      image:
+        input.server?.image ?? str(env, names.image) ?? defaults?.server?.image ?? FALKORDB_IMAGE,
+      dockerPath:
+        input.server?.dockerPath ??
+        str(env, names.dockerPath) ??
+        defaults?.server?.dockerPath ??
+        "docker",
+      runArgs: input.server?.runArgs ?? defaults?.server?.runArgs ?? [],
     },
     acquisition: {
       version,
