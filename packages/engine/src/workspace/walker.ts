@@ -1,8 +1,12 @@
 /**
- * The workspace walker (M0.2): enumerates the source files `cpg index` should
- * parse, honouring includes/excludes and pruning excluded directories before
- * descending into them — the whole reason this doesn't use a "filter a full
- * listing" glob library (see `./glob.ts`'s module doc).
+ * The workspace walker (M0.2): enumerates every non-ignored file and
+ * directory, honouring includes/excludes and pruning excluded directories
+ * before descending into them — the whole reason this doesn't use a "filter a
+ * full listing" glob library (see `./glob.ts`'s module doc).
+ *
+ * Every non-ignored file is emitted, not just parseable source — the
+ * filesystem tier (DIRECTORY/FILE/HAS_ENTRY) covers the whole workspace tree.
+ * `FileEntry.language` is `null` for a file with no registered grammar.
  */
 import { readdir, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
@@ -28,9 +32,30 @@ export interface FileEntry {
    *  separator path here would silently corrupt every downstream id. */
   readonly path: string;
   readonly absolutePath: string;
-  readonly language: GrammarId;
+  /** The containing `DirEntry.path` — `"."` for a file at the workspace root. */
+  readonly parent: string;
+  /**
+   * `null` when no grammar is registered for this extension (e.g. `README.md`,
+   * `package.json`). Every non-ignored file still gets an entry — the
+   * filesystem tier (DIRECTORY/FILE/HAS_ENTRY) covers the whole tree, not
+   * just parseable source (see the filesystem-tier plan, indexer/index-workspace.ts).
+   */
+  readonly language: GrammarId | null;
   readonly sizeBytes: number;
   readonly mtimeMs: number;
+}
+
+/**
+ * One workspace directory the walk visited (including the root, at `path:
+ * "."`). Emitted alongside `FileEntry` so a caller can build the
+ * DIRECTORY/HAS_ENTRY filesystem tier without re-walking.
+ */
+export interface DirEntry {
+  /** Workspace-relative, POSIX separators. `"."` for the workspace root. */
+  readonly path: string;
+  readonly absolutePath: string;
+  /** `undefined` only for the root — nothing points a HAS_ENTRY edge at it. */
+  readonly parent: string | undefined;
 }
 
 export interface WalkStats {
@@ -38,7 +63,7 @@ export interface WalkStats {
   readonly directoriesSkipped: number;
   readonly filesSeen: number;
   readonly filesExcluded: number;
-  /** No grammar registered for this extension (e.g. `.js` today — M0.7). */
+  /** No grammar registered for this extension (e.g. `README.md`). Still walked and counted — not excluded. */
   readonly filesUnsupported: number;
   readonly filesTooLarge: number;
   readonly symlinksSkipped: number;
@@ -46,6 +71,8 @@ export interface WalkStats {
 
 export interface WalkResult {
   readonly files: readonly FileEntry[];
+  /** Every visited directory, including the root. Sorted the same way `files` is: by descent order. */
+  readonly directories: readonly DirEntry[];
   readonly stats: WalkStats;
 }
 
@@ -53,9 +80,14 @@ function toPosix(relPath: string): string {
   return sep === "/" ? relPath : relPath.split(sep).join("/");
 }
 
+/** `""` (the internal root sentinel `visitDir` uses) maps to the DIRECTORY convention `"."`. */
+function dirPath(relDir: string): string {
+  return relDir === "" ? "." : relDir;
+}
+
 /**
- * Walks `options.root`, returning the sorted set of files that pass the
- * include/exclude patterns and have a registered grammar.
+ * Walks `options.root`, returning the sorted set of files and directories
+ * that pass the include/exclude patterns.
  *
  * Directory entries are sorted by name before descending — filesystem order
  * is not stable across platforms, and the M0.2 gate demands an
@@ -68,6 +100,7 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
   const followSymlinks = options.followSymlinks ?? false;
 
   const files: FileEntry[] = [];
+  const directories: DirEntry[] = [];
   const stats = {
     directoriesVisited: 0,
     directoriesSkipped: 0,
@@ -78,8 +111,13 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
     symlinksSkipped: 0,
   };
 
-  async function visitDir(absDir: string, relDir: string): Promise<void> {
+  async function visitDir(
+    absDir: string,
+    relDir: string,
+    parent: string | undefined,
+  ): Promise<void> {
     stats.directoriesVisited++;
+    directories.push({ path: dirPath(relDir), absolutePath: absDir, parent });
     let entries;
     try {
       entries = await readdir(absDir, { withFileTypes: true });
@@ -112,7 +150,7 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
           stats.directoriesSkipped++;
           continue;
         }
-        await visitDir(absPath, relPath);
+        await visitDir(absPath, relPath, dirPath(relDir));
         continue;
       }
 
@@ -128,10 +166,13 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
         continue;
       }
 
-      const language = grammarForPath(relPath);
-      if (language === undefined) {
+      // Every non-ignored file gets an entry, parseable or not — the
+      // filesystem tier (DIRECTORY/FILE/HAS_ENTRY) covers the whole tree.
+      // `filesUnsupported` stays purely informational (a report count), no
+      // longer a reason to exclude.
+      const language = grammarForPath(relPath) ?? null;
+      if (language === null) {
         stats.filesUnsupported++;
-        continue;
       }
 
       let fileStat;
@@ -148,6 +189,7 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
       files.push({
         path: relPath,
         absolutePath: absPath,
+        parent: dirPath(relDir),
         language,
         sizeBytes: fileStat.size,
         mtimeMs: fileStat.mtimeMs,
@@ -156,7 +198,7 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
     /* eslint-enable no-await-in-loop */
   }
 
-  await visitDir(options.root, "");
+  await visitDir(options.root, "", undefined);
 
-  return { files, stats: { ...stats } };
+  return { files, directories, stats: { ...stats } };
 }

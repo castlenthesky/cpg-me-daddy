@@ -13,6 +13,7 @@ import {
   openCpgStore,
   WebTreeSitterBackend,
   type BootstrapReport,
+  type FilesystemDelta,
   type GraphDelta,
   type GraphMetadata,
   type IGraphStore,
@@ -89,6 +90,14 @@ class NullGraphStore implements IGraphStore {
   }
 
   async deleteFile(): Promise<void> {}
+
+  async writeFilesystem(delta: FilesystemDelta): Promise<WriteReport> {
+    const nodesWritten = (delta.directories?.length ?? 0) + (delta.files?.length ?? 0);
+    const edgesWritten =
+      (delta.directories?.filter((d) => d.parent !== undefined).length ?? 0) +
+      (delta.files?.length ?? 0);
+    return { nodesWritten, edgesWritten, opsExecuted: 0 };
+  }
 
   async readMetadata(): Promise<GraphMetadata | undefined> {
     return undefined;

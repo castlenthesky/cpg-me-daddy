@@ -48,7 +48,8 @@
  * TARGETS, DEPENDS_ON, HAS_ENTRY) are out of this writer's scope entirely —
  * they belong to the periodic overlay job and the filesystem walker
  * respectively, never to a per-file `GraphDelta`. `planDelta` throws if one
- * turns up, rather than silently mis-writing it.
+ * turns up, rather than silently mis-writing it. The filesystem tier's own
+ * planner, `planFilesystem()`, is below `planDelta` in this same file.
  *
  * Rows are chunked at `batchSize` (default 5000) per query — chunking the
  * ROWS ARRAY, not the op list, per this repo's own benchmark (~3k
@@ -58,7 +59,15 @@ import { edgeSpec, nodeSpec } from "../schema/schema";
 import type { EdgeTypeSpec, NodeLabelSpec, WriteMechanism } from "../schema/types";
 import type { EdgeRow, GraphDelta, NodeRow } from "../schema/validate";
 
-export type CypherOpKind = "scope-delete" | "node-create" | "node-merge" | "edge";
+export type CypherOpKind =
+  | "scope-delete"
+  | "node-create"
+  | "node-merge"
+  | "edge"
+  | "fs-node-merge"
+  | "fs-link"
+  | "fs-remove"
+  | "fs-move";
 
 export interface CypherOp {
   readonly kind: CypherOpKind;
@@ -327,5 +336,298 @@ export function planDelta(delta: GraphDelta, opts: PlanDeltaOptions = {}): Cyphe
   }
   ops.push(...planNodes(delta.nodes, batchSize));
   ops.push(...planEdges(delta.edges, batchSize));
+  return ops;
+}
+
+/**
+ * `planFilesystem()` — the filesystem tier's own planner, deliberately
+ * separate from `planDelta` above.
+ *
+ * `HAS_ENTRY` is `write: "move-rename-only"` and `DIRECTORY`/`FILE` are
+ * `write: "merge-on-key"` (50-schema.md §8) — none of that is a per-file
+ * replace, and `requireOutOfScopeWriteMechanism` throws if a `HAS_ENTRY` row
+ * ever reaches `planDelta` (see `cypher.test.ts`'s regression test for that
+ * throw). This planner is the walker's/watcher's own writer, matching the
+ * spec's "MERGE-on-path; mutated on move/rename, never deleted and recreated
+ * on an ordinary save": every op below is a `MERGE`, an in-place `SET`, or a
+ * targeted `DELETE` — never the file-owned tier's `DELETE`-then-`CREATE`.
+ *
+ * A file or directory delete/move also clears the `:CPG` subgraph rooted at
+ * the old path (the same scope-delete `planDelta` uses for a per-file
+ * replace) — without it, deleting `a.ts` would leave its MODULE/METHOD nodes
+ * behind as ghosts with no FILE node to anchor them. A move deletes rather
+ * than rewrites those `:CPG` ids, because every id embeds its path
+ * (`path:kind:qualifiedScopePath`) — re-extraction on the next save rebuilds
+ * them at the new path. `cpg index` re-extracts on its own next run;
+ * `cpg watch` does not yet re-parse a moved file live (its own scope is
+ * still filesystem-tier-only — see `watch/watch-workspace.ts`'s module doc).
+ */
+
+export interface FsDirectoryRow {
+  readonly path: string;
+  readonly name: string;
+  /** `undefined` only for the workspace root — nothing points a HAS_ENTRY edge at it. */
+  readonly parent: string | undefined;
+}
+
+export interface FsFileRow {
+  readonly path: string;
+  readonly name: string;
+  readonly parent: string;
+  /** Grammar id, or the `"none"` sentinel for a file with no registered grammar. */
+  readonly language: string;
+  readonly content_hash: string;
+  readonly status: string;
+  readonly version: number;
+  readonly indexed_at: string;
+  readonly loc: number;
+}
+
+export interface FsRemoval {
+  readonly path: string;
+  /** `"directory"` deletes the whole subtree rooted at `path`, not just the node itself. */
+  readonly kind: "file" | "directory";
+}
+
+export interface FsMove {
+  readonly fromPath: string;
+  readonly toPath: string;
+  readonly toName: string;
+  readonly toParent: string;
+  /** `"directory"` rewrites every descendant's path (subtree move), not just the root's. */
+  readonly kind: "file" | "directory";
+}
+
+export interface FilesystemDelta {
+  readonly directories?: readonly FsDirectoryRow[];
+  readonly files?: readonly FsFileRow[];
+  readonly removals?: readonly FsRemoval[];
+  readonly moves?: readonly FsMove[];
+}
+
+function planDirectoryMerge(rows: readonly FsDirectoryRow[], batchSize: number): CypherOp[] {
+  const cypher = "UNWIND $rows AS row MERGE (d:DIRECTORY {path: row.key}) SET d += row.props";
+  return chunk(rows, batchSize).map((rowsChunk) => ({
+    kind: "fs-node-merge",
+    group: "DIRECTORY",
+    cypher,
+    params: {
+      rows: rowsChunk.map((r) => ({ key: r.path, props: { name: r.name, status: "ready" } })),
+    },
+  }));
+}
+
+function planDirectoryLinks(rows: readonly FsDirectoryRow[], batchSize: number): CypherOp[] {
+  const linked = rows.filter(
+    (r): r is FsDirectoryRow & { parent: string } => r.parent !== undefined,
+  );
+  if (linked.length === 0) {
+    return [];
+  }
+  const cypher =
+    "UNWIND $rows AS row " +
+    "MATCH (p:DIRECTORY {path: row.parent}) " +
+    "WITH p, row " +
+    "MATCH (c:DIRECTORY {path: row.path}) " +
+    "MERGE (p)-[:HAS_ENTRY]->(c)";
+  return chunk(linked, batchSize).map((rowsChunk) => ({
+    kind: "fs-link",
+    group: "HAS_ENTRY: DIRECTORY -> DIRECTORY",
+    cypher,
+    params: { rows: rowsChunk.map((r) => ({ parent: r.parent, path: r.path })) },
+  }));
+}
+
+function planFileMerge(rows: readonly FsFileRow[], batchSize: number): CypherOp[] {
+  const cypher = "UNWIND $rows AS row MERGE (f:FILE {path: row.key}) SET f += row.props";
+  return chunk(rows, batchSize).map((rowsChunk) => ({
+    kind: "fs-node-merge",
+    group: "FILE",
+    cypher,
+    params: {
+      rows: rowsChunk.map((r) => ({
+        key: r.path,
+        props: {
+          name: r.name,
+          language: r.language,
+          content_hash: r.content_hash,
+          status: r.status,
+          version: r.version,
+          indexed_at: r.indexed_at,
+          loc: r.loc,
+        },
+      })),
+    },
+  }));
+}
+
+function planFileLinks(rows: readonly FsFileRow[], batchSize: number): CypherOp[] {
+  const cypher =
+    "UNWIND $rows AS row " +
+    "MATCH (p:DIRECTORY {path: row.parent}) " +
+    "WITH p, row " +
+    "MATCH (c:FILE {path: row.path}) " +
+    "MERGE (p)-[:HAS_ENTRY]->(c)";
+  return chunk(rows, batchSize).map((rowsChunk) => ({
+    kind: "fs-link",
+    group: "HAS_ENTRY: DIRECTORY -> FILE",
+    cypher,
+    params: { rows: rowsChunk.map((r) => ({ parent: r.parent, path: r.path })) },
+  }));
+}
+
+function planFsRemoval(removal: FsRemoval): CypherOp[] {
+  if (removal.kind === "file") {
+    return [
+      {
+        kind: "scope-delete",
+        group: "scope-delete",
+        cypher: "MATCH (n:CPG {file: $path}) DELETE n",
+        params: { path: removal.path },
+      },
+      {
+        kind: "fs-remove",
+        group: "FILE",
+        cypher: "MATCH (f:FILE {path: $path}) DETACH DELETE f",
+        params: { path: removal.path },
+      },
+    ];
+  }
+  const prefix = `${removal.path}/`;
+  return [
+    {
+      kind: "scope-delete",
+      group: "scope-delete",
+      cypher: "MATCH (n:CPG) WHERE n.file STARTS WITH $prefix DELETE n",
+      params: { prefix },
+    },
+    {
+      kind: "fs-remove",
+      group: "FILE",
+      cypher: "MATCH (f:FILE) WHERE f.path STARTS WITH $prefix DETACH DELETE f",
+      params: { prefix },
+    },
+    {
+      kind: "fs-remove",
+      group: "DIRECTORY",
+      cypher:
+        "MATCH (d:DIRECTORY) WHERE d.path = $path OR d.path STARTS WITH $prefix DETACH DELETE d",
+      params: { path: removal.path, prefix },
+    },
+  ];
+}
+
+/**
+ * A file move's rewrite half: unlink from its old parent (best-effort —
+ * `OPTIONAL MATCH` so a missing link is a no-op, not a silently-skipped
+ * query), then rewrite `path`/`name` in place — never delete+recreate, this
+ * is the SAME node before and after. Deliberately does NOT relink under the
+ * new parent yet: `planFilesystem` runs `planFsMoveRelink` only after the
+ * directory merges, because a move's destination parent may be a directory
+ * created in this very same batch (e.g. `mkdir lib && mv a.ts lib/a.ts` in
+ * one debounced watch batch) — relinking here, before that MERGE runs,
+ * would match zero rows and silently leave the moved file unlinked.
+ */
+function planFsMoveRewrite(move: FsMove): CypherOp[] {
+  if (move.kind === "file") {
+    return [
+      {
+        kind: "scope-delete",
+        group: "scope-delete",
+        cypher: "MATCH (n:CPG {file: $from}) DELETE n",
+        params: { from: move.fromPath },
+      },
+      {
+        kind: "fs-move",
+        group: "FILE",
+        cypher: "OPTIONAL MATCH (:DIRECTORY)-[r:HAS_ENTRY]->(:FILE {path: $from}) DELETE r",
+        params: { from: move.fromPath },
+      },
+      {
+        kind: "fs-move",
+        group: "FILE",
+        cypher: "MATCH (f:FILE {path: $from}) SET f.path = $to, f.name = $toName",
+        params: { from: move.fromPath, to: move.toPath, toName: move.toName },
+      },
+    ];
+  }
+  const fromPrefix = `${move.fromPath}/`;
+  return [
+    {
+      kind: "scope-delete",
+      group: "scope-delete",
+      cypher: "MATCH (n:CPG) WHERE n.file STARTS WITH $fromPrefix DELETE n",
+      params: { fromPrefix },
+    },
+    {
+      kind: "fs-move",
+      group: "DIRECTORY",
+      cypher: "OPTIONAL MATCH (:DIRECTORY)-[r:HAS_ENTRY]->(:DIRECTORY {path: $from}) DELETE r",
+      params: { from: move.fromPath },
+    },
+    {
+      kind: "fs-move",
+      group: "FILE",
+      cypher:
+        "MATCH (f:FILE) WHERE f.path STARTS WITH $fromPrefix " +
+        "SET f.path = $to + substring(f.path, size($from))",
+      params: { fromPrefix, from: move.fromPath, to: move.toPath },
+    },
+    {
+      kind: "fs-move",
+      group: "DIRECTORY",
+      cypher:
+        "MATCH (d:DIRECTORY) WHERE d.path = $from OR d.path STARTS WITH $fromPrefix " +
+        "SET d.path = $to + substring(d.path, size($from))",
+      params: { from: move.fromPath, fromPrefix, to: move.toPath },
+    },
+    {
+      kind: "fs-move",
+      group: "DIRECTORY",
+      cypher: "MATCH (d:DIRECTORY {path: $to}) SET d.name = $toName",
+      params: { to: move.toPath, toName: move.toName },
+    },
+  ];
+}
+
+/** The relink half of a move — run only after directory merges, see `planFsMoveRewrite`'s doc. */
+function planFsMoveRelink(move: FsMove): CypherOp {
+  const childLabel = move.kind === "file" ? "FILE" : "DIRECTORY";
+  return {
+    kind: "fs-link",
+    group: `HAS_ENTRY: DIRECTORY -> ${childLabel}`,
+    cypher:
+      `MATCH (p:DIRECTORY {path: $toParent}) WITH p MATCH (c:${childLabel} {path: $to}) ` +
+      "MERGE (p)-[:HAS_ENTRY]->(c)",
+    params: { toParent: move.toParent, to: move.toPath },
+  };
+}
+
+/**
+ * Turns a `FilesystemDelta` into ordered Cypher operations: move rewrites
+ * first (so a rename never races a merge at its destination path), then
+ * removals, then directory/file `MERGE`s, then EVERY link — a move's own
+ * relink included — because a move's destination parent may be a directory
+ * this very batch just created (see `planFsMoveRewrite`'s doc).
+ */
+export function planFilesystem(delta: FilesystemDelta, opts: PlanDeltaOptions = {}): CypherOp[] {
+  const batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
+  const moves = delta.moves ?? [];
+  const ops: CypherOp[] = [];
+  for (const move of moves) {
+    ops.push(...planFsMoveRewrite(move));
+  }
+  for (const removal of delta.removals ?? []) {
+    ops.push(...planFsRemoval(removal));
+  }
+  const directories = delta.directories ?? [];
+  const files = delta.files ?? [];
+  ops.push(...planDirectoryMerge(directories, batchSize));
+  ops.push(...planFileMerge(files, batchSize));
+  for (const move of moves) {
+    ops.push(planFsMoveRelink(move));
+  }
+  ops.push(...planDirectoryLinks(directories, batchSize));
+  ops.push(...planFileLinks(files, batchSize));
   return ops;
 }

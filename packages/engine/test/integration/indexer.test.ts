@@ -80,6 +80,87 @@ describe("indexWorkspace — live FalkorDB", () => {
     await assertSchemaConformance(g.falkor.graph, { requireIndexes: true });
   });
 
+  test("indexes a small workspace: every FILE has an inbound HAS_ENTRY, the tree is fully reachable from the root", async () => {
+    workspace = await makeTmpWorkspace({
+      "a.ts": "export function greet(): string {\n  return 'hi';\n}\n",
+      "nested/b.py": "def greet():\n    return 'hi'\n",
+      "README.md": "# not source\n",
+    });
+
+    const g = await graph("indexer filesystem tier");
+    const store = makeStore(g);
+    await store.bootstrap();
+
+    const config = defineCpgConfig({ root: workspace.root, env: {} });
+    const report = await indexWorkspace(config, { store, backend });
+
+    expect(report.filesIndexed).toBe(3);
+    expect(report.directoriesWritten).toBe(2); // "." and "nested"
+
+    const fileCount = await g.falkor.graph.scalar("MATCH (f:FILE) RETURN count(f) AS n");
+    expect(fileCount).toBe(3);
+
+    const orphanFiles = await g.falkor.graph.scalar(
+      "MATCH (f:FILE) WHERE NOT ()-[:HAS_ENTRY]->(f) RETURN count(f) AS n",
+    );
+    expect(orphanFiles).toBe(0);
+
+    const orphanDirs = await g.falkor.graph.scalar(
+      "MATCH (d:DIRECTORY) WHERE d.path <> '.' AND NOT ()-[:HAS_ENTRY]->(d) RETURN count(d) AS n",
+    );
+    expect(orphanDirs).toBe(0);
+
+    const reachable = await g.falkor.graph.scalar(
+      "MATCH (:DIRECTORY {path: '.'})-[:HAS_ENTRY*]->(n) RETURN count(DISTINCT n) AS n",
+    );
+    const nonRootNodes = await g.falkor.graph.scalar(
+      "MATCH (n) WHERE n:FILE OR (n:DIRECTORY AND n.path <> '.') RETURN count(n) AS n",
+    );
+    expect(reachable).toBe(nonRootNodes);
+
+    const readmeRow = await g.falkor.graph.read<{ language: string }>(
+      "MATCH (f:FILE {path: 'README.md'}) RETURN f.language AS language",
+    );
+    expect(readmeRow.data[0]?.language).toBe("none");
+
+    await assertGraphInvariants(g.falkor.graph);
+    await assertSchemaConformance(g.falkor.graph, { requireIndexes: true });
+  });
+
+  test("moving a file (deleteFile + rebuild) never leaves an orphan or a duplicate", async () => {
+    workspace = await makeTmpWorkspace({
+      "src/a.ts": "export function greet(): string {\n  return 'hi';\n}\n",
+    });
+
+    const g = await graph("indexer filesystem move");
+    const store = makeStore(g);
+    await store.bootstrap();
+
+    const config = defineCpgConfig({ root: workspace.root, env: {} });
+    await indexWorkspace(config, { store, backend });
+
+    await store.writeFilesystem({
+      directories: [{ path: "lib", name: "lib", parent: "." }],
+      moves: [
+        { fromPath: "src/a.ts", toPath: "lib/a.ts", toName: "a.ts", toParent: "lib", kind: "file" },
+      ],
+    });
+
+    const moved = await g.falkor.graph.scalar(
+      "MATCH (d:DIRECTORY {path: 'lib'})-[:HAS_ENTRY]->(f:FILE {path: 'lib/a.ts'}) RETURN count(f) AS n",
+    );
+    expect(moved).toBe(1);
+    const oldPathGone = await g.falkor.graph.scalar(
+      "MATCH (f:FILE {path: 'src/a.ts'}) RETURN count(f) AS n",
+    );
+    expect(oldPathGone).toBe(0);
+    const totalFiles = await g.falkor.graph.scalar("MATCH (f:FILE) RETURN count(f) AS n");
+    expect(totalFiles).toBe(1); // moved in place, never duplicated
+
+    await assertGraphInvariants(g.falkor.graph);
+    await assertSchemaConformance(g.falkor.graph, { requireIndexes: true });
+  });
+
   test("re-running the same index yields identical counts — the per-file replace actually replaces", async () => {
     workspace = await makeTmpWorkspace({
       "a.ts": "export function greet(): string {\n  return 'hi';\n}\n",

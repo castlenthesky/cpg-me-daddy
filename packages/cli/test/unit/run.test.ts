@@ -38,4 +38,10 @@ describe("run", () => {
     expect(await run(["query"], io)).toBe(2);
     expect(io.stderr.join("\n")).toContain("exactly one <cypher>");
   });
+
+  test("watch dispatches — a malformed --port is a usage error, not a DB connection attempt", async () => {
+    const io = captureIo();
+    expect(await run(["watch", "--port", "nope"], io)).toBe(2);
+    expect(io.stderr.join("\n")).toContain("--port must be an integer");
+  });
 });

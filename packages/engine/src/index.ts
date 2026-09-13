@@ -30,4 +30,5 @@ export * from "./indexer/index";
 export * from "./parser/index";
 export * from "./schema/index";
 export * from "./store/index";
+export * from "./watch/index";
 export * from "./workspace/index";

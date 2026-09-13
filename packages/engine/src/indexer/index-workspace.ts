@@ -8,6 +8,14 @@
  * function's boundary is plain data or a web-standard `AbortSignal`, never a
  * `vscode` type, so engine purity holds for free.
  *
+ * Two tiers, one pass: every walked file gets a FILE node via the
+ * filesystem phase below (DIRECTORY/FILE/HAS_ENTRY — `store/cypher.ts`'s
+ * `planFilesystem`), independent of whether it parses. AST/CPG extraction
+ * (parse -> extractDeclarations -> writeDelta) additionally runs per file
+ * when both a grammar and a declaration adapter exist for it — an
+ * unsupported grammar or a parse failure only warns, it never blocks the
+ * FILE node the filesystem phase already wrote.
+ *
  * Per-file failures (a file that fails to parse, an adapter that throws) are
  * warnings, not aborts — one bad file must not fail an index of 10,000. A
  * `signal` abort is the one thing that stops the run early, and does so
@@ -22,10 +30,12 @@ import { adapterFor as defaultAdapterFor } from "../extract/registry";
 import type { SyntaxNode } from "../extract/syntax";
 import type { ParserBackend } from "../parser/backend";
 import type { GrammarId } from "../parser/grammars";
-import { assertGraphDeltaValid, type GraphDelta, type NodeRow } from "../schema/validate";
+import { assertGraphDeltaValid, type GraphDelta } from "../schema/validate";
+import type { FsDirectoryRow, FsFileRow } from "../store/cypher";
 import type { IGraphStore, WriteReport } from "../store/store";
 import { hashBytes } from "../workspace/hash";
-import { type WalkStats, walkWorkspace } from "../workspace/walker";
+import { baseName, ROOT_DIR_PATH } from "../workspace/paths";
+import { type DirEntry, type WalkStats, walkWorkspace } from "../workspace/walker";
 
 export interface IndexWorkspaceDeps {
   readonly store: IGraphStore;
@@ -38,7 +48,7 @@ export interface IndexWorkspaceDeps {
   readonly validate?: boolean;
 }
 
-export type IndexPhase = "walk" | "index" | "done";
+export type IndexPhase = "walk" | "index" | "filesystem" | "done";
 
 export interface IndexProgress {
   readonly phase: IndexPhase;
@@ -69,7 +79,10 @@ export interface IndexReport {
   readonly root: string;
   /** The walk's own counts (candidates seen, excluded, unsupported, too large) — computed once, here. */
   readonly walk: WalkStats;
+  /** Files given a FILE node (the filesystem tier — see `IndexPhase` "filesystem"). */
   readonly filesIndexed: number;
+  /** Directories given a DIRECTORY node, including the workspace root. */
+  readonly directoriesWritten: number;
   readonly nodesWritten: number;
   readonly edgesWritten: number;
   readonly opsExecuted: number;
@@ -78,28 +91,39 @@ export interface IndexReport {
   readonly cancelled: boolean;
 }
 
-function fileRow(input: {
+/** A DIRECTORY node row for `dir`, per the filesystem tier's own `"."`-rooted convention. */
+function fsDirectoryRow(dir: DirEntry): FsDirectoryRow {
+  return {
+    path: dir.path,
+    name: dir.path === ROOT_DIR_PATH ? ROOT_DIR_PATH : baseName(dir.path),
+    parent: dir.parent,
+  };
+}
+
+function fsFileRow(input: {
   readonly path: string;
-  readonly language: GrammarId;
+  readonly parent: string;
+  readonly language: GrammarId | null;
   readonly contentHash: string;
   readonly loc: number;
   readonly indexedAt: string;
-}): NodeRow {
+}): FsFileRow {
   return {
-    labels: ["FILE"],
-    properties: {
-      path: input.path,
-      name: input.path.split("/").pop() ?? input.path,
-      language: input.language,
-      content_hash: input.contentHash,
-      // Pinned at 1: MERGE + SET n += props resets this every run, and
-      // bumping it monotonically needs a read-modify-write this per-file
-      // writer doesn't do. M1.1 (the incremental writer) owns the fix.
-      version: 1,
-      status: "ready",
-      indexed_at: input.indexedAt,
-      loc: input.loc,
-    },
+    path: input.path,
+    name: baseName(input.path),
+    parent: input.parent,
+    // The "none" sentinel keeps FILE.language a required (cardinality "one")
+    // property with no schema change — see the filesystem-tier plan's
+    // language-property decision.
+    language: input.language ?? "none",
+    content_hash: input.contentHash,
+    status: "ready",
+    // Pinned at 1: MERGE + SET n += props resets this every run, and
+    // bumping it monotonically needs a read-modify-write this per-file
+    // writer doesn't do. M1.1 (the incremental writer) owns the fix.
+    version: 1,
+    indexed_at: input.indexedAt,
+    loc: input.loc,
   };
 }
 
@@ -137,7 +161,8 @@ export async function indexWorkspace(
   let filesIndexed = 0;
   let cancelled = false;
 
-  const { files, stats: walkStats } = await walkWorkspace(config.walk);
+  const { files, directories, stats: walkStats } = await walkWorkspace(config.walk);
+  const fsFiles: FsFileRow[] = [];
 
   hooks.onProgress?.({
     phase: "walk",
@@ -157,16 +182,6 @@ export async function indexWorkspace(
       break;
     }
 
-    const adapter = resolveAdapter(entry.language);
-    if (adapter === undefined) {
-      warn({
-        kind: "unsupported-grammar",
-        language: entry.language,
-        message: `${entry.language} has no declaration adapter yet (M0.7).`,
-      });
-      continue;
-    }
-
     let bytes: Buffer;
     try {
       bytes = await readFile(entry.absolutePath);
@@ -182,42 +197,61 @@ export async function indexWorkspace(
     const text = bytes.toString("utf8");
     const loc = text.length === 0 ? 0 : text.split("\n").length;
 
-    let delta: GraphDelta;
-    try {
-      delta = await extractFile(deps.backend, adapter, { path: entry.path, text });
-    } catch (error) {
-      warn({
-        kind: "parse-failed",
+    // Every walked file gets a FILE node via the filesystem phase below,
+    // parseable or not — that tier doesn't gate on adapter support.
+    fsFiles.push(
+      fsFileRow({
         path: entry.path,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      continue;
-    }
-
-    delta.nodes.unshift(
-      fileRow({ path: entry.path, language: entry.language, contentHash, loc, indexedAt: now() }),
+        parent: entry.parent,
+        language: entry.language,
+        contentHash,
+        loc,
+        indexedAt: now(),
+      }),
     );
 
-    if (validate) {
-      assertGraphDeltaValid(delta);
-    }
-
-    let write: WriteReport;
-    try {
-      write = await deps.store.writeDelta(delta);
-    } catch (error) {
-      warn({
-        kind: "write-failed",
-        path: entry.path,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      continue;
+    // AST/CPG extraction only applies to files with both a registered
+    // grammar and a declaration adapter for it.
+    if (entry.language !== null) {
+      const adapter = resolveAdapter(entry.language);
+      if (adapter === undefined) {
+        warn({
+          kind: "unsupported-grammar",
+          language: entry.language,
+          message: `${entry.language} has no declaration adapter yet (M0.7).`,
+        });
+      } else {
+        let delta: GraphDelta | undefined;
+        try {
+          delta = await extractFile(deps.backend, adapter, { path: entry.path, text });
+        } catch (error) {
+          warn({
+            kind: "parse-failed",
+            path: entry.path,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (delta !== undefined) {
+          if (validate) {
+            assertGraphDeltaValid(delta);
+          }
+          try {
+            const write: WriteReport = await deps.store.writeDelta(delta);
+            nodesWritten += write.nodesWritten;
+            edgesWritten += write.edgesWritten;
+            opsExecuted += write.opsExecuted;
+          } catch (error) {
+            warn({
+              kind: "write-failed",
+              path: entry.path,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
     }
 
     filesIndexed++;
-    nodesWritten += write.nodesWritten;
-    edgesWritten += write.edgesWritten;
-    opsExecuted += write.opsExecuted;
 
     hooks.onProgress?.({
       phase: "index",
@@ -232,6 +266,32 @@ export async function indexWorkspace(
   }
   /* eslint-enable no-await-in-loop */
 
+  const fsDirectories = directories.map(fsDirectoryRow);
+  let directoriesWritten = 0;
+  try {
+    const fsWrite: WriteReport = await deps.store.writeFilesystem({
+      directories: fsDirectories,
+      files: fsFiles,
+    });
+    directoriesWritten = fsDirectories.length;
+    nodesWritten += fsWrite.nodesWritten;
+    edgesWritten += fsWrite.edgesWritten;
+    opsExecuted += fsWrite.opsExecuted;
+  } catch (error) {
+    warn({
+      kind: "write-failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  hooks.onProgress?.({
+    phase: "filesystem",
+    filesTotal: files.length,
+    filesDone: filesIndexed,
+    nodesWritten,
+    edgesWritten,
+  });
+
   hooks.onProgress?.({
     phase: "done",
     filesTotal: files.length,
@@ -244,6 +304,7 @@ export async function indexWorkspace(
     root: config.root,
     walk: walkStats,
     filesIndexed,
+    directoriesWritten,
     nodesWritten,
     edgesWritten,
     opsExecuted,

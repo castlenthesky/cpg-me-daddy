@@ -135,6 +135,7 @@ describe("indexReportLines / indexSummary", () => {
       symlinksSkipped: 0,
     },
     filesIndexed: 2,
+    directoriesWritten: 1,
     nodesWritten: 10,
     edgesWritten: 5,
     opsExecuted: 3,

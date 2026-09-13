@@ -10,6 +10,7 @@
  */
 import { runIndex } from "./commands/index-cmd";
 import { runQuery } from "./commands/query-cmd";
+import { runWatch } from "./commands/watch-cmd";
 import type { Io } from "./io";
 import { USAGE } from "./usage";
 import { CLI_VERSION, versionBanner } from "./version";
@@ -31,6 +32,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
       return runIndex(rest, io);
     case "query":
       return runQuery(rest, io);
+    case "watch":
+      return runWatch(rest, io);
     default:
       io.err(`cpg: unknown command "${command}" (cpg@${CLI_VERSION}).`);
       io.err(USAGE);

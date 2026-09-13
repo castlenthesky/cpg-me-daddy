@@ -10,7 +10,8 @@ import { describe, expect, test } from "bun:test";
 
 import { NODE_LABELS } from "../../../src/schema/nodes.ts";
 import type { EdgeRow, GraphDelta, NodeRow } from "../../../src/schema/validate.ts";
-import { planDelta } from "../../../src/store/cypher.ts";
+import { planDelta, planFilesystem } from "../../../src/store/cypher.ts";
+import type { FsDirectoryRow, FsFileRow, FsMove, FsRemoval } from "../../../src/store/cypher.ts";
 
 function node(labels: string[], properties: Record<string, unknown>): NodeRow {
   return { labels, properties };
@@ -203,5 +204,175 @@ describe("planDelta — edges", () => {
   test("throws when an edge row is missing its endpoint key", () => {
     const rows = [edge("DEFINES", "METHOD", "SYMBOL", undefined, "a#f")];
     expect(() => planDelta({ nodes: [], edges: rows })).toThrow(/no fromKey/);
+  });
+});
+
+function fsDir(path: string, parent: string | undefined): FsDirectoryRow {
+  return { path, name: path === "." ? "." : path.split("/").pop()!, parent };
+}
+
+function fsFile(path: string, parent: string, language = "typescript"): FsFileRow {
+  return {
+    path,
+    name: path.split("/").pop()!,
+    parent,
+    language,
+    content_hash: "abc123",
+    status: "ready",
+    version: 1,
+    indexed_at: "2026-01-01T00:00:00.000Z",
+    loc: 1,
+  };
+}
+
+describe("planFilesystem — directories and files", () => {
+  test("MERGEs directories and files on path — never CREATE", () => {
+    const ops = planFilesystem({
+      directories: [fsDir(".", undefined), fsDir("src", ".")],
+      files: [fsFile("src/a.ts", "src")],
+    });
+    const dirOp = ops.find((op) => op.kind === "fs-node-merge" && op.group === "DIRECTORY")!;
+    expect(dirOp.cypher).toBe(
+      "UNWIND $rows AS row MERGE (d:DIRECTORY {path: row.key}) SET d += row.props",
+    );
+    const fileOp = ops.find((op) => op.kind === "fs-node-merge" && op.group === "FILE")!;
+    expect(fileOp.cypher).toBe(
+      "UNWIND $rows AS row MERGE (f:FILE {path: row.key}) SET f += row.props",
+    );
+    expect(ops.some((op) => op.cypher.includes("CREATE"))).toBe(false);
+  });
+
+  test("HAS_ENTRY links carry the WITH barrier and MERGE, never CREATE", () => {
+    const ops = planFilesystem({
+      directories: [fsDir(".", undefined), fsDir("src", ".")],
+      files: [fsFile("src/a.ts", "src")],
+    });
+    const dirLink = ops.find((op) => op.group === "HAS_ENTRY: DIRECTORY -> DIRECTORY")!;
+    expect(dirLink.cypher).toContain("WITH p, row");
+    expect(dirLink.cypher).toContain("MERGE (p)-[:HAS_ENTRY]->(c)");
+    const fileLink = ops.find((op) => op.group === "HAS_ENTRY: DIRECTORY -> FILE")!;
+    expect(fileLink.cypher).toContain("WITH p, row");
+    expect(fileLink.cypher).toContain("MERGE (p)-[:HAS_ENTRY]->(c)");
+  });
+
+  test("the workspace root (parent undefined) is merged but never linked", () => {
+    const ops = planFilesystem({ directories: [fsDir(".", undefined)] });
+    expect(ops.some((op) => op.group.startsWith("HAS_ENTRY"))).toBe(false);
+    expect(ops.some((op) => op.kind === "fs-node-merge")).toBe(true);
+  });
+
+  test("op order: directory merge, file merge, then their links", () => {
+    const ops = planFilesystem({
+      directories: [fsDir(".", undefined), fsDir("src", ".")],
+      files: [fsFile("src/a.ts", "src")],
+    });
+    const kinds = ops.map((op) => `${op.kind}:${op.group}`);
+    expect(kinds).toEqual([
+      "fs-node-merge:DIRECTORY",
+      "fs-node-merge:FILE",
+      "fs-link:HAS_ENTRY: DIRECTORY -> DIRECTORY",
+      "fs-link:HAS_ENTRY: DIRECTORY -> FILE",
+    ]);
+  });
+
+  test("still batches at the given batchSize", () => {
+    const files = Array.from({ length: 5 }, (_, i) => fsFile(`f${i}.ts`, "."));
+    const ops = planFilesystem({ files }, { batchSize: 2 });
+    const merges = ops.filter((op) => op.kind === "fs-node-merge" && op.group === "FILE");
+    expect(merges).toHaveLength(3);
+  });
+});
+
+describe("planFilesystem — removals", () => {
+  test("a file removal clears its :CPG subgraph (plain DELETE) then DETACH DELETEs the FILE node", () => {
+    const removal: FsRemoval = { path: "src/a.ts", kind: "file" };
+    const ops = planFilesystem({ removals: [removal] });
+    expect(ops[0]!.cypher).toBe("MATCH (n:CPG {file: $path}) DELETE n");
+    expect(ops[0]!.params).toEqual({ path: "src/a.ts" });
+    expect(ops[1]!.cypher).toBe("MATCH (f:FILE {path: $path}) DETACH DELETE f");
+  });
+
+  test("a directory removal deletes the whole :CPG/FILE/DIRECTORY subtree by path prefix", () => {
+    const removal: FsRemoval = { path: "src", kind: "directory" };
+    const ops = planFilesystem({ removals: [removal] });
+    expect(ops[0]!.cypher).toBe("MATCH (n:CPG) WHERE n.file STARTS WITH $prefix DELETE n");
+    expect(ops[0]!.params).toEqual({ prefix: "src/" });
+    const dirOp = ops.find((op) => op.cypher.includes("DIRECTORY"))!;
+    expect(dirOp.cypher).toContain("d.path = $path OR d.path STARTS WITH $prefix");
+    expect(dirOp.cypher).toContain("DETACH DELETE d");
+  });
+});
+
+describe("planFilesystem — moves", () => {
+  test("a file move rewrites path/name in place — no CREATE, no DETACH DELETE of the FILE itself", () => {
+    const move: FsMove = {
+      fromPath: "src/a.ts",
+      toPath: "lib/a.ts",
+      toName: "a.ts",
+      toParent: "lib",
+      kind: "file",
+    };
+    const ops = planFilesystem({ moves: [move] });
+    expect(ops[0]!.cypher).toBe("MATCH (n:CPG {file: $from}) DELETE n");
+    const rename = ops.find((op) => op.cypher.includes("SET f.path"))!;
+    expect(rename.cypher).toBe("MATCH (f:FILE {path: $from}) SET f.path = $to, f.name = $toName");
+    expect(rename.params).toEqual({ from: "src/a.ts", to: "lib/a.ts", toName: "a.ts" });
+    expect(ops.some((op) => op.cypher.includes("CREATE"))).toBe(false);
+    expect(ops.some((op) => op.cypher.includes("FILE) DETACH DELETE"))).toBe(false);
+    const relink = ops.find((op) => op.kind === "fs-link")!;
+    expect(relink.cypher).toContain("MERGE (p)-[:HAS_ENTRY]->(c)");
+  });
+
+  test("a move's relink runs AFTER directory merges — moving into a brand-new directory still links", () => {
+    // Regression: a move to a directory created in the very same batch (e.g.
+    // `mkdir lib && mv a.ts lib/a.ts` in one debounced watch batch) must not
+    // relink before that directory's own MERGE creates it.
+    const move: FsMove = {
+      fromPath: "a.ts",
+      toPath: "lib/a.ts",
+      toName: "a.ts",
+      toParent: "lib",
+      kind: "file",
+    };
+    const ops = planFilesystem({
+      directories: [fsDir("lib", ".")],
+      moves: [move],
+    });
+    const dirMergeIndex = ops.findIndex(
+      (op) => op.kind === "fs-node-merge" && op.group === "DIRECTORY",
+    );
+    const relinkIndex = ops.findIndex((op) => op.kind === "fs-link");
+    expect(dirMergeIndex).toBeGreaterThanOrEqual(0);
+    expect(relinkIndex).toBeGreaterThan(dirMergeIndex);
+  });
+
+  test("a directory move rewrites every descendant's path prefix, keeps their own names", () => {
+    const move: FsMove = {
+      fromPath: "src",
+      toPath: "lib",
+      toName: "lib",
+      toParent: ".",
+      kind: "directory",
+    };
+    const ops = planFilesystem({ moves: [move] });
+    const fileRewrite = ops.find((op) => op.cypher.includes("MATCH (f:FILE) WHERE"))!;
+    expect(fileRewrite.cypher).toBe(
+      "MATCH (f:FILE) WHERE f.path STARTS WITH $fromPrefix " +
+        "SET f.path = $to + substring(f.path, size($from))",
+    );
+    expect(fileRewrite.params).toEqual({ fromPrefix: "src/", from: "src", to: "lib" });
+    const dirRewrite = ops.find(
+      (op) => op.cypher.includes("MATCH (d:DIRECTORY) WHERE") && op.cypher.includes("SET d.path"),
+    )!;
+    expect(dirRewrite.cypher).toContain("SET d.path = $to + substring(d.path, size($from))");
+    const nameOp = ops.find(
+      (op) => op.cypher === "MATCH (d:DIRECTORY {path: $to}) SET d.name = $toName",
+    )!;
+    expect(nameOp.params).toEqual({ to: "lib", toName: "lib" });
+  });
+
+  test("planDelta still throws on a HAS_ENTRY row — planFilesystem does not weaken that guard", () => {
+    const rows = [edge("HAS_ENTRY", "DIRECTORY", "FILE", "dir:src", "src/a.ts")];
+    expect(() => planDelta({ nodes: [], edges: rows })).toThrow(/move-rename-only/);
   });
 });

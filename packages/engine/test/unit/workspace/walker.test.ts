@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("walkWorkspace", () => {
-  test("returns an exact, sorted file list", async () => {
+  test("returns an exact, sorted file list, including files with no registered grammar", async () => {
     workspace = await makeTmpWorkspace({
       "b.ts": "export const b = 1;\n",
       "a.ts": "export const a = 1;\n",
@@ -22,7 +22,7 @@ describe("walkWorkspace", () => {
 
     const { files } = await walkWorkspace({ root: workspace.root });
 
-    expect(files.map((f) => f.path)).toEqual(["a.ts", "b.ts", "nested/c.ts"]);
+    expect(files.map((f) => f.path)).toEqual(["README.md", "a.ts", "b.ts", "nested/c.ts"]);
   });
 
   test("excludes node_modules, .venv and __pycache__ without descending into them", async () => {
@@ -67,7 +67,7 @@ describe("walkWorkspace", () => {
     expect(files.map((f) => f.path)).toEqual(["packages/engine/src/index.ts"]);
   });
 
-  test("files with no registered grammar are excluded and counted", async () => {
+  test("files with no registered grammar are still emitted, with a null language, and counted", async () => {
     workspace = await makeTmpWorkspace({
       "a.ts": "export const a = 1;\n",
       "notes.md": "# not source\n",
@@ -76,7 +76,10 @@ describe("walkWorkspace", () => {
 
     const { files, stats } = await walkWorkspace({ root: workspace.root });
 
-    expect(files.map((f) => f.path)).toEqual(["a.ts"]);
+    expect(files.map((f) => f.path)).toEqual(["a.ts", "data.json", "notes.md"]);
+    expect(files.find((f) => f.path === "a.ts")?.language).toBe("typescript");
+    expect(files.find((f) => f.path === "notes.md")?.language).toBeNull();
+    expect(files.find((f) => f.path === "data.json")?.language).toBeNull();
     expect(stats.filesUnsupported).toBe(2);
   });
 
@@ -128,5 +131,33 @@ describe("walkWorkspace", () => {
 
     expect(files[0]?.path).toBe("a/b/c.ts");
     expect(files[0]?.path).not.toContain("\\");
+  });
+
+  test("emits a DirEntry per directory, root included, in pre-order with correct parents", async () => {
+    workspace = await makeTmpWorkspace({
+      "a/b/c.ts": "export const x = 1;\n",
+      "d.ts": "export const y = 1;\n",
+    });
+
+    const { directories, files } = await walkWorkspace({ root: workspace.root });
+
+    expect(directories.map((d) => d.path)).toEqual([".", "a", "a/b"]);
+    expect(directories.find((d) => d.path === ".")?.parent).toBeUndefined();
+    expect(directories.find((d) => d.path === "a")?.parent).toBe(".");
+    expect(directories.find((d) => d.path === "a/b")?.parent).toBe("a");
+
+    expect(files.find((f) => f.path === "a/b/c.ts")?.parent).toBe("a/b");
+    expect(files.find((f) => f.path === "d.ts")?.parent).toBe(".");
+  });
+
+  test("an excluded directory yields no DirEntry", async () => {
+    workspace = await makeTmpWorkspace({
+      "lib/index.ts": "export const x = 1;\n",
+      "node_modules/pkg/index.ts": "SHOULD_NEVER_APPEAR",
+    });
+
+    const { directories } = await walkWorkspace({ root: workspace.root });
+
+    expect(directories.some((d) => d.path.includes("node_modules"))).toBe(false);
   });
 });

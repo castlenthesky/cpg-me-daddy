@@ -16,11 +16,12 @@ import { walkWorkspace } from "../../../src/workspace/walker.ts";
 const FIXTURE_ROOT = join(__dirname, "../../../../../test/fixtures/code_examples/python");
 
 describe("walkWorkspace against the checked-in python fixture", () => {
-  test("yields exactly the 10 .py source files, excluding README.md and __pycache__/*.pyc", async () => {
+  test("yields the 10 .py source files plus README.md (no grammar), excluding __pycache__/*.pyc", async () => {
     const { files, stats } = await walkWorkspace({ root: FIXTURE_ROOT });
 
     expect(files.map((f) => f.path).toSorted()).toEqual(
       [
+        "README.md",
         "hello_world.py",
         "src/__init__.py",
         "src/api/__init__.py",
@@ -33,9 +34,11 @@ describe("walkWorkspace against the checked-in python fixture", () => {
         "src/services/item_service.py",
       ].toSorted(),
     );
-    expect(files.every((f) => f.language === "python")).toBe(true);
-    // README.md: no grammar. The three __pycache__/*.pyc files: pruned by
-    // directory exclusion before their extension is ever inspected.
+    expect(files.filter((f) => f.language === "python").length).toBe(10);
+    // README.md: no grammar, still emitted with a null language. The three
+    // __pycache__/*.pyc files: pruned by directory exclusion before their
+    // extension is ever inspected.
+    expect(files.find((f) => f.path === "README.md")?.language).toBeNull();
     expect(stats.filesUnsupported).toBe(1);
   });
 });
