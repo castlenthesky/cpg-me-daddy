@@ -37,15 +37,33 @@ function byId(delta: GraphDelta, id: string) {
   return node;
 }
 
+/** A node's own identity key — `id` for a `:CPG` node, `fqn` for a SYMBOL (M0.7). */
+function keyOf(node: GraphDelta["nodes"][number]): string {
+  const key = node.properties["id"] ?? node.properties["fqn"];
+  if (typeof key !== "string") {
+    throw new Error(`node has neither 'id' nor 'fqn': ${JSON.stringify(node)}`);
+  }
+  return key;
+}
+
 function idsOf(delta: GraphDelta): string[] {
-  return delta.nodes.map((n) => n.properties["id"] as string).toSorted();
+  return delta.nodes
+    .filter((n) => n.labels.includes("CPG"))
+    .map((n) => n.properties["id"] as string)
+    .toSorted();
+}
+
+function symbolFqnsOf(delta: GraphDelta): string[] {
+  return delta.nodes
+    .filter((n) => n.labels.length === 1 && n.labels[0] === "SYMBOL")
+    .map((n) => n.properties["fqn"] as string)
+    .toSorted();
 }
 
 describe("typeScriptAdapter: hello_world.ts declarations", () => {
-  test("emits exactly the expected node set", async () => {
+  test("emits exactly the expected declaration node set", async () => {
     const delta = await extract();
-    const ids = delta.nodes.map((n) => n.properties["id"] as string).toSorted();
-    expect(ids).toEqual(
+    expect(idsOf(delta)).toEqual(
       [
         `${FILE}:MODULE:hello_world`,
         `${FILE}:MEMBER:GREETING`,
@@ -55,10 +73,53 @@ describe("typeScriptAdapter: hello_world.ts declarations", () => {
         `${FILE}:PARAM:Greeter/constructor/prefix:0`,
         `${FILE}:METHOD:Greeter/greet`,
         `${FILE}:PARAM:Greeter/greet/name:0`,
+        `${FILE}:CALL:Greeter/greet/log:0`,
         `${FILE}:METHOD:greetUser`,
         `${FILE}:PARAM:greetUser/name:0`,
       ].toSorted(),
     );
+  });
+
+  test("MEMBER/METHOD/TYPE_DECL each mint their own SYMBOL (M0.7)", async () => {
+    const delta = await extract();
+    expect(symbolFqnsOf(delta)).toEqual(
+      [
+        `\`${FILE}\`/GREETING.`,
+        `\`${FILE}\`/Greeter#`,
+        `\`${FILE}\`/Greeter#prefix.`,
+        `\`${FILE}\`/Greeter#constructor().`,
+        `\`${FILE}\`/Greeter#greet().`,
+        `\`${FILE}\`/greetUser().`,
+        "site:node`console.log().",
+      ].toSorted(),
+    );
+  });
+
+  test("greet's console.log(name) call mints a CALL, an external SYMBOL, and REACHING_DEF from PARAM name", async () => {
+    const delta = await extract();
+    const call = byId(delta, `${FILE}:CALL:Greeter/greet/log:0`);
+    expect(call.properties["callee_name"]).toBe("log");
+    expect(call.properties["receiver_text"]).toBe("console");
+    expect(call.properties["args_count"]).toBe(1);
+    expect(call.properties["kind"]).toBe("call");
+
+    const inScope = delta.edges.find(
+      (e) => e.type === "IN_SCOPE" && e.fromKey === call.properties["id"],
+    );
+    expect(inScope?.toKey).toBe(`${FILE}:METHOD:Greeter/greet`);
+
+    const calls = delta.edges.find(
+      (e) => e.type === "CALLS" && e.fromKey === call.properties["id"],
+    );
+    expect(calls?.toKey).toBe("site:node`console.log().");
+    expect(calls?.properties["status"]).toBe("external");
+
+    const reachingDef = delta.edges.find(
+      (e) => e.type === "REACHING_DEF" && e.toKey === call.properties["id"],
+    );
+    expect(reachingDef?.fromLabel).toBe("PARAM");
+    expect(reachingDef?.fromKey).toBe(`${FILE}:PARAM:Greeter/greet/name:0`);
+    expect(reachingDef?.properties["variable"]).toBe("name");
   });
 
   test("export_statement is unwrapped: the top-level const, class and function are all exported=true", async () => {
@@ -108,11 +169,11 @@ describe("typeScriptAdapter: hello_world.ts declarations", () => {
 
   test("every edge's fromKey/toKey resolves to a node actually in this delta", async () => {
     const delta = await extract();
-    const ids = new Set(delta.nodes.map((n) => n.properties["id"]));
+    const keys = new Set(delta.nodes.map(keyOf));
     expect(delta.edges.length).toBeGreaterThan(0);
     for (const edge of delta.edges) {
-      expect(ids.has(edge.fromKey)).toBe(true);
-      expect(ids.has(edge.toKey)).toBe(true);
+      expect(keys.has(edge.fromKey!)).toBe(true);
+      expect(keys.has(edge.toKey!)).toBe(true);
     }
   });
 
@@ -137,11 +198,10 @@ describe("typeScriptAdapter: hello_world.ts declarations", () => {
     const after = await extract(`// a leading comment\n${SOURCE}`);
 
     expect(idsOf(after)).toEqual(idsOf(before));
+    expect(symbolFqnsOf(after)).toEqual(symbolFqnsOf(before));
 
     for (const beforeNode of before.nodes) {
-      const afterNode = after.nodes.find(
-        (n) => n.properties["id"] === beforeNode.properties["id"],
-      )!;
+      const afterNode = after.nodes.find((n) => keyOf(n) === keyOf(beforeNode))!;
       const { range: _beforeRange, ...beforeRest } = beforeNode.properties;
       const { range: _afterRange, ...afterRest } = afterNode.properties;
       expect(afterRest).toEqual(beforeRest);

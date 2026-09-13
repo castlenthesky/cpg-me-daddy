@@ -457,7 +457,11 @@ export const NODE_LABELS = [
         type: "string",
         cardinality: "one",
         golden: "include",
-        doc: "SCIP descriptor grammar, e.g. `src/users.ts`/UserService#findById(). UNIQUE constraint.",
+        doc:
+          "Owner-prefixed SCIP descriptor grammar (M0.7/M0.9): a workspace-local symbol is " +
+          "`` `<path>`/<descriptors> ``, e.g. `` `src/users.ts`/UserService#findById(). ``; an " +
+          "external symbol is `` <scheme>:<package>`<descriptors> ``, e.g. `` site:node`console.log(). ``. " +
+          "UNIQUE constraint.",
       },
       {
         name: "scheme",
@@ -501,7 +505,7 @@ export const NODE_LABELS = [
         "confirmed independently by Security, Identity and Standards. Load-bearing, non-negotiable.",
       source: "R6 node table",
     },
-    firstWrittenIn: "M0.10",
+    firstWrittenIn: "M0.7",
     doc: "Cross-file identity anchor. Not :CPG and has no `file` — a per-file delete cannot touch it (D5).",
   },
   {

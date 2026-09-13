@@ -51,6 +51,7 @@ class FakeNode implements SyntaxNode {
 /** A minimal adapter over a made-up grammar: fake_module/fake_class/fake_method/fake_member/fake_param. */
 const fakeAdapter: LanguageAdapter = {
   grammarId: "python", // arbitrary — unused beyond satisfying the type
+  language: "fake",
   moduleRootType: "fake_module",
   moduleName(path: string): string {
     return path
@@ -119,8 +120,10 @@ describe("extractDeclarations: generic walking behavior", () => {
     const delta = extractDeclarations({ path: "a.fake", root, adapter: fakeAdapter });
     assertGraphDeltaValid(delta);
 
-    const ids = delta.nodes.map((n) => n.properties["id"]);
-    expect(ids.toSorted()).toEqual(
+    const cpgIds = delta.nodes
+      .filter((n) => n.labels.includes("CPG"))
+      .map((n) => n.properties["id"]);
+    expect(cpgIds.toSorted()).toEqual(
       [
         "a.fake:MODULE:a",
         "a.fake:TYPE_DECL:A",
@@ -130,15 +133,23 @@ describe("extractDeclarations: generic walking behavior", () => {
       ].toSorted(),
     );
 
+    // TYPE_DECL and METHOD each mint their own SYMBOL (M0.7/M0.9) — same
+    // scope-frame chain as their node id, rendered as an fqn instead.
+    const symbolFqns = delta.nodes
+      .filter((n) => n.labels.length === 1 && n.labels[0] === "SYMBOL")
+      .map((n) => n.properties["fqn"]);
+    expect(symbolFqns.toSorted()).toEqual(["`a.fake`/A#", "`a.fake`/A#b()."].toSorted());
+
     const methodNode = delta.nodes.find((n) => n.labels.includes("METHOD"))!;
     expect(methodNode.properties["kind"]).toBe("method"); // inside a TYPE_DECL body
     expect(methodNode.properties["params_count"]).toBe(2);
 
-    // Every edge's fromKey/toKey resolves to a real node emitted in this same delta.
-    const nodeIds = new Set(ids);
+    // Every edge's fromKey/toKey resolves to a real node emitted in this
+    // same delta — a :CPG node by its `id`, a SYMBOL by its `fqn`.
+    const nodeKeys = new Set([...cpgIds, ...symbolFqns]);
     for (const edge of delta.edges) {
-      expect(nodeIds.has(edge.fromKey)).toBe(true);
-      expect(nodeIds.has(edge.toKey)).toBe(true);
+      expect(nodeKeys.has(edge.fromKey)).toBe(true);
+      expect(nodeKeys.has(edge.toKey)).toBe(true);
     }
 
     // params_count agrees with the actual number of HAS_PARAM edges — a real

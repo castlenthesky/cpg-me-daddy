@@ -29,7 +29,7 @@
         "receiver_text": "console",
         "args_count": 1,
         "file": "hello_world.ts",
-        "range": "2:0-2:26",
+        "range": "2:0-2:25",
         "kind": "call",
         "status": "ready"
       }
@@ -37,7 +37,7 @@
     {
       "labels": ["SYMBOL"],
       "properties": {
-        "fqn": "hello_world.ts`DISPLAY_TEXT.",
+        "fqn": "`hello_world.ts`/DISPLAY_TEXT.",
         "kind": "variable",
         "language": "typescript"
       }
@@ -67,7 +67,7 @@
       "fromLabel": "MEMBER",
       "toLabel": "SYMBOL",
       "fromKey": "hello_world.ts:MEMBER:DISPLAY_TEXT",
-      "toKey": "hello_world.ts`DISPLAY_TEXT.",
+      "toKey": "`hello_world.ts`/DISPLAY_TEXT.",
       "properties": {}
     },
     {

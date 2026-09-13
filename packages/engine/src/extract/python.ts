@@ -1,5 +1,6 @@
 /**
- * The Python declaration adapter (M0.8's declarations slice).
+ * The Python declaration and call adapter (M0.8's declarations slice,
+ * extended by M0.9 with calls/SYMBOLs/data flow).
  *
  * Node-type shapes below were verified empirically against the pinned
  * `web-tree-sitter` + `@vscode/tree-sitter-wasm` grammar (see the field
@@ -9,19 +10,35 @@
  * Deliberately NOT handled in this slice (classify() returns `undefined`,
  * or a case is simply absent) — each is a documented, later gap, not an
  * oversight: `decorated_definition` (decorators — `@dataclass`, `@property`
- * getters/setters, `@staticmethod`); `*args`/`**kwargs` (best-effort name
- * only, no splat marker property yet); tuple-unpacking or attribute
- * assignment as a MEMBER target; `__all__`-based export control.
+ * getters/setters, `@staticmethod`) — undecorated today, so a decorated
+ * function is invisible as a declaration AND (M0.9) as a call region;
+ * `*args`/`**kwargs` (best-effort name only, no splat marker property yet);
+ * tuple-unpacking or attribute assignment as a MEMBER target; `__all__`-
+ * based export control.
+ *
+ * `classifyExpression` (M0.9) mirrors `./typescript.ts`'s narrowness:
+ * `call` is minted as CALL; `lambda` is transparent (a single-expression
+ * inline callback, not itself declared); a nested NAMED `function_
+ * definition`/`class_definition` is a hard stop. Receiver-qualified calls
+ * are attributed only for `self.foo()` (`local-this`) — a stdlib
+ * module-qualified call (`os.path.join(...)`) is NOT attributed in this
+ * slice (no module-name table exists yet), unlike TS's bare-global table;
+ * only BARE Python builtins (`print`, `len`, …) resolve.
  */
 import type {
+  ArgInfo,
+  BuiltinTarget,
+  CalleeAttribution,
   ContainerKind,
   DeclarationInfo,
+  ExpressionVerdict,
   LanguageAdapter,
   MemberInfo,
   MethodInfo,
   ParamInfo,
   TypeDeclInfo,
 } from "./adapter";
+import { PYTHON_BUILTIN_NAMES } from "./builtins/python-stdlib";
 import type { SyntaxNode } from "./syntax";
 
 /** Strips a Python string literal's quote delimiters (incl. triple-quoted, `f`/`r`/`b` prefixed). */
@@ -122,6 +139,7 @@ function classifyFunction(node: SyntaxNode, isMethodOfClass: boolean): MethodInf
     async,
     docstringHead: leadingDocstring(node.childForFieldName("body")),
     params,
+    body: node.childForFieldName("body") ?? undefined,
   };
 }
 
@@ -156,11 +174,137 @@ function classifyAssignment(node: SyntaxNode): MemberInfo | undefined {
     declares: "MEMBER",
     name: left.text,
     typeText: inner.childForFieldName("type")?.text,
+    value: inner.childForFieldName("right") ?? undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Pass B: calls (M0.9).
+// ---------------------------------------------------------------------------
+
+const TRANSPARENT_TYPES = new Set(["lambda"]);
+const STOP_TYPES = new Set(["function_definition", "class_definition"]);
+
+interface CalleeShape {
+  readonly calleeName: string;
+  readonly receiverText?: string;
+  readonly receiverNode?: SyntaxNode;
+}
+
+/** `identifier` (bare) or `attribute` (`object.attribute`) — the two callee shapes this slice attributes. */
+function calleeShape(fn: SyntaxNode): CalleeShape | undefined {
+  if (fn.type === "identifier") {
+    return { calleeName: fn.text };
+  }
+  if (fn.type === "attribute") {
+    const object = fn.childForFieldName("object");
+    const attribute = fn.childForFieldName("attribute");
+    if (object === null || attribute?.type !== "identifier") {
+      return undefined;
+    }
+    return { calleeName: attribute.text, receiverText: object.text, receiverNode: object };
+  }
+  return undefined; // A subscript/call/parenthesized callee — no stable name.
+}
+
+function attributeCallee(shape: CalleeShape): CalleeAttribution {
+  if (shape.receiverNode === undefined) {
+    const fallback: BuiltinTarget | undefined = PYTHON_BUILTIN_NAMES.has(shape.calleeName)
+      ? {
+          scheme: "site",
+          package: "python-stdlib",
+          segments: [{ kind: "method", name: shape.calleeName }],
+        }
+      : undefined;
+    return { kind: "local-name", name: shape.calleeName, fallback };
+  }
+  // Python's `self` is a plain bound identifier, not its own node type
+  // (unlike TS's `this`) — the receiver text IS the check.
+  if (shape.receiverNode.type === "identifier" && shape.receiverNode.text === "self") {
+    return { kind: "local-this", name: shape.calleeName };
+  }
+  // No stdlib-module-name table exists yet — `os.path.join(...)`-shaped
+  // calls are unattributed in this slice, unlike TS's bare-global table.
+  return { kind: "none" };
+}
+
+/** A Python `keyword_argument` unwraps to its own `value` field; everything else is checked as-is. */
+function argInfoFor(node: SyntaxNode): ArgInfo {
+  if (node.type === "keyword_argument") {
+    const value = node.childForFieldName("value");
+    return { node, identifier: value?.type === "identifier" ? value.text : undefined };
+  }
+  return { node, identifier: node.type === "identifier" ? node.text : undefined };
+}
+
+function argInfos(argumentsNode: SyntaxNode | null): readonly ArgInfo[] {
+  return (argumentsNode?.namedChildren ?? []).map(argInfoFor);
+}
+
+function classifyCall(node: SyntaxNode): ExpressionVerdict | undefined {
+  const fn = node.childForFieldName("function");
+  if (fn === null) {
+    return undefined;
+  }
+  const shape = calleeShape(fn);
+  if (shape === undefined) {
+    return undefined;
+  }
+  return {
+    emits: "CALL",
+    kind: "call",
+    calleeName: shape.calleeName,
+    receiverText: shape.receiverText,
+    args: argInfos(node.childForFieldName("arguments")),
+    callee: attributeCallee(shape),
+  };
+}
+
+function classifyExpressionPy(node: SyntaxNode): ExpressionVerdict | undefined {
+  switch (node.type) {
+    case "call":
+      return classifyCall(node);
+    default:
+      if (TRANSPARENT_TYPES.has(node.type)) {
+        return { emits: "none", descend: "transparent" };
+      }
+      if (STOP_TYPES.has(node.type)) {
+        return { emits: "none", descend: "stop" };
+      }
+      return undefined;
+  }
+}
+
+/**
+ * Every name a region's own body binds locally via a plain `NAME = value`
+ * assignment — shadows an outer MEMBER/PARAM of the same name for
+ * REACHING_DEF. `for`/`with`/`except` binders are a known, documented gap
+ * (matching `./typescript.ts`'s equivalent scope).
+ */
+function localBindingsPy(regionRoot: SyntaxNode): readonly string[] {
+  const names: string[] = [];
+  function visit(node: SyntaxNode): void {
+    if (node.type === "assignment") {
+      const left = node.childForFieldName("left");
+      if (left?.type === "identifier") {
+        names.push(left.text);
+      }
+      return; // The RHS is walked separately, by Pass B's own descent.
+    }
+    if (TRANSPARENT_TYPES.has(node.type) || STOP_TYPES.has(node.type)) {
+      return; // A nested function's own locals are that region's own concern, not this one's.
+    }
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+  visit(regionRoot);
+  return names;
 }
 
 export const pythonAdapter: LanguageAdapter = {
   grammarId: "python",
+  language: "python",
   moduleRootType: "module",
   moduleName(path: string): string {
     const base = path.split("/").pop() ?? path;
@@ -178,4 +322,6 @@ export const pythonAdapter: LanguageAdapter = {
         return undefined;
     }
   },
+  classifyExpression: classifyExpressionPy,
+  localBindings: localBindingsPy,
 };

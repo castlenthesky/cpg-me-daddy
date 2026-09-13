@@ -26,6 +26,8 @@ export interface AddEdgeInput {
 export class DeltaBuilder {
   private readonly nodeRows: NodeRow[] = [];
   private readonly edgeRows: EdgeRow[] = [];
+  private readonly symbolRows: NodeRow[] = [];
+  private readonly seenSymbolFqns = new Set<string>();
 
   constructor(private readonly file: string) {}
 
@@ -37,6 +39,25 @@ export class DeltaBuilder {
     }
     const labels = spec.cpgCoLabel ? ["CPG", label] : [label];
     this.nodeRows.push({ labels, properties });
+  }
+
+  /**
+   * Adds one SYMBOL row, deduped on `fqn` (two calls to the same external
+   * function must mint exactly one SYMBOL) and held apart from `nodeRows`
+   * so `build()` can place every SYMBOL after every `:CPG` node — the order
+   * both golden fixtures use, and the order `checkGraphInvariants`' orphan
+   * check depends on nothing but edges to satisfy anyway.
+   */
+  addSymbol(properties: Record<string, unknown>): void {
+    const fqn = properties["fqn"];
+    if (typeof fqn !== "string") {
+      throw new Error("DeltaBuilder.addSymbol: 'fqn' must be a string.");
+    }
+    if (this.seenSymbolFqns.has(fqn)) {
+      return;
+    }
+    this.seenSymbolFqns.add(fqn);
+    this.symbolRows.push({ labels: ["SYMBOL"], properties });
   }
 
   /** Adds one edge row, with the real node keys it connects. */
@@ -53,6 +74,10 @@ export class DeltaBuilder {
 
   /** Freezes the accumulated rows into a `GraphDelta` ready for `assertGraphDeltaValid()`. */
   build(): GraphDelta {
-    return { file: this.file, nodes: [...this.nodeRows], edges: [...this.edgeRows] };
+    return {
+      file: this.file,
+      nodes: [...this.nodeRows, ...this.symbolRows],
+      edges: [...this.edgeRows],
+    };
   }
 }

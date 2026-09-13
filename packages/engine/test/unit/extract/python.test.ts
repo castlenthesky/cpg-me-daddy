@@ -39,15 +39,33 @@ function byId(delta: GraphDelta, id: string) {
   return node;
 }
 
+/** A node's own identity key — `id` for a `:CPG` node, `fqn` for a SYMBOL (M0.9). */
+function keyOf(node: GraphDelta["nodes"][number]): string {
+  const key = node.properties["id"] ?? node.properties["fqn"];
+  if (typeof key !== "string") {
+    throw new Error(`node has neither 'id' nor 'fqn': ${JSON.stringify(node)}`);
+  }
+  return key;
+}
+
 function idsOf(delta: GraphDelta): string[] {
-  return delta.nodes.map((n) => n.properties["id"] as string).toSorted();
+  return delta.nodes
+    .filter((n) => n.labels.includes("CPG"))
+    .map((n) => n.properties["id"] as string)
+    .toSorted();
+}
+
+function symbolFqnsOf(delta: GraphDelta): string[] {
+  return delta.nodes
+    .filter((n) => n.labels.length === 1 && n.labels[0] === "SYMBOL")
+    .map((n) => n.properties["fqn"] as string)
+    .toSorted();
 }
 
 describe("pythonAdapter: hello_world.py declarations", () => {
-  test("emits exactly the expected node set", async () => {
+  test("emits exactly the expected declaration node set", async () => {
     const delta = await extract();
-    const ids = delta.nodes.map((n) => n.properties["id"] as string).toSorted();
-    expect(ids).toEqual(
+    expect(idsOf(delta)).toEqual(
       [
         `${FILE}:MODULE:hello_world`,
         `${FILE}:MEMBER:GREETING`,
@@ -59,10 +77,53 @@ describe("pythonAdapter: hello_world.py declarations", () => {
         `${FILE}:METHOD:Greeter/greet`,
         `${FILE}:PARAM:Greeter/greet/self:0`,
         `${FILE}:PARAM:Greeter/greet/name:1`,
+        `${FILE}:CALL:Greeter/greet/print:0`,
         `${FILE}:METHOD:greet_user`,
         `${FILE}:PARAM:greet_user/name:0`,
       ].toSorted(),
     );
+  });
+
+  test("MEMBER/METHOD/TYPE_DECL each mint their own SYMBOL (M0.9)", async () => {
+    const delta = await extract();
+    expect(symbolFqnsOf(delta)).toEqual(
+      [
+        `\`${FILE}\`/GREETING.`,
+        `\`${FILE}\`/Greeter#`,
+        `\`${FILE}\`/Greeter#prefix.`,
+        `\`${FILE}\`/Greeter#__init__().`,
+        `\`${FILE}\`/Greeter#greet().`,
+        `\`${FILE}\`/greet_user().`,
+        "site:python-stdlib`print().",
+      ].toSorted(),
+    );
+  });
+
+  test("greet's print(name) call mints a CALL, an external SYMBOL, and REACHING_DEF from PARAM name", async () => {
+    const delta = await extract();
+    const call = byId(delta, `${FILE}:CALL:Greeter/greet/print:0`);
+    expect(call.properties["callee_name"]).toBe("print");
+    expect(call.properties["receiver_text"]).toBeUndefined();
+    expect(call.properties["args_count"]).toBe(1);
+    expect(call.properties["kind"]).toBe("call");
+
+    const inScope = delta.edges.find(
+      (e) => e.type === "IN_SCOPE" && e.fromKey === call.properties["id"],
+    );
+    expect(inScope?.toKey).toBe(`${FILE}:METHOD:Greeter/greet`);
+
+    const calls = delta.edges.find(
+      (e) => e.type === "CALLS" && e.fromKey === call.properties["id"],
+    );
+    expect(calls?.toKey).toBe("site:python-stdlib`print().");
+    expect(calls?.properties["status"]).toBe("external");
+
+    const reachingDef = delta.edges.find(
+      (e) => e.type === "REACHING_DEF" && e.toKey === call.properties["id"],
+    );
+    expect(reachingDef?.fromLabel).toBe("PARAM");
+    expect(reachingDef?.fromKey).toBe(`${FILE}:PARAM:Greeter/greet/name:1`);
+    expect(reachingDef?.properties["variable"]).toBe("name");
   });
 
   test("MODULE carries the right properties", async () => {
@@ -154,11 +215,11 @@ describe("pythonAdapter: hello_world.py declarations", () => {
 
   test("every edge's fromKey/toKey resolves to a node actually in this delta", async () => {
     const delta = await extract();
-    const ids = new Set(delta.nodes.map((n) => n.properties["id"]));
+    const keys = new Set(delta.nodes.map(keyOf));
     expect(delta.edges.length).toBeGreaterThan(0);
     for (const edge of delta.edges) {
-      expect(ids.has(edge.fromKey)).toBe(true);
-      expect(ids.has(edge.toKey)).toBe(true);
+      expect(keys.has(edge.fromKey!)).toBe(true);
+      expect(keys.has(edge.toKey!)).toBe(true);
     }
   });
 
@@ -184,13 +245,12 @@ describe("pythonAdapter: hello_world.py declarations", () => {
     const after = await extract(`# a leading comment\n${SOURCE}`);
 
     expect(idsOf(after)).toEqual(idsOf(before));
+    expect(symbolFqnsOf(after)).toEqual(symbolFqnsOf(before));
 
     // And the thing that DID change is exactly what should have: every
     // node's range shifted down by one line, nothing else.
     for (const beforeNode of before.nodes) {
-      const afterNode = after.nodes.find(
-        (n) => n.properties["id"] === beforeNode.properties["id"],
-      )!;
+      const afterNode = after.nodes.find((n) => keyOf(n) === keyOf(beforeNode))!;
       const { range: _beforeRange, ...beforeRest } = beforeNode.properties;
       const { range: _afterRange, ...afterRest } = afterNode.properties;
       expect(afterRest).toEqual(beforeRest);
@@ -202,13 +262,15 @@ describe("pythonAdapter: hello_world.py declarations", () => {
     const withSiblingAbove = `def inserted_above():\n    pass\n\n\n${SOURCE}`;
     const after = await extract(withSiblingAbove);
 
-    const beforeIds = new Set(before.nodes.map((n) => n.properties["id"]));
-    const afterIds = new Set(after.nodes.map((n) => n.properties["id"]));
-    for (const id of beforeIds) {
-      expect(afterIds.has(id)).toBe(true);
+    const beforeKeys = new Set(before.nodes.map(keyOf));
+    const afterKeys = new Set(after.nodes.map(keyOf));
+    for (const key of beforeKeys) {
+      expect(afterKeys.has(key)).toBe(true);
     }
-    // Exactly the new function's own id is added; nothing else.
-    const added = [...afterIds].filter((id) => !beforeIds.has(id));
-    expect(added).toEqual([`${FILE}:METHOD:inserted_above`]);
+    // Exactly the new function's own id and its own SYMBOL are added; nothing else.
+    const added = [...afterKeys].filter((key) => !beforeKeys.has(key));
+    expect(added.toSorted()).toEqual(
+      [`${FILE}:METHOD:inserted_above`, `\`${FILE}\`/inserted_above().`].toSorted(),
+    );
   });
 });

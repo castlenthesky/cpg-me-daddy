@@ -12,6 +12,7 @@ class Greeter:
         self.prefix = prefix
 
     def greet(self, name: str) -> str:
+        print(name)
         return f"{self.prefix}, {name}"
 
 
