@@ -1,0 +1,62 @@
+# The cpg-owned FalkorDB for REAL indexed data — what `cpg index` writes to
+# by default (packages/engine/src/store/falkordb.config.ts's CPG_DEV_ENDPOINT,
+# 127.0.0.1:6382). Unrelated to docker/falkordb.yml, the integration test
+# harness on 6381, which is in-memory, wiped by `bun run db:down`, and
+# hard-refuses any graph key not prefixed `cpg_test_`.
+#
+# `name:` is pinned for the same reason falkordb.yml pins one: two compose
+# files in the same directory would otherwise share a project, and this
+# instance must never be an "orphan" a harness `down --remove-orphans` (or a
+# shell with COMPOSE_REMOVE_ORPHANS=true) can sweep away.
+#
+# Persistence is the whole point, and is the opposite of the test harness on
+# purpose:
+#   - AOF (everysec) + RDB snapshots + a named volume, so a real index
+#     survives a laptop reboot. M0.11's manual sign-off is a multi-session
+#     read-by-hand; losing the index to a restart means re-running the whole
+#     pipeline before you can resume.
+#   - `restart: unless-stopped` — the test harness deliberately has no
+#     restart policy; this one should just come back.
+#   - `maxmemory-policy noeviction` — with a memory cap set, the default
+#     eviction policy can silently DELETE graph data under pressure. Fail
+#     loudly (OOM) instead.
+#
+# FALKORDB_ARGS are identical to the test harness's, deliberately.
+# TIMEOUT_DEFAULT 30000 is not a test-only tuning knob: recent images ship a
+# 1000ms default that silently rolls back long writes (FalkorDB issue #1826),
+# which matters MORE during a bulk `cpg index` than during a short test.
+#
+# The bundled FalkorDB Browser is published on 3034. Unlike the test
+# harness's copy, treat it as READ-WRITE: it runs arbitrary Cypher, including
+# `MATCH (n) DETACH DELETE n`, against data you may have spent real time
+# building.
+#
+# Why not F3's DockerServerManager (packages/falkordb-service/src/services/server/docker.ts)?
+# It runs `docker run --rm` with an OS-chosen port — exactly right for a
+# throwaway `cpg index` run with nothing pre-existing, exactly wrong for a
+# persistent, port-stable, browsable database. Keep Compose here; the engine
+# talks to it in `mode: remote`.
+name: cpg-dev
+services:
+  falkordb:
+    image: falkordb/falkordb:v4.20.4
+    container_name: cpg-dev-falkordb
+    ports:
+      - "127.0.0.1:${CPG_DEV_FALKORDB_PORT:-6382}:6379"
+      - "127.0.0.1:${CPG_DEV_FALKORDB_UI_PORT:-3034}:3000"
+    environment:
+      FALKORDB_ARGS: ${FALKORDB_ARGS:-TIMEOUT_DEFAULT 30000 TIMEOUT_MAX 60000 CACHE_SIZE 200 NODE_CREATION_BUFFER 65536}
+      REDIS_ARGS: >-
+        --appendonly yes --appendfsync everysec
+        --save 900 1 --save 300 100
+        --dir /data --maxmemory-policy noeviction
+    volumes:
+      - cpg-dev-falkordb-data:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+volumes:
+  cpg-dev-falkordb-data:
+    name: cpg-dev-falkordb-data

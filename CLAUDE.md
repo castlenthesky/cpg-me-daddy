@@ -34,11 +34,18 @@ The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.projec
   `cpg_test_`. Any of the three failing is a hard error. Never relax this into "something answered on the
   port" — `docker compose up` can fail with *port is already allocated* while `PING` on that port still
   answers, from the container that already owns it.
+- **Real data lives on the cpg-owned dev instance, 127.0.0.1:6382 — never on the test harness.**
+  `docker/falkordb.dev.yml` is a separate, persistent FalkorDB (`bun run db:dev:up`), with its own
+  provenance handshake and its own compose project (`name: cpg-dev`, vs. the harness's `name: cpg-test`
+  — both pinned so the two never share a project and one can't become an "orphan" the other's `down`
+  sweeps away). Unlike the harness, it survives restarts (AOF + RDB + a named volume) and its Browser UI
+  (`http://127.0.0.1:3034`) is read-write. `packages/engine/src/store/open.ts`'s `openCpgStore` refuses to
+  connect to port 6381 or any `cpg_test_`-prefixed graph, so nothing can point real data at the harness.
 - **The `falkordb-local` / `falkordb-dev` MCP servers are a different FalkorDB integration, unrelated
   to this project.** Never read or write this project's graphs through them. Interrogate only the
   instance this project's own tooling spins up: the integration harness above (127.0.0.1:6381, which
-  itself refuses any non-`cpg_test_`-prefixed graph key), or a cpg-owned instance for real data
-  (`defineCpgFalkorConfig`, M0.11-lite's `cpg index`/`cpg query`).
+  itself refuses any non-`cpg_test_`-prefixed graph key), or the cpg-owned dev instance for real data
+  (127.0.0.1:6382, `defineCpgDevFalkorConfig`, M0.11-lite's `cpg index`/`cpg query`).
 - **Legacy trees are reference only.** The top-level `src/`, `test/`, `scripts/`, `out/`, `media/`,
   `resources/`, `build/` are the pre-monorepo prototype. They are excluded from the workspace build,
   from oxlint and from oxfmt. Do not extend them; later M0 units consume `src/types/cpg.ts` and then
@@ -55,9 +62,13 @@ The delivery plan lives in `.agent/knowledge/planning-sessions/2026-09-11.projec
 | `bun run typecheck` | `tsc --build` across the project references, then the no-emit test/tools pass |
 | `bun run watch` | `tsc --build --watch` |
 | `bun run test:unit` | `bun test` for all four packages. DB-free by design |
-| `bun run db:up` | Start the pinned FalkorDB (docker/falkordb.yml, 127.0.0.1:6381) and verify provenance |
+| `bun run db:up` | Start the pinned test-harness FalkorDB (docker/falkordb.yml, 127.0.0.1:6381) and verify provenance |
 | `bun run db:down` | Stop it and discard its volume + provenance record |
 | `bun run test:integration` | `bun test` against that live FalkorDB |
+| `bun run db:dev:up` | Start the cpg-owned dev FalkorDB (docker/falkordb.dev.yml, 127.0.0.1:6382) for real `cpg index` data; prints the Browser URL |
+| `bun run db:dev:stop` | Stop it, keeping its container and volume |
+| `bun run db:dev:down` | Remove the container, **keeping the volume** — unlike `db:down`, a real index survives this |
+| `bun run db:dev:reset` | Permanently delete the dev volume. Requires `CPG_DEV_DB_DESTROY=1` too — never fires by accident |
 | `bun run test:integration:network` | Also runs F3's download + redis-server spawn suite. Opt-in, never in CI. |
 
 Run the extension with the "Run Extension" launch configuration (F5); it points at `packages/vscode`.

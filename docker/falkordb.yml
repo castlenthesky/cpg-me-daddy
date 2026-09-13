@@ -29,6 +29,14 @@
 # `cpg_test_`, and `db:down` throws all of it away. It is not where real cpg
 # data lives; once M0.11-lite's `cpg index` exists, that points at a
 # cpg-owned instance via `defineCpgFalkorConfig`, never at this harness.
+#
+# `name:` is pinned rather than left to derive from the containing directory.
+# docker/falkordb.dev.yml lives in this same directory and, without an
+# explicit name, both files would land in the SAME compose project — making
+# the dev instance an "orphan" of `bun run db:down` (any `--remove-orphans`,
+# or a shell with COMPOSE_REMOVE_ORPHANS=true, would then destroy it). Two
+# files, two pinned names, two blast radii.
+name: cpg-test
 services:
   falkordb:
     image: falkordb/falkordb:v4.20.4
