@@ -20,6 +20,7 @@
  * for a later unit; `docstring_head` is `zeroOrOne` so this is a silent,
  * legal omission, not a schema violation.
  */
+import type { GrammarId } from "../parser/grammars";
 import type {
   ContainerKind,
   DeclarationInfo,
@@ -171,21 +172,41 @@ function classifyInner(
   }
 }
 
-export const typeScriptAdapter: LanguageAdapter = {
-  grammarId: "typescript",
-  moduleRootType: "program",
-  moduleName(path: string): string {
-    const base = path.split("/").pop() ?? path;
-    return base.replace(/\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/, "");
-  },
-  classify(node: SyntaxNode, container: ContainerKind): DeclarationInfo | undefined {
-    if (node.type === "export_statement") {
-      const inner = node.childForFieldName("declaration");
-      if (inner === null || inner === undefined) {
-        return undefined; // `export { x }` / `export default expr` — deferred.
+/**
+ * Builds the adapter for either the `typescript` or the `tsx` grammar. A
+ * factory, not a single shared object with the `grammarId` swapped after the
+ * fact: the tsx and typescript grammars are generated from the same
+ * `grammar.js` and emit identical node type names for everything this
+ * adapter classifies (`class_declaration`, `method_definition`,
+ * `public_field_definition`, …) plus JSX-only ones this adapter simply never
+ * matches — so the classification logic is genuinely shared, not
+ * approximated. `extractFile` calls `backend.parse(adapter.grammarId, text)`,
+ * so the id must actually be `"tsx"` for a `.tsx` file or it gets parsed by
+ * the TypeScript grammar and yields an ERROR tree (see `grammars.ts`'s module
+ * doc on why the two are not interchangeable).
+ */
+export function makeTypeScriptAdapter(
+  grammarId: Extract<GrammarId, "typescript" | "tsx">,
+): LanguageAdapter {
+  return {
+    grammarId,
+    moduleRootType: "program",
+    moduleName(path: string): string {
+      const base = path.split("/").pop() ?? path;
+      return base.replace(/\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/, "");
+    },
+    classify(node: SyntaxNode, container: ContainerKind): DeclarationInfo | undefined {
+      if (node.type === "export_statement") {
+        const inner = node.childForFieldName("declaration");
+        if (inner === null || inner === undefined) {
+          return undefined; // `export { x }` / `export default expr` — deferred.
+        }
+        return classifyInner(inner, container, true);
       }
-      return classifyInner(inner, container, true);
-    }
-    return classifyInner(node, container, false);
-  },
-};
+      return classifyInner(node, container, false);
+    },
+  };
+}
+
+export const typeScriptAdapter: LanguageAdapter = makeTypeScriptAdapter("typescript");
+export const tsxAdapter: LanguageAdapter = makeTypeScriptAdapter("tsx");

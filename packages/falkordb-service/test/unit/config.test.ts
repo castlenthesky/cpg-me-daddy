@@ -119,3 +119,60 @@ describe("precedence and validation", () => {
     expect(defineFalkorConfig({ env: {}, home: HOME }).branding).toEqual(DEFAULT_BRANDING);
   });
 });
+
+describe("defaults precedence layer", () => {
+  test("a host default is used when neither input nor env set a value", () => {
+    const config = defineFalkorConfig({
+      env: {},
+      home: HOME,
+      defaults: { connection: { host: "127.0.0.1", port: 6382, graph: "cpg" } },
+    });
+    expect(config.connection.host).toBe("127.0.0.1");
+    expect(config.connection.port).toBe(6382);
+    expect(config.connection.graph).toBe("cpg");
+  });
+
+  test("the env var still wins over a host default — this is the whole point", () => {
+    const config = defineFalkorConfig({
+      env: { FALKORDB_PORT: "7000" },
+      home: HOME,
+      defaults: { connection: { port: 6382 } },
+    });
+    expect(config.connection.port).toBe(7000);
+  });
+
+  test("an explicit input value still wins over both env and a host default", () => {
+    const config = defineFalkorConfig({
+      env: { FALKORDB_PORT: "7000" },
+      home: HOME,
+      connection: { port: 9999 },
+      defaults: { connection: { port: 6382 } },
+    });
+    expect(config.connection.port).toBe(9999);
+  });
+
+  test("a host default port pre-empts the package's own remote-mode 6379 fallback", () => {
+    const config = defineFalkorConfig({
+      env: {},
+      home: HOME,
+      defaults: { connection: { port: 6382 } },
+    });
+    expect(config.connection.port).toBe(6382);
+  });
+
+  test("a host default server.mode is used ahead of the package's remote fallback", () => {
+    const config = defineFalkorConfig({
+      env: {},
+      home: HOME,
+      defaults: { server: { mode: "docker" } },
+    });
+    expect(config.server.mode).toBe("docker");
+  });
+
+  test("with no defaults given at all, resolution is unchanged", () => {
+    const withDefaults = defineFalkorConfig({ env: {}, home: HOME, defaults: {} });
+    const withoutDefaults = defineFalkorConfig({ env: {}, home: HOME });
+    expect(withDefaults.connection).toEqual(withoutDefaults.connection);
+    expect(withDefaults.server.mode).toEqual(withoutDefaults.server.mode);
+  });
+});

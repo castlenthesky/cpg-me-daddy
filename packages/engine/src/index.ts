@@ -23,8 +23,12 @@ export function engineIdentity(): string {
   return `@cpg/engine@${ENGINE_VERSION} (schema v${SCHEMA_VERSION})`;
 }
 
+export * from "./config/index";
 export * from "./extract/index";
 export * from "./identity/index";
+export * from "./indexer/index";
 export * from "./parser/index";
 export * from "./schema/index";
 export * from "./store/index";
+export * from "./watch/index";
+export * from "./workspace/index";

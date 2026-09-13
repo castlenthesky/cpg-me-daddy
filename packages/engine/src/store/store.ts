@@ -9,6 +9,7 @@
  */
 import type { GraphDelta } from "../schema/validate";
 import type { BootstrapReport } from "./bootstrap";
+import type { FilesystemDelta } from "./cypher";
 
 export interface WriteReport {
   readonly nodesWritten: number;
@@ -34,6 +35,14 @@ export interface IGraphStore {
   writeDelta(delta: GraphDelta): Promise<WriteReport>;
   /** Deletes a file's `:CPG` subgraph with no replacement — the scope delete alone. */
   deleteFile(file: string): Promise<void>;
+  /**
+   * Writes the filesystem tier (DIRECTORY/FILE/HAS_ENTRY) via `planFilesystem`
+   * — deliberately not `writeDelta`: `HAS_ENTRY` is `move-rename-only` and
+   * `planDelta` throws if one turns up (`cypher.ts`'s
+   * `requireOutOfScopeWriteMechanism`). This is the walker's/watcher's own
+   * write path.
+   */
+  writeFilesystem(delta: FilesystemDelta): Promise<WriteReport>;
   /** The graph-wide `META_DATA` singleton, or `undefined` if bootstrap has never run. */
   readMetadata(): Promise<GraphMetadata | undefined>;
   close(): Promise<void>;

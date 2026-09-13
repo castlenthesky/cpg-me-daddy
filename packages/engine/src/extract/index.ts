@@ -60,6 +60,7 @@ export {
 export { DeltaBuilder } from "./delta";
 export { pythonAdapter } from "./python";
 export { formatRange, type SourcePoint } from "./range";
+export { adapterFor, SUPPORTED_GRAMMAR_IDS } from "./registry";
 export type { SyntaxNode, SyntaxPoint } from "./syntax";
-export { typeScriptAdapter } from "./typescript";
+export { makeTypeScriptAdapter, tsxAdapter, typeScriptAdapter } from "./typescript";
 export { extractDeclarations, type ExtractDeclarationsInput } from "./walk";

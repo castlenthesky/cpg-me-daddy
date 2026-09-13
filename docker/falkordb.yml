@@ -22,12 +22,28 @@
 # that does NOT report them is somebody else's server and the harness refuses
 # it. Change them here and you must change HARNESS_GRAPH_CONFIG in
 # packages/engine/test/support/falkordb.ts.
+#
+# The image also bundles the FalkorDB Browser (a Next.js app on container port
+# 3000). It is published here purely for read-only human inspection of the
+# graphs this harness's own tests write — every one of them is prefixed
+# `cpg_test_`, and `db:down` throws all of it away. It is not where real cpg
+# data lives; once M0.11-lite's `cpg index` exists, that points at a
+# cpg-owned instance via `defineCpgFalkorConfig`, never at this harness.
+#
+# `name:` is pinned rather than left to derive from the containing directory.
+# docker/falkordb.dev.yml lives in this same directory and, without an
+# explicit name, both files would land in the SAME compose project — making
+# the dev instance an "orphan" of `bun run db:down` (any `--remove-orphans`,
+# or a shell with COMPOSE_REMOVE_ORPHANS=true, would then destroy it). Two
+# files, two pinned names, two blast radii.
+name: cpg-test
 services:
   falkordb:
     image: falkordb/falkordb:v4.20.4
     container_name: cpg-test-falkordb
     ports:
       - "127.0.0.1:6381:6379"
+      - "127.0.0.1:${CPG_TEST_FALKORDB_UI_PORT:-3033}:3000"
     environment:
       FALKORDB_ARGS: ${FALKORDB_ARGS:-TIMEOUT_DEFAULT 30000 TIMEOUT_MAX 60000 CACHE_SIZE 200 NODE_CREATION_BUFFER 65536}
       REDIS_ARGS: ${REDIS_ARGS:---save "" --appendonly no}

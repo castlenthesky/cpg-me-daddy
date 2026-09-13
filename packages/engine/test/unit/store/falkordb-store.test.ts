@@ -99,6 +99,43 @@ describe("FalkorGraphStore.writeDelta", () => {
   });
 });
 
+describe("FalkorGraphStore.writeFilesystem", () => {
+  test("plans and executes planFilesystem's ops in order, reporting the right counts", async () => {
+    const { graph, writes, constraintRows } = makeFakeGraph();
+    const store = new FalkorGraphStore({
+      graph,
+      admin: makeFakeAdmin(constraintRows),
+      close: async () => {},
+    });
+
+    const report = await store.writeFilesystem({
+      directories: [
+        { path: ".", name: ".", parent: undefined },
+        { path: "src", name: "src", parent: "." },
+      ],
+      files: [
+        {
+          path: "src/a.ts",
+          name: "a.ts",
+          parent: "src",
+          language: "typescript",
+          content_hash: "abc",
+          status: "ready",
+          version: 1,
+          indexed_at: "2026-01-01T00:00:00.000Z",
+          loc: 1,
+        },
+      ],
+    });
+
+    // 2 directories + 1 file merged, 1 dir link + 1 file link.
+    expect(report).toEqual({ nodesWritten: 3, edgesWritten: 2, opsExecuted: 4 });
+    expect(writes.some((w) => w.query.includes("MERGE (d:DIRECTORY"))).toBe(true);
+    expect(writes.some((w) => w.query.includes("MERGE (f:FILE"))).toBe(true);
+    expect(writes.some((w) => w.query.includes("MERGE (p)-[:HAS_ENTRY]->(c)"))).toBe(true);
+  });
+});
+
 describe("FalkorGraphStore.deleteFile", () => {
   test("issues only the scope delete, with no replacement", async () => {
     const { graph, writes, constraintRows } = makeFakeGraph();

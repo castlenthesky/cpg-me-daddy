@@ -19,6 +19,11 @@
     "test:integration:network": "bun run --filter falkordb-service test:integration:network",
     "db:up": "bun run tools/falkordb-up.ts",
     "db:down": "bun run tools/falkordb-down.ts",
+    "db:dev:up": "bun run tools/falkordb-dev-up.ts",
+    "db:dev:stop": "docker compose -f docker/falkordb.dev.yml stop",
+    "db:dev:down": "bun run tools/falkordb-dev-down.ts",
+    "db:dev:reset": "bun run tools/falkordb-dev-down.ts --destroy",
+    "cpg": "bun run packages/cli/src/main.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {

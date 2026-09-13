@@ -27,10 +27,48 @@
       {
         "command": "cpg.showVersion",
         "title": "CPG: Show Version"
+      },
+      {
+        "command": "cpg.showLog",
+        "title": "CPG: Show Log"
+      },
+      {
+        "command": "cpg.indexWorkspace",
+        "title": "CPG: Index Workspace",
+        "category": "CPG",
+        "enablement": "workspaceFolderCount != 0"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "CPG",
+      "properties": {
+        "cpg.engine.db.mode": {
+          "type": "string",
+          "enum": [
+            "remote",
+            "docker",
+            "spawned"
+          ],
+          "markdownDescription": "How cpg obtains FalkorDB. Overrides `engine.db.mode` in `cpg.config.yaml`. Unset by default — falls through to `CPG_MODE` and then to the cpg dev instance default (`remote`)."
+        },
+        "cpg.engine.db.host": {
+          "type": "string",
+          "markdownDescription": "FalkorDB host. Overrides `engine.db.host`. Unset by default — falls through to `CPG_HOST` and then `127.0.0.1`."
+        },
+        "cpg.engine.db.port": {
+          "type": "number",
+          "markdownDescription": "FalkorDB port. Overrides `engine.db.port`. Unset by default — falls through to `CPG_PORT` and then the cpg-owned dev instance, **6382**. NOT 6381 — that is the integration test harness (`bun run db:up`), which refuses any graph key not prefixed `cpg_test_`."
+        },
+        "cpg.engine.db.graph": {
+          "type": "string",
+          "markdownDescription": "Graph key. Overrides `engine.db.graph`. Unset by default — falls through to `CPG_GRAPH` and then `cpg`."
+        }
+      }
+    }
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "engines": {
     "vscode": "^1.107.0"
   }

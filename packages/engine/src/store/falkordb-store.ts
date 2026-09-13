@@ -14,7 +14,7 @@ import {
   type BootstrapGraph,
   type BootstrapReport,
 } from "./bootstrap";
-import { planDelta } from "./cypher";
+import { planDelta, planFilesystem, type FilesystemDelta } from "./cypher";
 import type { GraphMetadata, IGraphStore, WriteReport } from "./store";
 
 export interface FalkorGraphStoreDeps {
@@ -57,6 +57,19 @@ export class FalkorGraphStore implements IGraphStore {
 
   async deleteFile(file: string): Promise<void> {
     await this.writeDelta({ file, nodes: [], edges: [] });
+  }
+
+  async writeFilesystem(delta: FilesystemDelta): Promise<WriteReport> {
+    const ops = planFilesystem(delta);
+    for (const op of ops) {
+      // eslint-disable-next-line no-await-in-loop
+      await this.deps.graph.write(op.cypher, op.params);
+    }
+    const nodesWritten = (delta.directories?.length ?? 0) + (delta.files?.length ?? 0);
+    const edgesWritten =
+      (delta.directories?.filter((d) => d.parent !== undefined).length ?? 0) +
+      (delta.files?.length ?? 0);
+    return { nodesWritten, edgesWritten, opsExecuted: ops.length };
   }
 
   async readMetadata(): Promise<GraphMetadata | undefined> {
