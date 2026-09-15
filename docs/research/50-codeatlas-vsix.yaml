@@ -1,0 +1,543 @@
+# Comparative study — CodeAtlasVsix · investigated 2026-09-14
+# One of five third-party code-graph tools studied to pressure-test cpg-me-daddy's own design.
+# House rules, enforced by schema shape, not by good intentions:
+#   * Every claim is a {claim, evidence, confidence} record. evidence is a path:line INSIDE THIS REPO.
+#   * confidence: verified = the cited lines were read. inferred = deduced from a manifest/doc/dep list.
+#   * A "no" is a finding: use not_applicable{} with >= 2 confirmed_by probes, never an empty field.
+# Sibling index: 00-index.yaml. Our schema under comparison: ../../.agent/knowledge/planning-sessions/
+#   2026-09-11.project-outline/50-schema.md.
+
+meta:
+  repo: CodeAtlasVsix
+  repo_path: /Users/brianhenson/projects/foss/CodeAtlasVsix
+  upstream: https://github.com/league1991/CodeAtlasVsix.git
+  commit: 44f047d 2020-05-29
+  investigated_on: 2026-09-14
+  language: "C# (.NET Framework 4.5-4.7.2), plus a vendored C# port of MSAGL; parsing itself is delegated to doxygen (C++ binary)"
+  size:
+    source_files: 597
+    loc: 126234
+    counted_by: "find . -name '*.cs' -not -path './.git/*' | wc -l  (597 files); find ... -print0 | xargs -0 wc -l | tail -1 (126234 total lines, .cs only, includes vendored GraphLayout/MSAGL)"
+  license:
+    spdx: GPL-2.0
+    reuse: ideas_only
+    note: >
+      Whole-repo LICENSE is GPL-2.0 (verified header text, LICENSE:1-2). The vendored MSAGL graph-layout
+      library under GraphLayout/ carries its own separate MIT license (GraphLayout/LICENSE:1-6) — so the
+      layout engine is freely reusable on its own, but anything copied from CodeAtlasVSIX/ or DoxygenDB/
+      inherits GPL-2.0 copyleft. Architecture and technique are fair to borrow; code is not, without
+      adopting GPL.
+  citation_base: /Users/brianhenson/projects/foss/CodeAtlasVsix
+  relevance:
+    verdict: in_scope
+    why: "Builds a call/use/derive graph from source code (via doxygen) as its core function and renders it interactively — adjacent-but-qualifying per the 'call graph' criterion."
+    evidence: README.md:4
+  coverage:
+    read_fully:
+      [
+        README.md,
+        CodeAtlasVSIX/DBManager.cs,
+        CodeAtlasVSIX/packages.config,
+        DoxygenDB/Program.cs,
+        LICENSE,
+        GraphLayout/LICENSE,
+      ]
+    skimmed:
+      - DoxygenDB/DoxygenDB.cs
+      - CodeAtlasVSIX/CodeUIItem.cs
+      - CodeAtlasVSIX/CodeUIEdgeItem.cs
+      - CodeAtlasVSIX/SceneUpdateThread.cs
+      - CodeAtlasVSIX/MainUI.xaml.cs
+      - CodeAtlasVSIX/CodeScene.cs
+      - CodeAtlasVSIX/SolutionTraverser.cs
+      - DoxygenDB/DoxygenDB.csproj
+      - CodeAtlasVSIX/CodeAtlasVSIX.csproj
+    not_read:
+      - CodeAtlasVSIX/CodeAtlasCommand.cs
+      - CodeAtlasVSIX/CodeAtlasPackage.cs
+      - CodeAtlasVSIX/ReferenceSearcher.cs
+      - CodeAtlasVSIX/CursorNavigator.cs
+      - CodeAtlasVSIX/SymbolWindow.xaml.cs
+      - CodeAtlasVSIX/AnalysisWindow.xaml.cs
+      - CodeAtlasVSIX/SchemeWindow.xaml.cs
+      - CodeAtlasVSIX/Legend.xaml.cs
+      - CodeAtlasVSIX/FileList.xaml.cs
+      - CodeAtlasVSIX/SearchWindow.xaml.cs
+      - CodeAtlasVSIX/ContactWindow.xaml.cs
+      - CodeView/**
+      - GraphLayout/GraphLayout/MSAGL/**
+      - GraphLayout/GraphLayout/Drawing/** (beyond import-line grep)
+      - DoxygenDB/DoxygenResource.Designer.cs
+    read_ratio: "~9 of 597 .cs source files opened (fully or in structural excerpts); the vendored MSAGL/GraphLayout library (561 files) and most CodeAtlasVSIX UI windows were not opened"
+  caveat: >
+    This study establishes the doxygen -> DoxygenDB -> CodeAtlasVSIX pipeline and the WPF/MSAGL
+    presentation layer with verified line citations, but does not read CodeScene.cs (3530 lines) or
+    CodeUIItem.cs (1250 lines) beyond their opening sections, does not open a single file inside the
+    561-file vendored MSAGL library, and never opened CodeAtlasCommand.cs, CodeAtlasPackage.cs,
+    ReferenceSearcher.cs or CursorNavigator.cs (their EnvDTE usage is confirmed only by grep, not by
+    reading their bodies). q4 (LSP) and q7 (bad-code analytics) are confirmed absent via multiple
+    independent negative probes, not by exhaustive reading — appropriate given this is the outlier,
+    pre-LSP, externally-delegated member of the study set.
+
+study_summary:
+  thesis: >
+    CodeAtlasVsix is a Visual Studio 2010-2015 call-graph navigator that builds no parser or AST of its
+    own: it shells out to an embedded doxygen 1.8.6 binary, re-parses doxygen's own XML dump through a
+    thin C# query layer (DoxygenDB, whose Entity/Reference/UniqueName API is a near-literal echo of
+    SciTools Understand's ent/ref/db API), and lays the result out with a vendored copy of Microsoft's
+    MSAGL for a custom WPF canvas. The single most interesting thing relative to cpg-me-daddy is what's
+    missing: there is no incremental update path at all — DoxygenDB.Analyze()/Reopen() are empty TODO
+    stubs, and the only way to reflect a code change is to regenerate a full Doxyfile and re-run doxygen
+    from scratch, which is exactly the whole-graph-relink failure mode D5 was written to avoid.
+  one_line_verdict: "A predecessor product wearing the same words: real call-graph navigation UX, but the extraction layer is someone else's black box and the update model is 'run the whole tool again.'"
+  most_useful_finding: L1
+  sharpest_disagreement: >
+    CodeAtlas's identity model bakes doxygen's own globally-scoped, index-load-time refid directly into
+    Entity.UniqueName() (DoxygenDB.cs:403-406), and that id space is only populated by re-reading the
+    entire index.xml at DB Open (DoxygenDB.cs:1005-1060). That is structurally the Joern-style global
+    relinking that D5 deliberately rejects in favor of SYMBOL/fqn indirection — CodeAtlas is a working
+    example of the exact architecture D5's rationale argues against, right down to having no working
+    incremental-refresh path (DoxygenDB.cs:1801-1804) as a direct consequence.
+
+q1_graph_construction:
+  pipeline:
+    solution_traversal: "EnvDTE walks the open VS Solution/Project/ProjectItem tree to collect source directories, include paths, preprocessor defines and per-item comments (CodeAtlasVSIX/SolutionTraverser.cs:16-93)"
+    doxyfile_generation: "DoxygenDBConfig is turned into a Doxygen config file via 'doxygen.exe -g', then ~20 keys are overridden (EXTRACT_ALL, GENERATE_XML, SOURCE_BROWSER, a ~35-extension FILE_PATTERNS list spanning C/C++/C#/Java/Python/PHP/Fortran/VHDL/etc.) (DoxygenDB/DoxygenDB.cs:602-616,737-798)"
+    external_analysis: "doxygen.exe is invoked again as a child process against the generated Doxyfile; it does its own parse and writes an XML dump (index.xml plus one compound/member XML file per entity) (DoxygenDB/DoxygenDB.cs:700-714)"
+    index_ingestion: "DoxygenDB.Open() re-reads the Doxyfile to find XML_OUTPUT, then _ReadIndex() walks index.xml with an XPathNavigator, building IndexItem (EntKind) and IndexRefItem (RefKind) dictionaries keyed by doxygen's own refid, eagerly, for the whole project (DoxygenDB/DoxygenDB.cs:1734-1757,1005-1060)"
+    on_demand_detail_parse: "per-entity compound/member XML files are opened and parsed lazily (_GetXmlDocument/_ReadMemberRef) only when the UI asks for a given node's references or metrics, not upfront for the whole project (DoxygenDB/DoxygenDB.cs:809-813,1076-1160)"
+    ui_materialization: "CodeScene turns Entity/Reference query results into WPF Shape-derived CodeUIItem/CodeUIEdgeItem objects; SceneUpdateThread lays them out with vendored MSAGL Sugiyama layered layout on a dedicated background thread (CodeAtlasVSIX/CodeUIItem.cs:78-104, CodeAtlasVSIX/SceneUpdateThread.cs:286-382)"
+  entry_points:
+    - claim: "The user-facing entry point is the 'Analyse' menu action in the main tool window, which builds a DoxygenDBConfig from the traversed solution and kicks off GenerateDB on a background .NET Thread"
+      evidence: CodeAtlasVSIX/MainUI.xaml.cs:892-924
+      confidence: verified
+    - claim: "DoxygenDB also ships a standalone Main() harness (DoxygenDB.exe) that calls DoxygenDB.GenerateDB directly against a hardcoded path — a developer-only entry point, not the shipped plugin path"
+      evidence: DoxygenDB/Program.cs:11-28
+      confidence: verified
+  build_model:
+    verdict: on_demand_query
+    claim: >
+      The project-wide doxygen run is a single batch pass producing a static XML snapshot, but
+      DoxygenDB itself does not materialize a full in-memory graph from it — its whole API (Entity,
+      Reference, SearchRef, _ReadRef) is a query layer over that XML snapshot, resolving references and
+      parsing per-entity detail files lazily as the UI navigates. The one eager step is the top-level
+      index (id/name/kind for every entity), not the reference graph.
+      evidence: DoxygenDB/DoxygenDB.cs:2046-2178 (SearchFromUniqueName / _SearchRef pull individual XML docs on demand)
+    confidence: verified
+  findings:
+    - claim: "CodeAtlas never parses source itself — SolutionTraverser only collects directories/includes/defines for doxygen's INPUT list, never a token or AST"
+      evidence: CodeAtlasVSIX/SolutionTraverser.cs:16-93
+      confidence: verified
+    - claim: "For solutions doxygen has already indexed once, MainUI reopens a previously generated Doxyfile+XML pair by path rather than always regenerating, but the reopen path still reads the entire XML index at Open(), not a delta"
+      evidence: CodeAtlasVSIX/MainUI.xaml.cs:201-233
+      confidence: verified
+      note: "This is the closest thing to 'reuse prior work' in the pipeline, and it is still a full index re-read, not an incremental update — contrast with cpg-me-daddy's per-file planDelta()."
+
+q2_ast_to_cpg:
+  mechanism:
+    verdict: external_tool_import
+    claim: "AST/graph extraction is entirely doxygen's job; DoxygenDB only extracts an embedded doxygen.exe/doxywizard.exe pair from assembly resources at runtime and shells out to them, then consumes their XML output"
+    evidence: DoxygenDB/DoxygenDB.cs:565-600
+    confidence: verified
+  walk_strategy:
+    claim: "There is no walk of an AST inside this repo at all — DoxygenDB._ReadIndex/_ReadMemberRef walk doxygen's already-produced XML tree via System.Xml.XPath.XPathNavigator (Select/SelectChildren), which is a query over a documentation-oriented entity graph, not a compiler AST"
+    evidence: DoxygenDB/DoxygenDB.cs:1012-1060
+    confidence: verified
+  resolution:
+    claim: "Reference/call/derive resolution is entirely doxygen's internal black box; DoxygenDB trusts doxygen's refid linking and its string-literal ref-kind vocabulary (call/callby/base/derive/use/member/declare/define/override/...) wholesale, with no confidence, status, or ambiguity field of its own on IndexRefItem"
+    evidence: DoxygenDB/DoxygenDB.cs:146-169
+    confidence: verified
+    note: "Sharp contrast with cpg-me-daddy's CALLS.status ∈ {resolved, ambiguous, external, unresolved, dynamic} plus reason/confidence/resolvedBy — CodeAtlas has no place to even represent 'doxygen guessed.'"
+  findings:
+    - claim: "doxygen is optionally run with CLANG_ASSISTED_PARSING=YES (config.m_useClang) as a precision upgrade for C++ resolution, mirroring the idea of a cheap default parser with an opt-in precision path"
+      evidence: DoxygenDB/DoxygenDB.cs:767
+      confidence: verified
+
+q3_ast_tooling:
+  parser:
+    claim: "doxygen 1.8.6, embedded as a 21,493,760-byte Win32 binary resource inside DoxygenDB.dll and extracted to %TEMP%\\doxygen.exe on first use"
+    evidence: DoxygenDB/doxygen.exe (binary; version string '1.8.6' and 'Doxygen version %s' confirmed via `strings DoxygenDB/doxygen.exe`), extraction logic at DoxygenDB/DoxygenDB.cs:565-600
+    confidence: verified
+  grammars:
+    claim: "Not grammars in the tree-sitter sense — doxygen's own built-in multi-language parsers, selected by FILE_PATTERNS (c/cc/cxx/cpp/h/hpp/cs/java/py/php/f90/vhdl/... — ~35 extensions) and optionally libclang for C/C++ (CLANG_ASSISTED_PARSING)"
+    evidence: DoxygenDB/DoxygenDB.cs:784-790
+    confidence: verified
+  incrementality:
+    verdict: none
+    claim: "DoxygenDB.Analyze() and DoxygenDB.Reopen() — the two methods a 're-run analysis' UI action would need — are empty method bodies with a '// TODO: Add code' comment; DBManager.AnalysisDB() calls the empty Analyze() and then just re-fires the UI refresh callback, so nothing actually re-parses"
+    evidence: DoxygenDB/DoxygenDB.cs:1796-1804
+    confidence: verified
+    note: "CodeAtlasVSIX/DBManager.cs:87-92 (AnalysisDB) calls this stub directly — a genuinely dead code path in the shipped plugin."
+  findings:
+    - claim: "The only way to reflect a source change is the full 'Analyse' menu action, which regenerates a Doxyfile and re-runs doxygen.exe over the whole configured input set from scratch"
+      evidence: CodeAtlasVSIX/MainUI.xaml.cs:892-924
+      confidence: verified
+
+q4_language_server:
+  verdict: no_lsp
+  not_applicable:
+    reason: >
+      CodeAtlas predates the Language Server Protocol (VS 2010-2015 target; LSP was introduced ~2016)
+      and its editor integration is built entirely on Visual Studio's own EnvDTE automation model plus
+      the doxygen-derived DoxygenDB query layer — there is no client/server protocol of any kind for
+      parsing or navigation.
+    confirmed_by:
+      - probe: manifest
+        command: "grep -n 'TargetFrameworkVersion\\|Language' CodeAtlasVSIX/packages.config"
+        result: "packages.config lists only Microsoft.VisualStudio.* VS-SDK packages (Editor, Language.Intellisense, Language.StandardClassification — VS's own classification/IntelliSense APIs, not an LSP client); zero LSP-related packages"
+        evidence: CodeAtlasVSIX/packages.config:1-30
+        confidence: verified
+      - probe: source
+        command: "grep -rniE 'languageserver|language server|\\blsp\\b|LanguageClient' --include='*.cs' CodeAtlasVSIX DoxygenDB (excluding vendored GraphLayout)"
+        result: "zero matches across both projects"
+        evidence: CodeAtlasVSIX/CodeAtlasVSIX.csproj:0
+        confidence: verified
+    what_fills_the_gap:
+      - claim: "EnvDTE (Visual Studio's COM automation object model) is used directly for solution traversal, cursor/editor navigation and reference lookups — confirmed present in MainUI.xaml.cs, ReferenceSearcher.cs, CodeAtlasPackage.cs, CodeScene.cs, CursorNavigator.cs and SolutionTraverser.cs"
+        evidence: CodeAtlasVSIX/SolutionTraverser.cs:1-20
+        confidence: verified
+    confidence: verified
+
+q5_graph_representation:
+  storage:
+    claim: >
+      No database in the cpg-me-daddy sense. The base graph lives as doxygen's own XML files on disk
+      (index.xml + per-compound/member XML under OUTPUT_DIRECTORY/xml), re-opened and re-queried each
+      session; a separate hand-rolled JSON 'scene' file (via System.Web.Script.Serialization.
+      JavaScriptSerializer) persists the user-curated overlay — saved relationship graphs, custom edges,
+      node positions and comments — independent of the doxygen data.
+    evidence: CodeAtlasVSIX/CodeScene.cs:260-307
+    confidence: verified
+  node_schema:
+    claim: "A node (CodeUIItem, itself a WPF Shape) carries: m_uniqueName (doxygen refid), m_name, m_longName, m_kindName + m_kind (DoxygenDB.EntKind), a metric dictionary (e.g. CountLine), plus UI-only state (position, color, comment)"
+    evidence: CodeAtlasVSIX/CodeUIItem.cs:31-42,78-104
+    confidence: verified
+  edge_schema:
+    claim: "An edge (CodeUIEdgeItem, also a WPF Shape) carries: m_srcUniqueName, m_tarUniqueName, m_file/m_line/m_column (from doxygen's <references compoundref=/startline=>), and a m_customEdge flag distinguishing doxygen-derived edges from user-added ones"
+    evidence: CodeAtlasVSIX/CodeUIEdgeItem.cs:40-95
+    confidence: verified
+  identity:
+    claim: "Node identity is doxygen's own refid (a hash-like id doxygen assigns per compound/member during its internal parse), read once per session from index.xml and never generated or reconciled by CodeAtlas itself"
+    evidence: DoxygenDB/DoxygenDB.cs:403-406,1030
+    confidence: verified
+    note: "This is the load-bearing divergence from D5: identity is not FQN/SCIP-based and carries no file-independence guarantee — it is whatever doxygen's internal symbol table produced on the last full run."
+  findings:
+    - claim: "The 26-value EntKind enum (CLASS/STRUCT/UNION/.../FUNCTION/VARIABLE/TYPEDEF/ENUM/...) is doxygen's own compound/member kind taxonomy, carried through verbatim rather than being CodeAtlas's own schema design"
+      evidence: DoxygenDB/DoxygenDB.cs:22-53,70-83
+      confidence: verified
+
+q6_presentation_layer:
+  surfaces:
+    - name: "Code Atlas graph canvas"
+      kind: vs_tool_window
+      claim: "A custom-drawn WPF canvas (MainUI.xaml / CodeView.xaml) renders CodeUIItem/CodeUIEdgeItem shapes; SceneUpdateThread continuously recomputes a Sugiyama layered layout via vendored MSAGL on a background thread"
+      evidence: CodeAtlasVSIX/SceneUpdateThread.cs:286-382
+      confidence: verified
+    - name: "editor keybindings for graph navigation"
+      kind: vs_editor_keybinding
+      claim: "Alt+G focuses the symbol under cursor; Alt+J/K/L/I jump between neighbours; Alt+C/V find callers/callees; Alt+B class hierarchy; Alt+O overloads; Alt+M class members; Alt+U variable usage; Ctrl+Num/Alt+Num save and recall named relationship-graph views"
+      evidence: README.md:37,39,45,51,57,63-64,70,76,79
+      confidence: verified
+    - name: "PNG export"
+      kind: file_export
+      claim: "CodeView.ExportToPng renders the current canvas to a PNG file, wired to a menu action in MainUI"
+      evidence: CodeAtlasVSIX/CodeView.xaml.cs:305 (definition); CodeAtlasVSIX/MainUI.xaml.cs:1233 (call site)
+      confidence: verified
+    - name: "Legend / Scheme panels"
+      kind: vs_tool_window
+      claim: "Separate windows (Legend.xaml, SchemeWindow.xaml) exist to show the node/edge color legend and named relationship-graph presets referenced by the README's 'Save/Load Relationship Graph' feature"
+      evidence: CodeAtlasVSIX/Legend.xaml (file present, not opened)
+      confidence: inferred
+      note: "Filename + README correspondence only; internals not read."
+  findings:
+    - claim: "MSAGL's own SvgGraphWriter is vendored in GraphLayout/Drawing/SvgGraphWriter.cs but CodeAtlasVSIX never calls it — the only export path used is bitmap PNG, not SVG"
+      evidence: GraphLayout/GraphLayout/Drawing/SvgGraphWriter.cs:1-15 (present, unused — confirmed via `grep -rn 'SvgGraphWriter' CodeAtlasVSIX` returning no matches)
+      confidence: verified
+
+q7_bad_code_analytics:
+  detectors: []
+  fix_support:
+    verdict: none
+    claim: "No fix/refactor support of any kind was found — the plugin is read-only navigation and visualization; even its 'Add Comment' feature only attaches free-text annotations to symbols, it does not modify or suggest changes to source"
+    evidence: README.md (Add Comment section, unnumbered feature block); confirmed via CodeAtlasVSIX/CodeScene.cs:260-307 (comment persisted alongside scene JSON, no source-mutation path found)
+    confidence: inferred
+  absent:
+    - detector: cyclomatic_complexity / general complexity metrics
+      looked_in: "DoxygenDB.cs metric-dictionary construction sites (grep for Metric/CountLine/Cyclomatic/complexity)"
+      result: "CountLine (a line count copied from doxygen's own <location> data) is the only metric key ever populated; no complexity, nesting-depth or similar metric is computed anywhere"
+      confidence: verified
+      note: "evidence: DoxygenDB/DoxygenDB.cs:1535,1593"
+    - detector: "code smell / hotspot / god-class detection"
+      looked_in: "grep -rniE 'smell|hotspot|\\bgod\\b|centrality|louvain|leiden' across CodeAtlasVSIX and DoxygenDB (excluding vendored GraphLayout)"
+      result: "zero matches"
+      confidence: verified
+    - detector: "import-cycle / circular-dependency detection"
+      looked_in: "grep -rniE '\\bcycle\\b|circular' across CodeAtlasVSIX and DoxygenDB (excluding vendored GraphLayout)"
+      result: "zero matches"
+      confidence: verified
+    - detector: taint_analysis
+      looked_in: "grep for 'taint'; also inspected the RefKind/EntKind vocabulary for a source/sink/sanitizer concept"
+      result: "no matches; the ref-kind vocabulary (call/derive/use/member/declare/define/override) has no taint-relevant categories"
+      confidence: verified
+      note: "evidence: DoxygenDB/DoxygenDB.cs:55-66"
+  findings:
+    - claim: "The one numeric signal CodeAtlas surfaces per entity (CountLine) is used purely for node sizing in the visualization, never for ranking or flagging code as problematic"
+      evidence: DoxygenDB/DoxygenDB.cs:1535
+      confidence: verified
+
+adjacent_findings:
+  - topic: "Understand-API-shaped query layer over a different backend"
+    claim: "DoxygenDB's public surface — classes literally named Entity and Reference, with UniqueName()/Name()/Longname()/Metric() and a RefKind-filtered SearchRef — mirrors SciTools Understand's ent/ref/db scripting API almost exactly, but is backed by doxygen's XML instead of Understand's proprietary database"
+    evidence: DoxygenDB/DoxygenDB.cs:366-417,2114-2178
+    confidence: inferred
+    ties_to: []
+    ties_to_none_reason: "No cpg-me-daddy decision id concerns API-shape provenance; this is a design-lineage observation, not a schema/architecture lesson on its own."
+    note: "Suggests the author built this as a doxygen-backed clone of a commercial tool's query API rather than designing a schema from first principles — useful context for why EntKind/RefKind read like a documentation taxonomy, not a CPG vocabulary."
+  - topic: "user-overlay state kept structurally separate from generated graph data"
+    claim: "Saved 'relationship graphs' (custom edges, positions, comments) live in a hand-rolled JSON file loaded independently of the doxygen XML database, and are explicitly skipped from re-traversal for the two synthetic dummy/files databases"
+    evidence: CodeAtlasVSIX/CodeScene.cs:260-290
+    ties_to: [D15, D23]
+    confidence: verified
+  - topic: "opt-in precision toggle for a black-box extractor"
+    claim: "CLANG_ASSISTED_PARSING is a single boolean (config.m_useClang) surfaced in the analysis UI, trading extraction speed for libclang-grade C++ resolution accuracy — a cheap default/precision-upgrade toggle pattern"
+    evidence: DoxygenDB/DoxygenDB.cs:767
+    ties_to: [D26]
+    confidence: verified
+
+schema_mapping:
+  verdicts:
+    joern_aligned:
+      verdict: "no"
+      why: "EntKind is doxygen's own compound/member documentation taxonomy (CLASS/STRUCT/FUNCTION/VARIABLE/GROUP/PAGE/...), not Joern's AST-derived node hierarchy; there is no CFG/DDG/AST_NODE concept anywhere, and RefKind's 8 relation kinds are far coarser than Joern's edge vocabulary"
+      evidence: DoxygenDB/DoxygenDB.cs:22-66
+      confidence: inferred
+    density:
+      verdict: sparse
+      why: "doxygen's EXTRACT_ALL output models compounds and members only — no per-statement, per-expression or per-token node is ever created; if anything this is sparser than cpg-me-daddy's PR1 baseline since there is no CALL-argument or literal-level detail at all"
+      evidence: DoxygenDB/DoxygenDB.cs:22-53 (26 kinds total, all compound- or member-level)
+      confidence: inferred
+    identity_model:
+      verdict: global_relink
+      why: "Node identity is doxygen's own refid, only knowable after a full index.xml read at DB Open — there is no per-file-local id and no separate symbol-indirection layer; changing one file requires re-establishing the whole id space"
+      evidence: DoxygenDB/DoxygenDB.cs:1005-1060,403-406
+      confidence: verified
+    update_model:
+      verdict: full_reindex
+      why: "The only implemented refresh path is regenerating a Doxyfile and re-running doxygen.exe over the entire configured input set; the two methods that would be an incremental-refresh hook (Analyze, Reopen) are empty stubs"
+      evidence: DoxygenDB/DoxygenDB.cs:1796-1804
+      confidence: verified
+  node_vocabulary:
+    - {
+        theirs: CLASS/STRUCT/UNION,
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "doxygen collapses class/struct/union into one compound-kind family; no separate INTERFACE/PROTOCOL distinction survives into ours",
+        evidence: "DoxygenDB/DoxygenDB.cs:26-28",
+      }
+    - {
+        theirs: FUNCTION/PROTOTYPE,
+        ours: METHOD,
+        fit: approx,
+        note: "no PARAM child nodes are modeled at this layer (see ours_unmatched)",
+        evidence: "DoxygenDB/DoxygenDB.cs:47,49",
+      }
+    - {
+        theirs: VARIABLE,
+        ours: MEMBER,
+        fit: approx,
+        note: "doxygen VARIABLE covers both class fields and free/global variables; cpg-me-daddy splits MEMBER (class-scoped) from SYMBOL",
+        evidence: "DoxygenDB/DoxygenDB.cs:43",
+      }
+    - {
+        theirs: FILE,
+        ours: FILE,
+        fit: exact,
+        note: "both are filesystem-owned compound units",
+        evidence: "DoxygenDB/DoxygenDB.cs:33",
+      }
+    - { theirs: DIR, ours: DIRECTORY, fit: exact, evidence: "DoxygenDB/DoxygenDB.cs:39" }
+    - {
+        theirs: NAMESPACE,
+        ours: MODULE,
+        fit: approx,
+        note: "doxygen namespaces are a compound kind like any other; no ownership-class distinction",
+        evidence: "DoxygenDB/DoxygenDB.cs:34",
+      }
+    - {
+        theirs: TYPEDEF,
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "typedefs are folded into the same compound family rather than treated as an alias edge",
+        evidence: "DoxygenDB/DoxygenDB.cs:44",
+      }
+  edge_vocabulary:
+    - {
+        theirs: "call / callby",
+        ours: CALLS,
+        fit: approx,
+        note: "no resolution status/confidence field exists on their side",
+        evidence: "DoxygenDB/DoxygenDB.cs:59,152-153",
+      }
+    - {
+        theirs: "base / derive",
+        ours: INHERITS_FROM,
+        fit: exact,
+        evidence: "DoxygenDB/DoxygenDB.cs:60,154-155",
+      }
+    - {
+        theirs: "include / includedby",
+        ours: IMPORTS,
+        fit: approx,
+        note: "modeled as a USE-kind reference between file compounds, not a dedicated IMPORT node+edge pair",
+        evidence: "DoxygenDB/DoxygenDB.cs:158-159",
+      }
+    - {
+        theirs: "member / memberin",
+        ours: MEMBER_OF,
+        fit: approx,
+        evidence: "DoxygenDB/DoxygenDB.cs:160-161",
+      }
+    - {
+        theirs: "declare / define",
+        ours: DEFINES,
+        fit: approx,
+        evidence: "DoxygenDB/DoxygenDB.cs:162-165",
+      }
+    - {
+        theirs: "override / overriddenby",
+        ours: absent,
+        fit: extra,
+        note: "cpg-me-daddy's 15 edge types have no direct OVERRIDE relation",
+        evidence: "DoxygenDB/DoxygenDB.cs:166-168",
+      }
+  ours_unmatched:
+    - {
+        ours: SYMBOL,
+        why_absent_there: "identity is baked directly into Entity via doxygen's refid; there is no separate fqn-keyed indirection node",
+        evidence: "DoxygenDB/DoxygenDB.cs:403-406",
+      }
+    - {
+        ours: PARAM,
+        why_absent_there: "doxygen's EntKind has no PARAM/PARAMETER kind — parameters are not indexed as first-class entities at the level DoxygenDB queries",
+        evidence: "DoxygenDB/DoxygenDB.cs:22-53",
+      }
+    - {
+        ours: IMPORT,
+        why_absent_there: "modeled only as a USE-kind edge between file compounds (include/includedby), never materialized as its own node",
+        evidence: "DoxygenDB/DoxygenDB.cs:158-159",
+      }
+    - {
+        ours: COMMUNITY,
+        why_absent_there: "no clustering/community-detection analytics exist anywhere in the repo (see q7)",
+      }
+    - {
+        ours: TAG,
+        why_absent_there: "the only per-symbol annotation mechanism is a free-text 'comment' string, not a structured tag/finding node",
+        evidence: "CodeAtlasVSIX/CodeScene.cs:96,277",
+      }
+  theirs_unmatched:
+    - {
+        theirs: "DEFINE (preprocessor macro)",
+        why_we_lack_it: "cpg-me-daddy's v1 schema has no MACRO node; macros are a C/C++-specific concept the TS/Python-first schema doesn't yet cover",
+        would_we_want_it: maybe,
+      }
+    - {
+        theirs: "GROUP / PAGE (doxygen documentation grouping)",
+        why_we_lack_it: "these are documentation-authoring constructs (manual \\group/\\page directives), not code-structural facts",
+        would_we_want_it: "no",
+      }
+    - {
+        theirs: "ENUM / ENUMVALUE",
+        why_we_lack_it: "no enum-specific node in the v1 14-label schema; would currently fold into TYPE_DECL/MEMBER",
+        would_we_want_it: maybe,
+      }
+
+lessons_for_cpg_me_daddy:
+  - id: L1
+    lesson: "Never let node identity depend on a full-project index load that must complete before any node is addressable — keep identity generation (SYMBOL/fqn) independent of any single 'open the whole index' step."
+    stance: reject
+    ties_to: [D5, D17]
+    why: "CodeAtlas's Entity.UniqueName() is literally doxygen's refid, only known after _ReadIndex() parses the entire index.xml (DoxygenDB.cs:1005-1060) — this is the whole-graph relinking D5 exists to avoid, and it directly causes the dead Analyze()/Reopen() stubs (DoxygenDB.cs:1801-1804): there is no cheaper alternative once identity itself requires a full reload."
+    cost: "Rejecting this costs nothing extra — cpg-me-daddy already committed to SYMBOL/fqn indirection (D5) precisely to avoid this trap; the value here is confirmation, not a new requirement."
+    evidence: DoxygenDB/DoxygenDB.cs:1005-1060
+    confidence: verified
+  - id: L2
+    lesson: "Do not delegate the entire AST/graph extraction step to an external, unversioned GUI-oriented tool binary shelled out as a black box; keep parsing in-process where progress, cancellation, and incremental re-parse are controllable."
+    stance: reject
+    ties_to: [D32]
+    why: "doxygen.exe is extracted from an embedded resource and invoked via System.Diagnostics.Process with WaitForExit() (DoxygenDB.cs:602-616,700-714) — CodeAtlas has zero visibility into doxygen's internal parse, no streaming/partial results, and no way to cancel or re-run just part of it. web-tree-sitter's in-process, per-file WASM parse is a direct structural improvement over this."
+    cost: "cpg-me-daddy already pays this cost via web-tree-sitter (D32); the lesson is to keep resisting the temptation to shell out to an external analyzer even when it looks like a shortcut (e.g. for a future language)."
+    evidence: DoxygenDB/DoxygenDB.cs:565-600
+    confidence: verified
+  - id: L3
+    lesson: "Watch for any future external resolver (SCIP producer, LSP-backed enrichment) whose own id scheme is not guaranteed stable across independent re-runs — trigger: adopting a resolver whose ids are regenerated per-run and used as a key without cpg-me-daddy also owning a stable indirection layer over them."
+    stance: watch
+    ties_to: [D34]
+    why: "CodeAtlas trusts doxygen's refid as if it were stable, but doxygen never documents refid stability across re-runs, and DoxygenDB has no mechanism to detect or repair drift if it isn't — a live example of what can go wrong when an external tool's transient id becomes your node's identity."
+    cost: "Trigger: the day cpg-me-daddy wires up SCIP or another external resolver (D34), verify its ids are either content-stable or explicitly re-linked through SYMBOL/fqn rather than trusted directly."
+    evidence: DoxygenDB/DoxygenDB.cs:403-406
+    confidence: verified
+  - id: L4
+    lesson: "Keep user-curated overlay state (saved views, custom edges, annotations) in a structurally separate store from the generated graph, loaded and merged rather than mutating base facts."
+    stance: adopt
+    ties_to: [D15, D23]
+    why: "CodeScene's JSON 'scene' file (positions, custom edges, comments) is loaded independently of the doxygen-derived graph and explicitly skipped from re-traversal for synthetic databases (CodeScene.cs:260-290) — a working precedent for keeping an overlay tier (COMMUNITY/TAG) cleanly separate from the base CPG rather than writing analysis results back onto base nodes."
+    cost: "Low — this validates a design cpg-me-daddy already has (D23's layered graph, D15's non-persisted community labels); no new cost, just confirmation the separation is worth defending under pressure to 'just add a field.'"
+    evidence: CodeAtlasVSIX/CodeScene.cs:260-290
+    confidence: verified
+  - id: L5
+    lesson: "Do not treat call/use/derive graph navigation alone as 'analytics' — a full call graph with zero complexity, smell, cycle or taint detection on top of it is a cautionary example of value left on the table."
+    stance: reject
+    ties_to: [D6, D10]
+    why: "CodeAtlas has a complete cross-file call/derive/use graph (RefKind, DoxygenDB.cs:55-66) but the only per-entity metric it ever computes is a line count used purely for node sizing (DoxygenDB.cs:1535); confirmed zero hits for cyclomatic/complexity/smell/hotspot/centrality/cycle/taint across the whole non-vendored codebase. Sixteen years after this tool's design, cpg-me-daddy is right not to stop at 'you can see the graph.'"
+    cost: "Rejecting the 'graph viewer is enough' model costs cpg-me-daddy the analytics-on-projections work (D6) and taint modeling (D10) it has already scoped — this finding argues for keeping that scope, not cutting it."
+    evidence: DoxygenDB/DoxygenDB.cs:1535
+    confidence: verified
+  - id: L6
+    lesson: "Watch for the graph-vs-live-editor-state split that comes from reaching into the running editor process (EnvDTE) for 'current truth' alongside the graph — trigger: if MCP tools start querying live file/editor state directly instead of relying on the graph plus an explicit staleness status."
+    stance: watch
+    ties_to: [D8, D21]
+    why: "CodeAtlas splits its notion of 'current' between the doxygen-derived graph and live EnvDTE calls (SolutionTraverser.cs:16-93 walks the live DTE.Solution tree every time it needs directories/defines) — truth is not owned solely by the graph, which is exactly the ambiguity D21's explicit-status model and D8's headless-engine boundary are meant to prevent."
+    cost: "Trigger: any MCP tool implementation that bypasses graph state to read the editor/filesystem 'live' for freshness should instead surface graph staleness explicitly (D21) rather than silently interleaving two sources of truth."
+    evidence: CodeAtlasVSIX/SolutionTraverser.cs:16-93
+    confidence: verified
+  - id: L7
+    lesson: "Keep concrete file:line:column on every CALL/USE-shaped edge, not just on nodes — it is a cheap, high-value affordance for jump-to-code."
+    stance: adopt
+    ties_to: [D26, PR6]
+    why: "CodeUIEdgeItem carries m_file/m_line/m_column sourced directly from doxygen's <references startline=> data (CodeUIEdgeItem.cs:54-56,69-77), which is what makes Alt+C/V (find callers/callees) directly actionable in the editor — a low-cost precedent worth explicitly preserving as cpg-me-daddy's CALLS edges get an MCP surface."
+    cost: "Cheap — cpg-me-daddy's CALLS edges already carry resolution metadata; the cost is discipline to ensure file:line survives all the way to whatever consumes the edge (MCP tool, editor jump), not just to storage."
+    evidence: CodeAtlasVSIX/CodeUIEdgeItem.cs:54-56,69-77
+    confidence: verified
+  - id: L8
+    lesson: "Track the license of every vendored third-party extraction/layout tool individually, not just the primary graph database — a GPL-2.0 project here ships an MIT-licensed layout library (MSAGL) side by side with a GPL doxygen binary, and the two have different reuse implications."
+    stance: reject
+    ties_to: [RK4]
+    why: "The whole CodeAtlasVsix repo is GPL-2.0 (LICENSE:1-2) while its vendored GraphLayout/MSAGL carries a separate MIT license (GraphLayout/LICENSE:1-6) — a reminder that 'the project's license' is not automatically 'every dependency's license,' the same class of risk RK4 already tracks for FalkorDB/SSPL, generalized to any bundled tool."
+    cost: "Rejecting 'one license covers everything' costs a small amount of ongoing diligence (checking each vendored/bundled binary's license, not just the top-level LICENSE file) but avoids a real compliance surprise."
+    evidence: LICENSE:1-2
+    confidence: verified
+  - id: L9
+    lesson: "Watch for cases where adapter-native resolution proves insufficient for a language/interop-heavy corpus — CodeAtlas's opt-in CLANG_ASSISTED_PARSING flag is a precedent for a similar binary precision toggle rather than an all-or-nothing switch to a heavier resolver."
+    stance: watch
+    ties_to: [D26]
+    why: "config.m_useClang lets a user trade extraction speed for libclang-grade accuracy per-run (DoxygenDB.cs:767, wired from MainUI.xaml.cs:902) without changing the rest of the pipeline — a cheap shape for D26's staged 'adapter-native first, precision path later' plan if a future language needs a similar opt-in toggle rather than a full resolver swap."
+    cost: "Trigger: if adapter-native CALLS resolution quality (RK2) proves inadequate on a specific corpus (e.g. heavy C++/native interop, mirroring this very repo's own composition), consider a scoped opt-in precision toggle before committing to always-on LSP/SCIP."
+    evidence: DoxygenDB/DoxygenDB.cs:767
+    confidence: verified
+
+amendment_candidates: []
+
+open_questions:
+  - q: "Does doxygen itself support any incremental/partial regeneration that CodeAtlas simply never wires up, or is doxygen fundamentally a whole-project batch tool?"
+    blocked_by: "Answering requires reading doxygen's own source or documentation, which is out of scope for a study of this repo"
+    cheap_next_probe: "Run 'DoxygenDB/doxygen.exe --help' (or consult doxygen 1.8.6's own docs) for incremental-run flags"
+    why_it_matters: "Distinguishes 'CodeAtlas chose not to build incrementality' from 'the extraction tool it chose cannot support incrementality at all' — changes how strongly L1/L2 generalize beyond this specific tool choice"
+  - q: "How much of the 597-file, mostly-C# CodeAtlasVSIX codebase actually gets analyzed correctly by doxygen's C#-via-Java-output mode, given the README itself marks C# as 'not tested'?"
+    blocked_by: "Did not run doxygen against this repo's own C# sources or inspect doxygen's C#-specific XML output depth (properties, LINQ, generics)"
+    cheap_next_probe: "Run the embedded doxygen.exe (OPTIMIZE_OUTPUT_JAVA=YES per DoxygenDB.cs:779) against a small C# sample and diff the resulting XML against a C++ sample for feature coverage"
+    why_it_matters: "The repo's own primary implementation language is explicitly unverified by its authors for the very extraction path this study describes as authoritative"
+  - q: "Is the Legend/Scheme/Symbol/AnalysisWindow set of tool windows (not opened in this study) purely presentational, or do any of them expose additional graph-derived data (e.g. per-symbol statistics) not captured in q5/q6?"
+    blocked_by: "Budget — these files were identified by name only, not opened"
+    cheap_next_probe: "Read CodeAtlasVSIX/SymbolWindow.xaml.cs and CodeAtlasVSIX/AnalysisWindow.xaml.cs in full"
+    why_it_matters: "Could reveal an additional presentation surface or a metric beyond CountLine that would change the q6/q7 completeness picture"

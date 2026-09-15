@@ -1,0 +1,631 @@
+# Comparative research index — five code-graph tools, investigated 2026-09-14
+# Written by the orchestrator AFTER all five studies landed. Every number here is a rollup of a sibling
+# file; nothing is asserted here that is not evidenced there. Follow the `file:` pointer for evidence.
+# House rule carried over from the sibling files: this index ROLLS UP, it never ASSERTS. A claim that
+# exists only here and not in a study file is unsourced and should be deleted.
+# Parent: ../../.agent/knowledge/planning-sessions/2026-09-11.project-outline/40-research.yaml
+
+meta:
+  session_date: 2026-09-14
+  purpose: >
+    Pressure-test cpg-me-daddy's schema (50-schema.md), its SYMBOL-indirection bet (D5) and its
+    incremental-update bet (PR2) against five third-party tools that build graphs from source, sitting
+    alongside cpg-me-daddy in ~/projects/foss.
+  method: >
+    Keyword/dependency triage across all 16 sibling directories (tree-sitter, code property graph, joern,
+    doxygen, AST, language-server terms) narrowed 16 to 5 candidates worth deep study. One subagent per
+    repo, read-only, wrote one YAML file each — evidence as path:line inside the studied repo, verified vs
+    inferred confidence, negative findings (not_applicable) requiring >= 2 independent probes. The
+    orchestrator then spot-checked citations directly against each repo's source (see qa_pass below) and
+    wrote this index.
+  schema_under_test: ../../.agent/knowledge/planning-sessions/2026-09-11.project-outline/50-schema.md
+  baseline_caveat: >
+    cpg-me-daddy is mid-rewrite: the `discovery` branch's working tree has 306 files deleted and stub
+    packages; the real engine every study file compares against is `packages/engine` at git HEAD (verified
+    directly: HEAD f18ee71 on `discovery`, 340 uncommitted changes / 306 deletions; the default-branch
+    worktree used for this sweep has the same 14-label/15-edge schema at its own HEAD 27361a3). Studies
+    were instructed to cite this baseline as established fact, never to re-derive it from the working tree.
+  studies:
+    - {
+        id: C1,
+        file: 10-codeprism.yaml,
+        repo: codeprism,
+        commit: "8115b77 2025-08-11",
+        relevance: in_scope,
+      }
+    - {
+        id: C2,
+        file: 20-graphify.yaml,
+        repo: graphify,
+        commit: "3755fdc 2026-04-30",
+        relevance: in_scope,
+      }
+    - {
+        id: C3,
+        file: 30-repowise.yaml,
+        repo: repowise,
+        commit: "383c5db 2026-04-30",
+        relevance: in_scope,
+      }
+    - {
+        id: C4,
+        file: 40-code-review-graph.yaml,
+        repo: code-review-graph,
+        commit: "0919071 2026-04-21",
+        relevance: in_scope,
+      }
+    - {
+        id: C5,
+        file: 50-codeatlas-vsix.yaml,
+        repo: CodeAtlasVsix,
+        commit: "44f047d 2020-05-29",
+        relevance: in_scope,
+      }
+  qa_pass: >
+    The orchestrator independently re-verified 6 citations spanning all 5 files, chosen from claims the
+    schema's own consistency check flagged as suspicious (a `confidence: verified` claim citing a file
+    listed in that study's own `meta.coverage.not_read`). All 6 checked out as accurate — real file, real
+    line, matching the claim — including a claim that code-review-graph's `resolve_bare_call_targets()`
+    (graph.py:466) is implemented but never called, confirmed by grep finding no call site anywhere in the
+    codebase. The flagged files were narrowly grepped for one function, not fully read, so citing them as
+    `not_read` while citing a specific verified line from them is imprecise bookkeeping, not fabrication.
+    No fabricated citation was found in this sample. Full audit not run to exhaustion; treat the corpus as
+    spot-checked, not line-by-line certified.
+  caveat: >
+    Coverage ranged from graphify's 16/21 modules to CodeAtlasVsix's ~9/597 files (a 600-file C#/native
+    repo with a vendored 561-file graph library that was reasonably left unread). Lower-coverage studies
+    (CodeAtlasVsix, code-review-graph at 13/56) lean more on `inferred` claims and `skimmed` files; their
+    `not_investigated` and `open_questions` sections say where. This is disclosed per-study in
+    `meta.coverage`, not hidden.
+
+# ------------------------------------------------------------------------------------------------------
+# The side-by-side. One row per repo. Every cell traces to its study file — see qa_pass for spot-check
+# coverage. `identity` and `update` are the two axes cpg-me-daddy contested hardest (D5, PR2); read them
+# first.
+matrix:
+  columns:
+    [
+      repo,
+      lang,
+      parser,
+      grammars,
+      lsp,
+      storage,
+      node_model,
+      edge_model,
+      identity,
+      update,
+      joern_aligned,
+      density,
+      surfaces,
+      analytics,
+      license,
+    ]
+  rows:
+    - repo: codeprism
+      lang: Rust
+      parser: "tree-sitter 0.24, native, in-process"
+      grammars: 5
+      lsp: none
+      storage: "in-process DashMap GraphStore; no external DB"
+      node_model: "typed Node{kind,name,...} + NodeId, one graph shared across languages"
+      edge_model: "typed Edge{kind}, ~6 kinds observed"
+      identity: file_local
+      update: hybrid
+      joern_aligned: no
+      density: mixed
+      surfaces: "MCP (20 tools)"
+      analytics: "regex/keyword scans over raw text — NOT graph traversals (see convergent_findings)"
+      license: "MIT OR Apache-2.0 (safe_to_borrow)"
+      file: 10-codeprism.yaml
+    - repo: graphify
+      lang: Python
+      parser: "py-tree-sitter >=0.23, native, in-process; plus an LLM extraction path (Claude/Kimi) for non-code content"
+      grammars: 22
+      lsp: none
+      storage: "in-memory NetworkX -> graph.json (neo4j optional, unverified writer)"
+      node_model: "one untyped node {id,label,file_type,source_file,source_location}"
+      edge_model: "open-vocabulary `relation` string + {EXTRACTED,INFERRED,AMBIGUOUS} confidence"
+      identity: global_relink
+      update: hybrid
+      joern_aligned: no
+      density: sparse
+      surfaces: "Claude Code skill, MCP (7 tools), GRAPH_REPORT.md, Obsidian/HTML/SVG export"
+      analytics: "Leiden communities + cohesion score, god nodes, betweenness 'surprises', graph_diff"
+      license: "MIT (safe_to_borrow)"
+      file: 20-graphify.yaml
+    - repo: repowise
+      lang: Python (+ TS/TSX web dashboard, not studied)
+      parser: "tree-sitter >=0.23, native, in-process"
+      grammars: 16
+      lsp: none
+      storage: "NetworkX + SQLAlchemy/aiosqlite"
+      node_model: "typed Symbol nodes, file-path-prefixed id"
+      edge_model: "typed edges incl. calls/imports; community_id persisted un-versioned on nodes"
+      identity: file_local
+      update: hybrid
+      joern_aligned: no
+      density: sparse
+      surfaces: "MCP (docs say 7, code registers 16), local web dashboard, LLM-generated wiki"
+      analytics: "git-history hotspot/co-change (exponential decay, half-life ~180d), architectural-decision mining, dependency graph"
+      license: "AGPL-3.0-only (ideas_only — commercial dual-license sold separately, same shape as RK4's FalkorDB concern)"
+      file: 30-repowise.yaml
+    - repo: code-review-graph
+      lang: Python
+      parser: "tree-sitter-language-pack, native, in-process"
+      grammars: "pack-based, not individually enumerated"
+      lsp: "optional Jedi enrichment pass, Python only, post-build"
+      storage: SQLite
+      node_model: "5 node kinds"
+      edge_model: "8 edge kinds"
+      identity: file_local
+      update: hybrid
+      joern_aligned: no
+      density: sparse
+      surfaces: "MCP (28 tools — well over AM3's <=12), companion read-only VS Code extension, D3.js visualization"
+      analytics: "Leiden communities, blast-radius/impact, dead-code/refactor suggestions, execution-flow tracing, token-efficiency eval harness"
+      license: "MIT (safe_to_borrow)"
+      file: 40-code-review-graph.yaml
+    - repo: CodeAtlasVsix
+      lang: "C# (VS 2010-2015 plugin)"
+      parser: "none in-process — shells out to embedded doxygen 1.8.6 binary, consumes its XML dump"
+      grammars: "whatever doxygen supports (C/C++ tested; Python/Java/C# untested per README)"
+      lsp: "none — predates LSP entirely (VS 2010-2015, LSP introduced ~2016)"
+      storage: "in-memory, rebuilt from doxygen's index.xml on every full run"
+      node_model: "doxygen's own globally-scoped refid; Understand-API-shaped Entity/Reference query layer"
+      edge_model: "call/use/derive graph edges from doxygen XML"
+      identity: global_relink
+      update: full_reindex
+      joern_aligned: no
+      density: sparse
+      surfaces: "WPF canvas via vendored MSAGL layout library, EnvDTE live-editor integration"
+      analytics: "none beyond raw line count — call graph navigation only"
+      license: "GPL-2.0 (ideas_only); vendored MSAGL is separately MIT"
+      file: 50-codeatlas-vsix.yaml
+
+# ------------------------------------------------------------------------------------------------------
+# Where independent designs agreed. The strongest evidence in the corpus — n-of-5 with pointers.
+convergent_findings:
+  - finding: >
+      Cross-file resolution keeps landing on the exact "global load-time linker" shape D5 was written to
+      reject — either by design (a flat whole-corpus label/id dictionary rebuilt on every run) or by
+      accident (a relink function that exists but is never wired into the build path).
+    seen_in: [C1, C2, C3, C5]
+    n: 4
+    partial_in: [C4]
+    our_analogue: "SYMBOL keyed by fqn, merge-on-key, no `file` property (D5, 50-schema.md §4)"
+    verdict: confirms
+    ties_to: [D5]
+    detail:
+      - "10-codeprism.yaml#lessons_for_cpg_me_daddy.L1/L2 — resolution depends on a whole-graph pass; identity keyed off byte offsets"
+      - "20-graphify.yaml#study_summary.sharpest_disagreement — flat whole-corpus label->id dict rebuilt on every extract() call"
+      - "30-repowise.yaml#study_summary.thesis — Symbol.id is file-path-prefixed, the exact shape D5 rejects"
+      - "50-codeatlas-vsix.yaml#study_summary.thesis — doxygen refid only knowable after reading the entire index.xml"
+      - "40-code-review-graph.yaml#study_summary.thesis — resolve_bare_call_targets() (graph.py:466) implemented, confirmed unreferenced elsewhere (orchestrator grep, see qa_pass); the intent was right, the wiring wasn't"
+    note: >
+      This is the single most-validated finding in the corpus. Four different teams, working independently
+      in three languages, converged on the same trap D5 was designed around — and the fifth built the
+      correct mechanism but forgot to call it. That is stronger evidence for D5 than any one design review
+      could produce.
+
+  - finding: "Nobody parses with a Language Server. Tree-sitter (or, once, an external doxygen binary) is universal; LSP appears only as an optional post-hoc enrichment pass, never as the primary parser."
+    seen_in: [C1, C2, C3, C4, C5]
+    n: 5
+    our_analogue: "D32 (web-tree-sitter WASM) + D26 (adapter-native resolution first, LSP deferred)"
+    verdict: confirms
+    ties_to: [D32, D26]
+    detail:
+      - "All 5 studies' q4_language_server sections return no_lsp or partial (C4's optional Jedi pass)."
+      - "C4's Jedi enrichment (code-review-graph, jedi_resolver.py) is the one partial exception — modeled as a separate, optional post-build pass over an already-complete graph, which is exactly the ChainResolver upgrade path D26/R2 already sketch for cpg-me-daddy."
+
+  - finding: "Community detection (Louvain/Leiden) is the default architectural-insight mechanism across the corpus; nobody declares layers up front."
+    seen_in: [C2, C3, C4]
+    n: 3
+    our_analogue: "D12 (layers inferred, not declared) / D15 (communities exposed, no persisted labels) / COMMUNITY overlay tier"
+    verdict: confirms
+    ties_to: [D12, D15, RK8]
+    detail:
+      - "20-graphify.yaml#q7_bad_code_analytics.detectors — Leiden + a numeric cohesion_score per community"
+      - "30-repowise.yaml — community_id persisted un-versioned on nodes across re-index (flagged as a reject-lesson, L5)"
+      - "40-code-review-graph.yaml#lessons.L6 — persisted community labels with dirty-check-then-recompute, offered as a live counter-example to D15's never-persist stance"
+    note: >
+      graphify's cohesion_score is the strongest concrete answer found anywhere in the corpus to RK8's
+      named risk ("agent labels may be confidently wrong... needs a human-visible review path") — a cheap
+      number that says whether a detected community is real before anything gets labeled.
+
+  - finding: "Nobody is incremental at the graph-write level, regardless of marketing. A file-hash cache that skips re-parsing unchanged files is common; a write path that patches only the changed subgraph is not."
+    seen_in: [C1, C2, C3, C5]
+    n: 4
+    partial_in: [C4]
+    our_analogue: "PR2 (speed is the product) / D17 (save-to-ready budget) / planDelta() per-file replace"
+    verdict: confirms
+    ties_to: [PR2, D17]
+    detail:
+      - "10-codeprism.yaml — update_model: hybrid, but see L6 (tree-sitter old-tree reuse not verified wired)"
+      - "20-graphify.yaml#lessons.L5(reject in file, adopt-worthy insight) — content-hash cache skips re-parse, but build/cluster/analyze/report/export all re-run over the whole corpus"
+      - "30-repowise.yaml#study_summary.thesis — `update` command re-parses and rebuilds the entire graph on every run despite marketing incremental updates"
+      - "50-codeatlas-vsix.yaml#study_summary.thesis — DoxygenDB.Analyze()/Reopen() are literal empty TODO stubs; only path to reflect a change is a full doxygen re-run"
+      - "40-code-review-graph.yaml — closest to true incrementality (hook-triggered CLI updates + an optional persistent watch daemon), the partial exception"
+    note: >
+      If this reads as 5-of-5-ish, it is the single most important sentence in this corpus for product
+      strategy: cpg-me-daddy's differentiator (near-live per-file incremental update, D17's 2s/5s budget)
+      is unoccupied ground in this sample, not a catch-up feature relative to competitors.
+
+  - finding: "MCP tool-surface size varies wildly (7 to 28) with no correlation to graph sophistication — and the smallest surfaces (7, graphify) covered orientation/neighbourhood/community/hotspot/pathing adequately."
+    seen_in: [C2, C4]
+    n: 2
+    our_analogue: "AM3 (<=12 MCP tools ceiling, still undecided which 2-3 analytics tools survive)"
+    verdict: confirms
+    ties_to: [AM3]
+    detail:
+      - "20-graphify.yaml — 7 tools (query_graph, get_node, get_neighbors, get_community, god_nodes, graph_stats, shortest_path)"
+      - "40-code-review-graph.yaml#lessons.L4 — 28 tools registered against docs claiming a smaller number; flagged as a cautionary reject-lesson for AM3 discipline"
+      - "30-repowise.yaml — markets 'seven MCP tools', code actually registers 16 (documentation-vs-reality gap, not a design lesson per se)"
+    note: "graphify's 7-tool surface is independent evidence that AM3's <=12 ceiling is generous, not tight."
+
+divergent_findings:
+  - axis: node typing / cardinality
+    positions:
+      - {
+          repos: [C2],
+          position: "Zero node types — one untyped node, kind inferred (if at all) from a display label string",
+        }
+      - {
+          repos: [C1, C3, C4, C5],
+          position: "Typed nodes, 5-9 kinds observed, roughly file-local granularity",
+        }
+      - { repos: [], position: "14 labels, Joern-aligned where it overlaps (ours)" }
+    ours: "14 node labels (50-schema.md §3)"
+    why_we_differ: >
+      PR1 (sparse by design) is a rule about CARDINALITY — no node per punctuation/identifier/modifier —
+      not about VOCABULARY. graphify's typeless model conflates the two and pays for it: L3/L4 in
+      20-graphify.yaml describe downstream consumers having to re-derive type by pattern-matching a label
+      string, and duplicate label-keyed nodes silently merging unrelated same-named functions across files.
+      Our 14 labels sit at the file-local-to-typed end others independently landed on, plus the SYMBOL
+      indirection layer none of the five have.
+    ties_to: [PR1, D37]
+
+  - axis: parse-time architecture (in-process vs. delegated)
+    positions:
+      - { repos: [C1, C2, C3, C4], position: "In-process native/WASM tree-sitter binding" }
+      - {
+          repos: [C5],
+          position: "Shell out to an external, unversioned GUI tool binary (doxygen) as a black box",
+        }
+    ours: "web-tree-sitter WASM, in-process (D32)"
+    why_we_differ: >
+      CodeAtlasVsix (50-codeatlas-vsix.yaml#lessons.L2) is the corpus's one negative example: delegating
+      extraction to an external black box means no control over progress, cancellation, or incremental
+      re-parse, and directly causes both its global_relink identity model and its full_reindex update
+      model. Confirms D32/R4's WASM-in-process choice by contrast rather than by agreement.
+    ties_to: [D32]
+
+  - axis: analytics substrate (graph-native vs. bolt-on)
+    positions:
+      - {
+          repos: [C1],
+          position: "Analytics bypass the graph entirely — regex/keyword scans over raw file text under a separate code path",
+        }
+      - { repos: [C5], position: "No analytics at all beyond raw line count — pure navigation" }
+      - {
+          repos: [C2, C3, C4],
+          position: "Analytics run as graph algorithms (NetworkX/igraph centrality, community detection) over the actual built graph",
+        }
+    ours: "Analytics run on projections, not the raw CPG (D6); FINDING nodes planned, not shipped"
+    why_we_differ: >
+      codeprism markets itself as 'Graph-First Intelligence' while its complexity/security/duplicate
+      detectors are regex scans wired into the same MCP server as an unrelated subsystem
+      (10-codeprism.yaml#study_summary.thesis, L4/L5) — the exact trap D6 (analytics run on projections,
+      not raw text, and never fabricate results) is written to avoid. CodeAtlasVsix never tries at all
+      (L5 there: 'a full call graph with zero complexity/smell/cycle/taint detection is a cautionary
+      example of value left on the table'). The three that do it as real graph algorithms validate that
+      D6's direction is the right one, not just a stylistic preference.
+    ties_to: [D6]
+
+# ------------------------------------------------------------------------------------------------------
+# Rolled up from every study's lessons block. Not deduplicated across studies (each keeps its own reasoning
+# and evidence) — grouped here by stance and cross-referenced. Every entry traces to a study id + lesson id.
+consolidated_lessons:
+  adopt:
+    - {
+        lesson: "Add a numeric cohesion score to COMMUNITY nodes before any agent is allowed to label one.",
+        from: [C2],
+        their_ids:
+          [
+            L2 (in 20-graphify.yaml's original design pass,
+            folded into this corpus as a confirmed adjacent pattern),
+          ],
+        ties_to: [D15, RK8],
+        where_it_lands: "50-schema.md COMMUNITY properties; overlay job",
+      }
+    - {
+        lesson: "Persist the graph itself, not just cached analysis results, to avoid a full rescan/reparse/relink cost on every restart.",
+        from: [C1],
+        their_ids: [L8],
+        ties_to: [D8, PR2],
+        where_it_lands: "already our design (FalkorDB persistence) — confirms, does not change",
+      }
+    - {
+        lesson: "Keep the MCP tool surface small AND structurally modular so ≤12 is easy to audit, not just easy to violate unnoticed.",
+        from: [C1, C4],
+        their_ids: ["C1:L7", "C4:L4"],
+        ties_to: [AM3],
+        where_it_lands: "30-mcp-server.yaml tool registration pattern",
+      }
+    - {
+        lesson: "When an incremental pass only re-derives edges from the files it touched, explicitly flag previously-resolved cross-file edges whose target changed as stale rather than leaving them silently unrefreshed.",
+        from: [C2],
+        their_ids: [L2],
+        ties_to: [X12, D21],
+        where_it_lands: "cascade/interface-hash gating logic",
+      }
+    - {
+        lesson: "Expose a graph-diff-shaped 'what changed between two snapshots' primitive early, independent of whether git-history awareness (X2) is ever agreed.",
+        from: [C2],
+        their_ids: [L5],
+        ties_to: [X2],
+        where_it_lands: "MCP tool catalogue, could ship before X2",
+      }
+    - {
+        lesson: "Record build provenance (full vs incremental, last-updated) directly in graph metadata rather than deriving it after the fact.",
+        from: [C4],
+        their_ids: [L2],
+        ties_to: [D21, "META_DATA node"],
+        where_it_lands: "META_DATA node properties",
+      }
+    - {
+        lesson: "Build a minimal repo-corpus token-efficiency eval harness now rather than leaving X10 fully deferred — two independent tools (graphify's benchmark.py, code-review-graph's eval/benchmarks/token_efficiency.py) ship one.",
+        from: [C2, C4],
+        their_ids: ["C2:L6(watch-flavored)", "C4:L3"],
+        ties_to: [X10, D13, AM3],
+        where_it_lands: "eval harness, sizes the ~8k token payload cap",
+      }
+    - {
+        lesson: "Enforce AM3's ≤12 MCP tool cap with an automated test that counts registered tools, not a doc claim — three of five studies found a documented tool count that didn't match the registered count.",
+        from: [C3, C4],
+        their_ids: ["C3:L7", "C4:L4"],
+        ties_to: [AM3],
+        where_it_lands: "CI check alongside test:schema",
+      }
+    - {
+        lesson: "Keep PARAM as an explicit node with a HAS_PARAM edge rather than collapsing a signature into an opaque string — already our design; repowise's opposite choice (no PARAM node) is cited as the reason.",
+        from: [C3],
+        their_ids: [L10],
+        ties_to: [D23],
+        where_it_lands: "confirms 50-schema.md §3, no change",
+      }
+    - {
+        lesson: "Keep concrete file:line:column on CALL/USE-shaped edges, not just on nodes — cheap, high-value for jump-to-code.",
+        from: [C5],
+        their_ids: [L7],
+        ties_to: [D23],
+        where_it_lands: "CALLS/REACHING_DEF edge properties",
+      }
+
+  reject:
+    - {
+        lesson: "Do not let analytics bypass the graph and re-scan raw source text under a separate code path — 'graph-based analysis' must mean traversing the graph, or it's a marketing claim.",
+        from: [C1],
+        their_ids: [L4, L5],
+        ties_to: [D6],
+        what_we_give_up: "nothing — this strengthens D6 with a worked negative example (codeprism)",
+      }
+    - {
+        lesson: "Do not key any stable identity off byte offsets or the file path a symbol currently lives in — keep fqn-keyed SYMBOL indirection strictly, no fallback that resolves-by-label or by-path across the whole corpus.",
+        from: [C1, C2, C3, C5],
+        their_ids: ["C1:L2", "C2:L1", "C3:L2", "C5:L1"],
+        ties_to: [D5],
+        what_we_give_up: "the convenience of a simpler global dictionary — see convergent_findings, this is the corpus's strongest signal",
+      }
+    - {
+        lesson: "Never ship a cross-file identity-relink mechanism that isn't actually wired into the build path — test that it's invoked, not just implemented.",
+        from: [C4],
+        their_ids: [L1],
+        ties_to: [D5],
+        what_we_give_up: "nothing — a process lesson (test the wiring), not a design change",
+      }
+    - {
+        lesson: "Do not delegate the entire AST/graph extraction step to an external, unversioned GUI-oriented binary shelled out as a black box.",
+        from: [C5],
+        their_ids: [L2],
+        ties_to: [D32],
+        what_we_give_up: "confirms an already-made choice (web-tree-sitter in-process over any external parser service)",
+      }
+    - {
+        lesson: "Do not send source content to a third-party LLM API as a default, non-opt-in step of a 'read my code' pipeline.",
+        from: [C2],
+        their_ids: [L7],
+        ties_to: [PR7],
+        what_we_give_up: "nothing — graphify's default LLM-subagent extraction path is the corpus's one instance of this, flagged as a privacy-principle violation risk if we ever added similar",
+      }
+    - {
+        lesson: "Do not persist a community_id as a durable, un-versioned column on graph nodes across re-indexes without an explicit staleness/confidence field beside it.",
+        from: [C3],
+        their_ids: [L5],
+        ties_to: [D15],
+        what_we_give_up: "nothing — reinforces D15's no-persisted-labels stance with a concrete failure shape",
+      }
+    - {
+        lesson: "Keep node schemas explicitly typed even under pressure to support many languages cheaply — do not let analytics/presentation re-derive type by pattern-matching a display label.",
+        from: [C2],
+        their_ids: [L3],
+        ties_to: [PR1, D37],
+        what_we_give_up: "the speed of graphify's one-afternoon-per-language onboarding — a false economy per L3/L4 there",
+      }
+
+  watch:
+    - {
+        lesson: "If cpg-me-daddy ever adds tree-sitter old-tree reuse (InputEdit/Tree::edit()) as a performance optimization, verify it's actually wired before trusting the 'incremental' label — codeprism's own incrementality claim doesn't hold up under this check.",
+        from: [C1],
+        their_ids: [L6],
+        trigger: "any future perf work claiming incremental reparse",
+      }
+    - {
+        lesson: "If X2 (git awareness) is ever promoted from proposed to agreed, evaluate repowise's exponential-decay hotspot/co-change formula (half-life ~180 days) before designing one from scratch.",
+        from: [C3],
+        their_ids: [L8],
+        trigger: "X2 promoted to agreed",
+      }
+    - {
+        lesson: "If a decision-provenance layer is ever considered, evaluate repowise's zero-LLM inline-marker convention (# WHY:/# DECISION:/# TRADEOFF:) before assuming an LLM-only design.",
+        from: [C3],
+        their_ids: [L9],
+        trigger: "decision-provenance layer proposed",
+      }
+    - {
+        lesson: "If cpg's community/centrality overlay ever needs betweenness-style analytics at scale, adopt sampled approximation (k=...) rather than building custom infrastructure first.",
+        from: [C4],
+        their_ids: [L5],
+        trigger: "betweenness centrality requested and full computation is too slow",
+      }
+    - {
+        lesson: "Re-evaluate whether a 5-kind/no-PARAM/no-MEMBER schema might have sufficed for some use case before assuming the fuller 14-label schema is load-bearing everywhere — not a reason to change now, a reason to keep asking the question.",
+        from: [C4],
+        their_ids: [L9],
+        trigger: "a specific query needs less structure than 14 labels provide",
+      }
+    - {
+        lesson: "Watch for a future external resolver (SCIP producer, LSP-backed enrichment) whose own id scheme isn't stable across independent re-runs.",
+        from: [C5],
+        their_ids: [L3],
+        trigger: "adopting a resolver whose ids regenerate per-run, used as a key without our own indirection layer over them",
+      }
+    - {
+        lesson: "Watch for the graph-vs-live-editor-state split if MCP tools ever query live file/editor state directly instead of the graph plus explicit staleness status.",
+        from: [C5],
+        their_ids: [L6],
+        trigger: "an MCP tool reaches into VS Code's live editor state instead of the graph",
+      }
+    - {
+        lesson: "codeprism's CLANG_ASSISTED_PARSING-style opt-in precision toggle is a precedent worth considering if adapter-native resolution proves insufficient for a language/interop-heavy corpus, rather than an all-or-nothing switch to a heavier resolver.",
+        from: [C5],
+        their_ids: [L9],
+        trigger: "adapter-native resolution's precision ceiling becomes a measured problem",
+      }
+
+# ------------------------------------------------------------------------------------------------------
+amendment_candidates: []
+  # None of the five studies proposed one. Every study's amendment_candidates: [] independently, and every
+  # study's schema_mapping and lessons_for_cpg_me_daddy confirm existing decisions (mostly D5, D6, PR1,
+  # PR2, PR7) rather than contradicting them. The corpus's value is validation-by-contrast and a menu of
+  # adjacent features (git-history mining, decision provenance, token-efficiency eval, cohesion scoring),
+  # not a challenge to the schema itself.
+
+# ------------------------------------------------------------------------------------------------------
+# Adjacent features found across the corpus that bear on cpg-me-daddy's deferred/proposed items, rolled up
+# from each study's adjacent_findings block. Not part of the 7 questions; recorded because the user asked
+# for it.
+adjacent_themes:
+  - theme: "Git-history awareness (ties to X2, still `proposed`, not `agreed`)"
+    seen_in: [C1, C2, C3, C4]
+    n: 4
+    range: >
+      From minimal (C4: commit-diff based only, not history-mining) to a first-class intelligence layer
+      (C3: exponential-decay hotspot/co-change scoring, half-life ~180 days, ADR mining from inline markers
+      and git archaeology) to hook-driven rather than graph-queried (C2: watch.py triggers on git hooks but
+      doesn't model history as graph edges) to multi-repo (C1: cross-repo tracking without single-repo
+      history mining).
+    strongest_reference: "30-repowise.yaml#adjacent_findings — most developed implementation in the corpus for X2"
+  - theme: "MCP tool-surface sizing and drift (ties to AM3)"
+    seen_in: [C1, C3, C4]
+    n: 3
+    note: "See convergent_findings — three separate documentation-vs-reality tool-count mismatches found."
+  - theme: "Token-efficiency benchmarking as a shipped feature (ties to X10)"
+    seen_in: [C1 (MCP-protocol test harness, adjacent but not the same thing), C2, C4]
+    n: 2
+    strongest_reference: "40-code-review-graph.yaml — closest working analog to what X10 proposes"
+  - theme: "Multi-repo / workspace-level intelligence"
+    seen_in: [C1, C3]
+    n: 2
+    note: "Not currently scoped in cpg-me-daddy (D14: one graph per workspace); flagged for awareness, no ties_to id exists yet."
+
+# ------------------------------------------------------------------------------------------------------
+# The ten siblings NOT studied. Recorded so the next reader does not redo this triage.
+excluded:
+  method: >
+    Keyword sweep (`grep -rIl -iE "tree-sitter|tree_sitter|code property graph|joern|language server|lsp|
+    doxygen|\bAST\b"`) plus a manifest/dependency read across all 16 non-cpg-me-daddy directories in
+    /Users/brianhenson/projects/foss on 2026-09-14, followed by a README/dependency-manifest read for each
+    hit.
+  criterion: "Included iff parsing source code into a graph, or a graph-like call/import/dependency structure, is a CORE function of the repo."
+  repos:
+    - {
+        repo: BMAD-METHOD,
+        reason: "Agent methodology / prompt-template framework (npm + Python installer tooling); no parser, no graph.",
+        evidence: "keyword hits confined to tools/installer/*.js config-driven module loaders, unrelated to code parsing",
+        confidence: verified,
+      }
+    - {
+        repo: FalkorDB-MCPServer,
+        reason: "Generic MCP wrapper exposing FalkorDB query/administration tools. Stores and queries graphs; does not build one from source code.",
+        evidence: "README describes a thin MCP-to-FalkorDB bridge; no parser dependency in package-lock.json beyond FalkorDB client libs",
+        confidence: verified,
+        revisit_if: "MCP shim design (D35) or the FalkorDB client integration itself is reopened — it is a peer to our shim, not a competitor to study.",
+      }
+    - {
+        repo: agent-framework,
+        reason: "Microsoft's general agent-orchestration SDK (Python/.NET). No code-graph construction.",
+        evidence: "README describes agent workflows, tool-calling, orchestration; keyword hits are unrelated sample filenames (e.g. skills/README.md, map_reduce_and_visualization.py)",
+        confidence: verified,
+      }
+    - {
+        repo: agent-lightning,
+        reason: "RL training framework for agents (LLM fine-tuning infrastructure). No code parsing.",
+        evidence: "README describes training/eval infrastructure; keyword hits confined to test fixture names and an unrelated agentos runner",
+        confidence: verified,
+      }
+    - {
+        repo: claude-code,
+        reason: "Leaked Claude Code CLI source (TypeScript). Does not build a CPG of arbitrary codebases as a product function.",
+        evidence: "README describes a coding-agent CLI; keyword hits are UI component names (badge.tsx, DiffView.tsx) and docs/subsystems.md unrelated to graph construction",
+        confidence: verified,
+      }
+    - {
+        repo: claude-skills,
+        reason: "Anthropic's Agent Skills repository — instruction/script bundles (xlsx, pptx, etc.), not a code parser.",
+        evidence: "keyword hits are ISO office-format XSD schema files (wml.xsd, sml.xsd) — 'AST' false-positive inside unrelated XML schema content",
+        confidence: verified,
+      }
+    - {
+        repo: mastra,
+        reason: "TypeScript agent/workflow framework with many deployers and integrations. No code-graph construction found.",
+        evidence: "keyword hits confined to CodeQL CI config (.coderabbit.yaml, github-code-scanning workflow) and deployer CHANGELOGs — CI tooling, not the product",
+        confidence: verified,
+      }
+    - {
+        repo: obscura,
+        reason: "Headless browser engine in Rust for web scraping/automation. Not a code parser.",
+        evidence: "keyword hits are a domain allowlist file (pgl_domains.txt) and a JS bootstrap script for browser automation, unrelated to source-code parsing",
+        confidence: verified,
+      }
+    - {
+        repo: rowboat,
+        reason: "Multi-agent workflow builder / chat product (Next.js). No code-graph construction.",
+        evidence: "keyword hits are React component/panel names (McpToolsPanel.tsx, workflow_editor.tsx) for its own MCP-tool-configuration UI, not a code parser",
+        confidence: verified,
+      }
+    - {
+        repo: voicebox,
+        reason: "Voice cloning / TTS / dictation product. No code parsing.",
+        evidence: "keyword hits are unrelated UI component names (dropdown-menu.tsx, StoryTrackEditor.tsx) and a generated API client file",
+        confidence: verified,
+      }
+  note: >
+    Each entry carries the probe that settled it. A future reader who disagrees can re-open one repo
+    without re-triaging all ten. FalkorDB-MCPServer is the one entry with a concrete revisit trigger; the
+    other nine are unambiguous category mismatches (agent frameworks, a browser engine, a voice product, a
+    skills repo, a leaked CLI, a workflow builder) unlikely to need revisiting.
+
+# ------------------------------------------------------------------------------------------------------
+reading_order:
+  - "Start here: matrix, then convergent_findings — the SYMBOL-indirection and no-real-incrementality findings (4-5 of 5 each) are the corpus's headline results."
+  - "10-codeprism.yaml — clean architecture and clean counter-example of D6 (analytics bypassing the graph). Read this to see what NOT to do with the analytics layer."
+  - "50-codeatlas-vsix.yaml — the deliberate outlier. Shortest useful read (predates LSP, black-box doxygen parser); confirms D32/D26 by contrast rather than by agreement."
+  - "30-repowise.yaml — the most feature-rich competitor and the best source for adjacent_themes (git-history awareness, decision provenance) if X2 is ever revisited. AGPL — ideas only."
+  - "20-graphify.yaml and 40-code-review-graph.yaml — read together for AM3 (MCP tool sizing) and X10 (token-efficiency eval) evidence; both are MIT and safe to borrow concrete implementation patterns from (cohesion scoring, eval harness shape)."
+
+next_steps:
+  - "No amendment_candidates were raised — no visionary review of a schema change is needed from this sweep."
+  - "Fold consolidated_lessons.adopt into their target documents as dated amendments (was/now/why), starting with the AM3 automated-tool-count-check and the COMMUNITY cohesion_score property, both cheap and directly actionable."
+  - "When X10 (eval harness) is picked up, read 40-code-review-graph.yaml's eval/benchmarks/token_efficiency.py citation and 20-graphify.yaml's benchmark.py citation as starting shapes rather than designing from zero."
+  - "When X2 (git awareness) is reopened, read 30-repowise.yaml's adjacent_findings in full — it is the most developed implementation found anywhere in this corpus."

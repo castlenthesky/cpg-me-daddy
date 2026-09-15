@@ -19,6 +19,7 @@ import {
   DEFAULT_INCLUDES,
   DEFAULT_MAX_FILE_SIZE_BYTES,
 } from "../workspace/defaults";
+import { workspaceGraphKey } from "../workspace/hash";
 import type { WalkOptions } from "../workspace/walker";
 
 export interface CpgConfigInput {
@@ -57,7 +58,18 @@ export function defineCpgConfig(input: CpgConfigInput = {}): CpgConfig {
     followSymlinks: input.followSymlinks ?? false,
   };
 
-  const falkor = defineCpgDevFalkorConfig({ env: input.env, ...input.db });
+  const falkor = defineCpgDevFalkorConfig({
+    env: input.env,
+    ...input.db,
+    // A default only — `defaults.connection.graph` sits below an explicit
+    // `connection.graph` and `CPG_GRAPH` in `defineFalkorConfig`'s own
+    // precedence, so both still override this. See `workspaceGraphKey`'s
+    // own doc for why one workspace needs its own graph key at all.
+    defaults: {
+      ...input.db?.defaults,
+      connection: { graph: workspaceGraphKey(root), ...input.db?.defaults?.connection },
+    },
+  });
 
   return { root, walk, falkor };
 }

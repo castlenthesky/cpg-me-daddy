@@ -9,7 +9,13 @@ import { resolve } from "node:path";
  */
 import { parseArgs } from "node:util";
 
-import { defineCpgConfig, openCpgStore, watchWorkspace, type NormalizedChange } from "@cpg/engine";
+import {
+  defineCpgConfig,
+  filesystemProjector,
+  openCpgStore,
+  watchWorkspace,
+  type NormalizedChange,
+} from "@cpg/engine";
 
 import type { Io } from "../io";
 import { WATCH_USAGE } from "../usage";
@@ -127,9 +133,26 @@ export async function runWatch(
   }
 
   try {
+    const sink = filesystemProjector(
+      { store: opened.store, root: config.root },
+      {
+        onWrite: (batch, write) => {
+          if (args.json) {
+            io.out(JSON.stringify({ kind: "batch", changes: batch.changes, write }));
+            return;
+          }
+          const now = new Date().toISOString().slice(11, 19);
+          io.out(`${now}  ${write.nodesWritten} node(s), ${write.edgesWritten} edge(s)`);
+          for (const change of batch.changes) {
+            io.out(changeLine(change));
+          }
+        },
+      },
+    );
+
     const session = await watchWorkspace(
       config,
-      { store: opened.store },
+      { sink },
       {
         skipInitialIndex: args.skipInitialIndex,
         onReady: (report) => {
@@ -148,19 +171,18 @@ export async function runWatch(
             );
           }
         },
-        onBatch: (changes, write) => {
-          if (args.json) {
-            io.out(JSON.stringify({ kind: "batch", changes, write }));
-            return;
-          }
-          const now = new Date().toISOString().slice(11, 19);
-          io.out(`${now}  ${write.nodesWritten} node(s), ${write.edgesWritten} edge(s)`);
-          for (const change of changes) {
-            io.out(changeLine(change));
-          }
-        },
         onWarning: (message) => {
           io.err(args.json ? JSON.stringify({ kind: "warning", message }) : `warning: ${message}`);
+        },
+        onDegraded: (paths, error) => {
+          const message = `${paths.length} path(s) not reflected in the graph: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+          io.err(
+            args.json
+              ? JSON.stringify({ kind: "degraded", paths, message })
+              : `degraded: ${message}`,
+          );
         },
       },
     );

@@ -1,0 +1,713 @@
+# Comparative study — graphify · investigated 2026-09-14
+# One of five third-party code-graph tools studied to pressure-test cpg-me-daddy's own design.
+# House rules, enforced by schema shape, not by good intentions:
+#   * Every claim is a {claim, evidence, confidence} record. evidence is a path:line INSIDE THIS REPO.
+#   * confidence: verified = the cited lines were read. inferred = deduced from a manifest/doc/dep list.
+#   * A "no" is a finding: use not_applicable{} with >= 2 confirmed_by probes, never an empty field.
+# Sibling index: 00-index.yaml. Our schema under comparison: ../../.agent/knowledge/planning-sessions/
+#   2026-09-11.project-outline/50-schema.md.
+
+meta:
+  repo: graphify
+  repo_path: /Users/brianhenson/projects/foss/graphify
+  upstream: https://github.com/safishamsi/graphify.git
+  commit: 3755fdc 2026-04-30
+  investigated_on: 2026-09-14
+  language: Python >=3.10 (package name on PyPI is "graphifyy"; import name is "graphify")
+  size:
+    source_files: 21
+    loc: 10203
+    counted_by: "find graphify -name '*.py' | xargs wc -l  (package dir only; repo-wide incl. tests/worked is 64 files / 16253 lines via find . -name '*.py' -not -path './.git/*' | xargs wc -l)"
+  license:
+    {
+      spdx: MIT,
+      reuse: safe_to_borrow,
+      note: "LICENSE:1-3, Copyright (c) 2026 Safi Shamsi, MIT License — permissive, no copyleft or attribution-in-source requirement beyond the standard notice.",
+    }
+  citation_base: /Users/brianhenson/projects/foss/graphify
+  relevance:
+    verdict: in_scope
+    why: "Parses source in 22+ languages with tree-sitter into a NetworkX property graph (classes/functions/imports/calls as nodes+edges), runs community detection and analytics on it, and exposes it over an MCP server — this is squarely a code-property-graph tool, not an agent framework or generic graph DB."
+    evidence: graphify/extract.py:707-761
+  coverage:
+    read_fully:
+      [
+        ARCHITECTURE.md,
+        pyproject.toml,
+        graphify/detect.py,
+        graphify/build.py,
+        graphify/cluster.py,
+        graphify/validate.py,
+        graphify/cache.py,
+        graphify/watch.py,
+        graphify/hooks.py,
+        graphify/benchmark.py,
+        graphify/report.py,
+        graphify/serve.py,
+        graphify/llm.py,
+        graphify/manifest.py,
+        graphify/__init__.py,
+        graphify/security.py(partial ~1-100/239),
+      ]
+    skimmed:
+      [
+        graphify/extract.py(~1050/3547 lines across the language-dispatch table,
+        LanguageConfig,
+        _extract_generic,
+        call-graph pass,
+        cross-file resolution,
+        extract() orchestrator),
+        graphify/analyze.py(~400/540 lines),
+        graphify/export.py(surfaces list + to_html/to_svg bodies,
+        ~200/1064 lines),
+        graphify/__main__.py(~150/1525 lines: CLI help text,
+        merge-graphs,
+        update dispatch),
+        graphify/skill.md(structural grep + two sections read: subagent dispatch ~L210-360,
+        --update flow ~L860-935,
+        of 61323 bytes),
+      ]
+    not_read:
+      [
+        graphify/wiki.py,
+        graphify/ingest.py,
+        graphify/transcribe.py,
+        graphify/skill-*.md (10 other platform variants),
+        README.md (grepped only),
+        CHANGELOG.md,
+        SECURITY.md,
+        docs/translations/**,
+        tests/**,
+        worked/**,
+        AGENTS.md,
+      ]
+    read_ratio: "16 of 21 package source files opened (fully or in substantial part); extract.py and __main__.py (the two largest files, 3547 and 1525 lines) were skimmed at emit-site granularity, not read end-to-end"
+  caveat: >
+    The 22-language extractor table in extract.py was verified in depth only for Python, the generic
+    tree-sitter dispatch path, and the cross-file/call-resolution machinery; per-language quirks (Go, Rust,
+    Zig, PowerShell, Elixir, Objective-C, Julia, Verilog each have bespoke extract_<lang> functions of
+    100-300 lines apiece) were not individually read. The semantic/LLM extraction path was verified via
+    llm.py and skill.md's subagent-dispatch section, but skill.md itself (the actual orchestrator invoked
+    as a Claude Code skill) was only partially read — its full 8-step pipeline prose was not read end-to-end,
+    so some orchestration details (exact prompt templates, cost-tracking arithmetic, Step 5-8 wiki/canvas
+    generation) are inferred from code the steps call rather than the step descriptions themselves.
+
+study_summary:
+  thesis: >
+    graphify is a two-engine hybrid: a deterministic, tree-sitter-based AST walker (graphify/extract.py)
+    that builds a flat, untyped node/edge graph for code, fused with an LLM-driven semantic layer — either
+    Claude Code subagents dispatched in parallel (the default, documented in skill.md) or a direct API call
+    to Claude/Kimi (llm.py) — that extracts the same node/edge schema from docs, papers, and images and adds
+    fuzzy relations like semantically_similar_to. The single most interesting thing relative to cpg-me-daddy
+    is the identity model: node IDs are file-stem-qualified strings, but cross-file linking (both calls and
+    imports) is resolved through a flat, whole-corpus label→id dictionary rebuilt on every extract() call
+    (extract.py:3438-3455) — exactly the "global load-time linker" pattern that D5 explicitly rejects for
+    cpg-me-daddy, and it is recomputed only over the files passed to that extract() call, so an incremental
+    --update silently fails to create or refresh cross-file edges into files that did not change.
+  one_line_verdict: "A different product wearing overlapping words — a Claude-Code-skill-first RAG/knowledge-graph tool for humans-and-agents-reading-a-graph, not an IDE-integrated incrementally-updated CPG; its code-graph layer is a fast, useful, but intentionally coarse building block, not the product's center of gravity."
+  most_useful_finding: L2
+  sharpest_disagreement: "graphify's cross-file symbol resolution is a single global {label.lower(): node_id} dict rebuilt from whatever files were just extracted (extract.py:3438-3455, extract.py:2664-2735) — the same whole-graph, name-based relinking that D5 names and rejects as incompatible with a fast single-file replace. graphify accepts the risk (name collisions silently overwrite in the dict; unresolved incremental relinks are just missed) because the AST layer is a means to a RAG-query end, not a precision-tracked graph in its own right."
+
+# The seven questions, in the user's order and numbering. Never renumber, never drop, never merge.
+q1_graph_construction:
+  pipeline:
+    detect: "detect.py: os.walk the tree once, classify each file by extension into code/document/paper/image/video, skip venvs/node_modules/build dirs and .graphifyignore matches, warn if the corpus is small enough to just paste into context (detect.py:337-435)"
+    extract_ast: "extract.py: per-language tree-sitter parse -> single recursive walk() builds class/function/import nodes and 'contains' edges -> second recursive walk_calls() over saved function bodies resolves call edges in-file, defers cross-file callees to raw_calls (extract.py:707-1183)"
+    extract_semantic: "skill.md dispatches Claude Code subagents (subagent_type=general-purpose) in parallel, one per file chunk, each independently emitting the same nodes/edges JSON for docs/papers/images and cross-domain relations; llm.py provides a non-Claude-Code direct-API alternative (skill.md:280-354, graphify/llm.py:14-165)"
+    build: "build.py: merge all per-file/per-chunk extraction dicts into one NetworkX (Di)Graph; nodes added in order so later (semantic) extractions overwrite earlier (AST) ones on ID collision (build.py:42-127)"
+    cluster: "cluster.py: Leiden (graspologic) if installed else Louvain (networkx) community detection, splits communities >25% of graph, stores community id back as a node attribute (cluster.py:21-105)"
+    analyze: "analyze.py: degree-based god_nodes, composite-scored surprising_connections, heuristic suggest_questions, graph_diff for before/after snapshots (analyze.py:39-540)"
+    report: "report.py: renders GRAPH_REPORT.md — confidence breakdown, community hubs, god nodes, surprising connections, ambiguous edges, a 'Knowledge Gaps' section (isolated nodes / thin communities / high ambiguity) (report.py:15-181)"
+    export: "export.py: graph.json (node-link), interactive vis.js graph.html (capped at 5000 nodes), matplotlib SVG, Cypher script, Obsidian vault, Excalidraw-style canvas, optional Neo4j push, GraphML (export.py:25,297-1064)"
+  entry_points:
+    - {
+        claim: "CLI entry point is `graphify` -> graphify.__main__:main, a hand-rolled sys.argv dispatcher (no argparse subparsers) with ~25 subcommands",
+        evidence: "pyproject.toml:56-57, graphify/__main__.py:976-1030",
+        confidence: verified,
+      }
+    - {
+        claim: "The documented/default entry point is not the CLI but a Claude Code skill (skill.md, installed via `graphify install` into the platform's skill directory) that the agent invokes as /graphify — the skill's markdown IS the pipeline orchestrator for the semantic half",
+        evidence: "graphify/skill.md:59-360",
+        confidence: verified,
+      }
+  build_model:
+    verdict: multi_pass_pipeline
+    claim: "Strictly staged, non-interleaved: all detection, then all AST extraction (+ parallel semantic subagents), then one merge, then one clustering pass, then one analysis pass, then report/export. There is no on-demand/query-time graph construction — serve.py only reads an already-built graph.json."
+    evidence: "ARCHITECTURE.md:6-9, graphify/serve.py:11-29"
+    confidence: verified
+  findings:
+    - {
+        claim: "AST extraction and semantic (subagent) extraction are explicitly parallelized within one run: 'Dispatch all semantic subagents AND start AST extraction in the same message'",
+        evidence: "graphify/skill.md:210-212",
+        confidence: verified,
+        note: "Cross-cutting note: this is a batch-parallel pipeline, not a streaming/incremental one at the whole-run level — parallelism is across independent files/chunks within a single pass, not across pipeline stages.",
+      }
+    - {
+        claim: "detect() always re-scans the memory dir (graphify-out/memory/) for prior Q&A results and folds them back into the corpus as regular files",
+        evidence: "graphify/detect.py:351-361",
+        confidence: verified,
+        note: "A self-reinforcing feedback loop (save-result -> re-detected as a document next run) that cpg-me-daddy has no analog for; ties to none of our decisions directly, filed as adjacent.",
+      }
+
+q2_ast_to_cpg:
+  mechanism:
+    verdict: direct_ast_walk
+    claim: "For code: a single recursive walk(node) over the tree-sitter parse tree, dispatched by node.type membership in per-language frozensets stored on a LanguageConfig dataclass (not a query language like tree-sitter's own S-expression query API) — this is closer to visitor_dispatch layered on direct_ast_walk than a query DSL. For docs/papers/images: llm_assisted, via Claude Code subagents or a direct Claude/Kimi API call, prompted to emit the identical nodes/edges JSON schema."
+    evidence: "graphify/extract.py:65-107,766-774, graphify/llm.py:31-45"
+    confidence: verified
+  walk_strategy:
+    claim: "Two full walks per file: walk(root) builds all nodes/imports/class-inherits/edges and collects function body subtrees into function_bodies; then walk_calls() re-walks only those saved bodies to build the call graph, using a label->id map built from all nodes just discovered in that same file. No incremental/partial re-walk of an existing tree — every extraction is a fresh full-file parse (subject to a file-content-hash cache, see q3/q1)."
+    evidence: "graphify/extract.py:762-766,1023-1024"
+    confidence: verified
+  resolution:
+    claim: "Resolution is pure string-label matching, not type- or scope-aware. In-file: label_to_nid keyed by lowercased, paren-stripped label. Cross-file calls: a single global_label_to_nid dict built from every node label in the current extract() batch (member-calls like obj.log() are explicitly excluded from cross-file resolution to avoid colliding with any top-level function named 'log' in the corpus). Cross-file Python imports: a second global map from file-stem -> {ClassName: node_id}, producing an INFERRED 'uses' edge from every class defined in the importing file to the imported name — not just the class that actually references it."
+    evidence: "graphify/extract.py:1023-1024,1175-1182,3438-3455, graphify/extract.py:2664-2699,2758-2789"
+    confidence: verified
+    note: "cpg-me-daddy's CALLS.status enum (resolved/ambiguous/external/unresolved/dynamic) has no analog: graphify calls are either resolved (added directly, confidence EXTRACTED) or silently dropped from raw_calls into nothing if no label matches anywhere — there is no persisted 'we looked and could not resolve this' edge."
+  findings:
+    - {
+        claim: "extract.py fabricates a placeholder/stub node for an unresolved base class in Python and Swift inheritance — an empty-source_file node carrying just the base-class name as its label, functionally similar to cpg-me-daddy's UNKNOWN node label",
+        evidence: "graphify/extract.py:793-811,814-833",
+        confidence: verified,
+      }
+    - {
+        claim: "A dangling-import exception is hard-coded into the edge-cleaning pass: an edge survives even when its target node was never created, as long as its relation is 'imports' or 'imports_from' (external/stdlib imports have no corresponding node)",
+        evidence: "graphify/extract.py:1341",
+        confidence: verified,
+      }
+
+q3_ast_tooling:
+  parser:
+    claim: "python bindings for tree-sitter (the `tree-sitter` PyPI package, driving Language/Parser objects), version-gated by _check_tree_sitter_version() at the top of extract()"
+    evidence: "graphify/extract.py:710-725,3271,3289-3303"
+    confidence: verified
+  grammars:
+    claim: "22 pinned per-language tree-sitter grammar packages (python, javascript, typescript, go, rust, java, c, cpp, ruby, c-sharp, kotlin, scala, php, swift, lua, zig, powershell, elixir, objc, julia, verilog) as hard dependencies, plus a generic dispatch table mapping ~30 file extensions (including .vue/.svelte/.blade.php as JS/PHP variants) to one of 25 extract_<lang> functions"
+    evidence: "pyproject.toml:15-36, graphify/extract.py:3323-3361"
+    confidence: verified
+  incrementality:
+    verdict: hybrid
+    claim: "Two independent incrementality mechanisms, neither of which is a true incremental tree-sitter re-parse (tree-sitter's edit()/incremental-parsing API is not used anywhere): (1) a SHA-256 content-hash file cache (graphify-out/cache/{ast,semantic}/<hash>.json) that skips re-extraction of unchanged files entirely; (2) an mtime-based manifest (detect_incremental) that classifies files as new/unchanged/deleted for --update runs. Every cache miss or new file is a fresh full-file tree-sitter parse."
+    evidence: "graphify/cache.py:20-116, graphify/detect.py:448-511"
+    confidence: verified
+  findings:
+    - {
+        claim: "The file-hash cache strips YAML frontmatter before hashing Markdown files specifically, so metadata-only edits (e.g. a 'reviewed' tag) don't invalidate cached extraction",
+        evidence: "graphify/cache.py:10-17,27-28",
+        confidence: verified,
+      }
+    - {
+        claim: "Cache is namespaced by kind ('ast' vs 'semantic') with a documented migration fallback to a pre-0.5.3 flat directory layout, showing the project has already hit and fixed a real cache-collision bug in production (#582 referenced in comments)",
+        evidence: "graphify/cache.py:46-54,77-85",
+        confidence: verified,
+      }
+
+q4_language_server:
+  verdict: no_lsp
+  not_applicable:
+    reason: >
+      graphify never talks to a language server. All name/type resolution is done by string-label matching
+      over tree-sitter parse output (see q2 resolution); there is no LSP client, no pyright/tsserver/gopls
+      dependency, and no protocol code (textDocument/definition, workspace/symbol, etc.) anywhere in the
+      package.
+    confirmed_by:
+      - {
+          probe: manifest,
+          command: "grep -rni 'language server|\\blsp\\b|pyright|tsserver|gopls|rust-analyzer' pyproject.toml",
+          result: "no matches",
+          evidence: "pyproject.toml:1-70",
+          confidence: verified,
+        }
+      - {
+          probe: source,
+          command: "grep -rni 'language server|\\blsp\\b|pyright|tsserver|gopls|rust-analyzer' graphify/*.py README.md ARCHITECTURE.md",
+          result: "zero hits in any .py file or architecture doc; one unrelated README hit for 'legal' text, not LSP",
+          evidence: "graphify/extract.py:1-3547 (no match across whole file per grep)",
+          confidence: verified,
+        }
+    what_fills_the_gap:
+      - {
+          claim: "Name-based string matching over tree-sitter AST output (see q2 resolution) substitutes for type-aware resolution — cheap, language-agnostic across 22 grammars, but blind to shadowing, overloads, and same-named symbols in different scopes",
+          evidence: "graphify/extract.py:3438-3455",
+          confidence: verified,
+        }
+    confidence: verified
+  findings: []
+
+q5_graph_representation:
+  storage:
+    claim: "In-memory/on-disk as a NetworkX Graph or DiGraph, serialized to graphify-out/graph.json via networkx's node_link_data/node_link_graph (with a compatibility shim for the NetworkX<=3.1 'links' key vs newer 'edges' key). No database — the MCP server (serve.py) loads the whole JSON file into memory per invocation."
+    evidence: "graphify/build.py:74,193-201, graphify/serve.py:11-23"
+    confidence: verified
+  node_schema:
+    claim: "A single flat, untyped node shape — no 'kind'/'type' discriminator field beyond the coarse file_type enum (code|document|paper|image|rationale|concept). {id, label, file_type, source_file, source_location} are AST-emitted; the LLM/semantic schema adds optional source_url, captured_at, author, contributor. Whether a code node represents a class vs. a function vs. a file is recoverable only by pattern-matching the label string (ends with '()' -> function/method; equals the source filename -> file node) — see analyze.py's _is_file_node heuristic."
+    evidence: "graphify/extract.py:740-749, graphify/validate.py:4,6, graphify/llm.py:44, graphify/analyze.py:11-36"
+    confidence: verified
+    note: "Sharp contrast with cpg-me-daddy's 14 explicit typed node labels (TYPE_DECL vs METHOD vs MEMBER are distinct labels with distinct schemas) — graphify pays for its language-agnostic breadth by giving up node typing entirely; downstream code re-derives 'is this a function' from string shape rather than reading a field."
+  edge_schema:
+    claim: "{source, target, relation, confidence, source_file, source_location, weight}, with an optional confidence_score float alongside the EXTRACTED/INFERRED/AMBIGUOUS enum. 'relation' is a free-text string with no central registry — code relations (contains, inherits, calls, imports, imports_from, uses, uses_static_prop, references_constant, bound_to, listened_by, uses_<helper>) and semantic relations (calls, implements, references, cites, conceptually_related_to, shares_data_with, semantically_similar_to) are scattered string literals across extract.py and the skill.md/llm.py prompt text, not a schema.py enum."
+    evidence: "graphify/extract.py:751-761, graphify/validate.py:5,7,54-58, graphify/llm.py:44"
+    confidence: verified
+  identity:
+    claim: "Node IDs are deterministic slugs from _make_id(file_stem, entity_name) — file_stem includes the parent directory name specifically to reduce cross-file collisions (#550) — so IDs are file-local by construction. But cross-file EDGE resolution (calls and Python imports) is done through a single flat, whole-corpus {normalized_label: node_id} dictionary rebuilt from scratch on every extract() call, with last-write-wins on label collision and no namespace/type disambiguation."
+    evidence: "graphify/extract.py:14-27, graphify/extract.py:3438-3443"
+    confidence: verified
+  findings:
+    - {
+        claim: "build.py defines deduplicate_by_label() — a whole-graph, cross-file node merge keyed on normalized label text — and its own docstring in build.py's module header claims it runs 'automatically' in build(), but it is never called anywhere in the package (grep across all of graphify/*.py finds only its own definition)",
+        evidence: "graphify/build.py:1-22,135-178",
+        confidence: verified,
+        note: "A real discrepancy between documented and actual behavior — worth flagging because it means graphify's node identity is currently less merge-happy across files than its own architecture comment claims; if this were wired up it would be a much closer (and much riskier) analog to Joern's global relinker than the string-label edge resolution already is.",
+      }
+    - {
+        claim: "graph.json node-link data is round-tripped through a normalize-and-remap step so IDs that the LLM generates with slightly different punctuation/casing than the AST extractor still resolve to the same node (e.g. 'Session_ValidateToken' -> 'session_validatetoken')",
+        evidence: "graphify/build.py:32-39,77-94",
+        confidence: verified,
+      }
+
+q6_presentation_layer:
+  surfaces:
+    - {
+        name: "MCP stdio server (graphify serve)",
+        kind: mcp,
+        claim: "7 read-only tools: query_graph (BFS/DFS token-budgeted subgraph-to-text), get_node, get_neighbors, get_community, god_nodes, graph_stats, shortest_path",
+        evidence: "graphify/serve.py:164-235,341-349",
+        confidence: verified,
+      }
+    - {
+        name: "graph.html",
+        kind: webview,
+        claim: "Interactive vis.js physics-clustered HTML visualization; degree-scaled node size, confidence-styled edges, community coloring/filter, click-to-inspect panel, search box; hard node-count ceiling of 5000 (raises ValueError above it, caller falls back to --no-viz)",
+        evidence: "graphify/export.py:25,378-399",
+        confidence: verified,
+      }
+    - {
+        name: "graph.svg",
+        kind: static_image,
+        claim: "matplotlib spring-layout SVG export, solid/dashed edges by EXTRACTED vs INFERRED/AMBIGUOUS confidence — designed to embed in Obsidian/Notion/GitHub READMEs with no JS",
+        evidence: "graphify/export.py:997-1064",
+        confidence: verified,
+      }
+    - {
+        name: "GRAPH_REPORT.md",
+        kind: cli_report,
+        claim: "Human-readable audit trail: corpus check, community hubs, god nodes, surprising connections, ambiguous edges needing review, a dedicated Knowledge Gaps section, and suggested questions",
+        evidence: "graphify/report.py:15-181",
+        confidence: verified,
+      }
+    - {
+        name: "Obsidian vault export",
+        kind: file_export,
+        claim: "to_obsidian() generates a full wikilinked vault (one .md per node/community) so the graph is browsable in Obsidian's own graph view",
+        evidence: "graphify/export.py:510",
+        confidence: inferred,
+        note: "Function signature and call site confirmed; body not read in depth.",
+      }
+    - {
+        name: "Cypher / Neo4j / GraphML export",
+        kind: file_export,
+        claim: "to_cypher() emits a CREATE-statement script; push_to_neo4j() writes directly to a live Neo4j instance; to_graphml() for interchange with Gephi/yEd-class tools",
+        evidence: "graphify/export.py:351,356,914,980",
+        confidence: inferred,
+        note: "Function existence and names verified via grep + signature; bodies not read.",
+      }
+    - {
+        name: "Wiki export (to_wiki)",
+        kind: file_export,
+        claim: "wiki.py generates a community-article + god-node-article wiki structure with an index.md, separate from the Obsidian vault path",
+        evidence: "graphify/wiki.py:25,92,128,168",
+        confidence: inferred,
+        note: "Signatures grepped; module body not read (see coverage.not_read).",
+      }
+  findings:
+    - {
+        claim: "The MCP token-budgeted text serializer truncates the *entire* rendered subgraph string at a fixed char budget (~3 chars/token) rather than ranking nodes to fit the budget then rendering edges within that set precisely — nodes are pre-sorted by degree first so truncation drops low-degree tail content, but there is no per-tool token accounting beyond this one function",
+        evidence: "graphify/serve.py:92-109",
+        confidence: verified,
+      }
+    - {
+        claim: "All MCP tool text output is run through sanitize_label() (HTML-escape, control-char strip, 256-char cap) before being handed to the calling agent — the presentation layer treats graph content as adversarial input, not just display text",
+        evidence: "graphify/serve.py:98,104, graphify/security.py:228",
+        confidence: inferred,
+        note: "sanitize_label call sites verified; the function body itself (security.py:228) was not read (past the ~line-100 point covered).",
+      }
+
+q7_bad_code_analytics:
+  detectors:
+    - {
+        name: god_nodes,
+        technique: "raw NetworkX degree centrality, filtered to exclude file-hub and method-stub nodes",
+        output: "ranked list of {id, label, degree}",
+        evidence: "graphify/analyze.py:39-58",
+        confidence: verified,
+      }
+    - {
+        name: surprising_connections,
+        technique: "composite heuristic score (confidence tier + cross-file-type + cross-repo + cross-community + peripheral-to-hub degree gap + a 1.5x semantic-similarity multiplier), not a standard graph algorithm",
+        output: "ranked cross-file/cross-community edges with a human-readable 'why' explanation per hit",
+        evidence: "graphify/analyze.py:131-184,187-249",
+        confidence: verified,
+      }
+    - {
+        name: suggest_questions,
+        technique: "5 independent heuristic passes: AMBIGUOUS edges, betweenness-centrality bridge nodes (nx.betweenness_centrality, approximated via sampling above 1000 nodes), god nodes with >=2 INFERRED edges, isolated/weakly-connected nodes, low-cohesion (<0.15) communities",
+        output: "list of {type, question, why} prompts for a human or agent to investigate",
+        evidence: "graphify/analyze.py:337-451,364-368",
+        confidence: verified,
+      }
+    - {
+        name: "Knowledge Gaps report section",
+        technique: "isolated nodes (degree<=1) + thin communities (<3 real nodes) + high-ambiguity threshold (>20% AMBIGUOUS edges)",
+        output: "a GRAPH_REPORT.md section flagging likely missing documentation/edges",
+        evidence: "graphify/report.py:139-166",
+        confidence: verified,
+      }
+  fix_support:
+    verdict: none
+    claim: "No detector emits a proposed fix, diff, or refactor. Output is uniformly descriptive/diagnostic (a ranked list, a question, a report line) — the intended consumer is a human or an agent that reads the report/MCP output and decides what, if anything, to change."
+    evidence: "graphify/report.py:1-181"
+    confidence: verified
+  absent:
+    - {
+        detector: "cyclomatic complexity / any per-function complexity metric",
+        looked_in: "analyze.py, extract.py node schema, report.py",
+        result: "no field or function computes it; node schema (q5) has no numeric metric properties at all",
+        confidence: verified,
+        note: "grep -rni 'cyclomatic|complexity' graphify/*.py matches only export.py cosmetic UI code (unrelated), not an analytics function.",
+      }
+    - {
+        detector: "taint analysis / source-sink tracking",
+        looked_in: "analyze.py, security.py (which is about graphify's *own* input safety, not a user-code taint analyzer)",
+        result: "no taint, source, sink, or sanitizer vocabulary anywhere in the package",
+        confidence: verified,
+      }
+    - {
+        detector: "code smell / lint-style pattern detection",
+        looked_in: "analyze.py, report.py",
+        result: "none; the closest analog is the structural 'Knowledge Gaps' heuristics above, which flag graph-shape anomalies (isolation, low cohesion) rather than code smells",
+        confidence: verified,
+      }
+  findings:
+    - {
+        claim: "graph_diff() compares two graph snapshots (added/removed nodes and edges, keyed by (min(u,v),max(u,v),relation) for undirected graphs) purely as a NetworkX set-difference utility — it is not wired to git history anywhere in the package; nothing passes it two commits' worth of graphs automatically",
+        evidence: "graphify/analyze.py:459-540",
+        confidence: verified,
+      }
+
+# Architecture outside the 7 questions that bears on cpg-me-daddy's deferred/proposed items.
+adjacent_findings:
+  - topic: "git-history awareness via hooks, not via a graph query"
+    claim: "graphify installs real post-commit and post-checkout git hooks (graphify hook install) that auto-trigger an AST-only rebuild (_rebuild_code, no LLM) after every commit and every branch switch, with rebase/merge/cherry-pick guards to avoid firing mid-operation; core.hooksPath (Husky-style) is respected"
+    evidence: "graphify/hooks.py:45-84,87-126,138-157"
+    confidence: verified
+    ties_to: [X2]
+    note: "This is git-triggered incrementality, not git-history-aware analytics (no commit-frequency/co-change/blame signal feeds into any node/edge property) — X2 as proposed in cpg-me-daddy is about mining history for signal, which graphify does not do; graphify's hooks are purely a freshness mechanism."
+  - topic: "LLM-in-the-loop extraction conflicts with local-compute privacy"
+    claim: "The documented default pipeline (not just an opt-in flag) sends up to 20000 chars per file of doc/paper/image content to either Claude Code subagents or directly to the Anthropic/Moonshot API for semantic extraction — code files never leave the machine (AST-only), but any non-code corpus content does by design"
+    evidence: "graphify/llm.py:48-61,113-134, graphify/skill.md:242-290"
+    confidence: verified
+    ties_to: [PR7]
+    note: "Direct tension with PR7 (privacy and local compute): graphify accepts this tradeoff because its semantic layer's whole purpose is LLM-quality relation extraction (semantically_similar_to, conceptually_related_to) that a local/offline pipeline cannot produce; cpg-me-daddy's own deferred taint/analytics work is explicitly designed to run on local projections instead (D6)."
+  - topic: "token-reduction benchmarking as a first-class CLI command"
+    claim: "graphify benchmark measures average MCP query token cost against a naive full-corpus-in-context baseline across 5 canned questions, reporting a reduction_ratio — a lightweight, self-contained analog to an eval harness, though it benchmarks token cost, not answer quality/correctness"
+    evidence: "graphify/benchmark.py:55-111"
+    confidence: verified
+    ties_to: [X10]
+    note: "No ground-truth answers or scoring — it is a cost benchmark, not a quality eval; still a cheap, concrete pattern for what an X10-style harness's simplest possible version could look like."
+  - topic: "multi-repo graph merge via plain NetworkX union"
+    claim: "graphify merge-graphs unions two or more independently-built graph.json files with nx.compose_all(), tagging each node with a 'repo' attribute derived from the containing directory name; on node-ID collision across repos, compose_all's last-graph-wins semantics apply silently (no collision report)"
+    evidence: "graphify/__main__.py:1444-1480"
+    confidence: verified
+    ties_to: []
+    ties_to_none_reason: "cpg-me-daddy has no recorded decision on multi-repo/workspace graph merging (not covered by the listed D/PR/X/AM/RK ids); filed here as prior art rather than forced onto an existing id."
+
+schema_mapping:
+  verdicts:
+    joern_aligned:
+      verdict: "no"
+      why: "graphify's node/edge vocabulary was designed from scratch for RAG/agent-query purposes (a flat, untyped node with a file_type enum; free-text edge relation strings), with no reference to Joern's CPG spec anywhere in the docs or code — there is no METHOD_FULL_NAME, no AST_NODE hierarchy, no analogous typed schema at all."
+      evidence: "ARCHITECTURE.md:32-47"
+      confidence: verified
+    density:
+      verdict: sparse
+      why: "Like cpg-me-daddy, graphify does not emit a node per AST token — only classes, functions/methods, imports, and (for some languages) static-property/constant references become nodes. No per-statement, per-expression, or per-identifier nodes were found in any extractor read."
+      evidence: "graphify/extract.py:766-857,928-999"
+      confidence: verified
+    identity_model:
+      verdict: global_relink
+      why: "Node IDs are file-local strings (D5-style local determinism), but the mechanism that actually connects the graph across files — calls and Python imports — is a single flat {label: id} dictionary rebuilt over the whole batch on every run, exactly the pattern D5 names as Joern's load-time linker and rejects. The difference from Joern is scope (only calls/imports use it, not full symbol tables) and cost (it's cheap because it's just a dict build, not a real linker pass) — but the failure mode (whole-corpus relink required for correctness, silent last-write-wins on name collision) is the same shape."
+      evidence: "graphify/extract.py:3438-3455"
+      confidence: verified
+    update_model:
+      verdict: hybrid
+      why: "Code-only changes get a genuinely incremental AST-only rebuild (watch.py/hooks.py, no LLM, triggered per-file-change or per-commit). But cross-file resolution inside that incremental extract() call is scoped only to the files passed in that call — not the whole existing graph — so incremental updates cannot create or refresh cross-file call/uses edges that involve an unchanged file. Non-code (doc/paper/image) changes always require a full LLM re-extraction pass (needs_update flag, --update)."
+      evidence: "graphify/watch.py:36-60, graphify/skill.md:860-897"
+      confidence: verified
+  node_vocabulary:
+    - {
+        theirs: "code node (untyped; label ends '()' => function/method)",
+        ours: METHOD,
+        fit: approx,
+        note: "No dedicated METHOD label — same physical node shape as a class node, disambiguated only by label string pattern.",
+        evidence: "graphify/extract.py:960-997",
+      }
+    - {
+        theirs: "code node (class_types match; label = class name)",
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "Same generic node shape as functions; only the emitting call site differs.",
+        evidence: "graphify/extract.py:776-790",
+      }
+    - {
+        theirs: "file-level node (file_nid, label=filename)",
+        ours: FILE,
+        fit: approx,
+        note: "One node per file, but also absorbs some MODULE-like role (no separate module concept).",
+        evidence: "graphify/extract.py:763-764",
+      }
+    - {
+        theirs: "stub/placeholder node for unresolved base class (empty source_file)",
+        ours: UNKNOWN,
+        fit: approx,
+        note: "Functionally close: a synthetic node standing in for something the extractor could not locate.",
+        evidence: "graphify/extract.py:803-810",
+      }
+    - {
+        theirs: "node.community int attribute (not a graph node)",
+        ours: COMMUNITY,
+        fit: approx,
+        note: "Same non-persisted-community philosophy as D15 (recomputed via cluster(), not stored as a first-class typed node) but materialized as an attribute rather than a node+MEMBER_OF edge pair.",
+        evidence: "graphify/cluster.py:59-104, graphify/serve.py:32-39",
+      }
+    - {
+        theirs: "(none)",
+        ours: SYMBOL,
+        fit: absent,
+        note: "No fqn-keyed indirection layer of any kind — see identity_model verdict.",
+        evidence: "graphify/extract.py:3438-3443",
+      }
+    - {
+        theirs: "(none)",
+        ours: PARAM,
+        fit: absent,
+        note: "No per-parameter node is emitted by any extractor read.",
+        evidence: "graphify/extract.py:960-997",
+      }
+    - {
+        theirs: "(none)",
+        ours: MEMBER,
+        fit: absent,
+        note: "Class fields/members are not extracted as distinct nodes; only classes and methods are.",
+        evidence: "graphify/extract.py:776-857",
+      }
+    - {
+        theirs: "(none)",
+        ours: TAG,
+        fit: absent,
+        note: "No triage/tagging node type or mechanism.",
+        evidence: "graphify/validate.py:4",
+      }
+    - {
+        theirs: "(none)",
+        ours: DIRECTORY,
+        fit: absent,
+        note: "No directory-level node; files attach directly into the graph.",
+        evidence: "graphify/extract.py:763-764",
+      }
+    - {
+        theirs: "semantic 'concept' node (empty/non-file source_file, LLM-injected)",
+        ours: "(none)",
+        fit: extra,
+        note: "cpg-me-daddy has no analog for a purely conceptual, non-source-backed node.",
+        evidence: "graphify/analyze.py:93-109",
+      }
+  edge_vocabulary:
+    - {
+        theirs: calls,
+        ours: CALLS,
+        fit: approx,
+        note: "Concept match, but graphify's calls carry only a confidence enum + optional weight, not cpg-me-daddy's richer status/reason/resolvedBy fields.",
+        evidence: "graphify/extract.py:1163-1173",
+      }
+    - {
+        theirs: inherits,
+        ours: INHERITS_FROM,
+        fit: exact,
+        note: "Same relation, same direction (subclass -> base).",
+        evidence: "graphify/extract.py:811,832,857",
+      }
+    - {
+        theirs: "imports / imports_from",
+        ours: IMPORTS,
+        fit: approx,
+        note: "graphify's import edges are file-to-file/module; ours may carry richer resolution status.",
+        evidence: "graphify/extract.py:1341",
+      }
+    - {
+        theirs: contains,
+        ours: DECLARES,
+        fit: approx,
+        note: "file/class 'contains' function or class — same containment concept, different name.",
+        evidence: "graphify/extract.py:790,977",
+      }
+    - {
+        theirs: "uses (cross-file INFERRED, import-based)",
+        ours: DEPENDS_ON,
+        fit: approx,
+        note: "Coarse cross-file dependency signal, same INFERRED-confidence spirit as our overlay-tier DEPENDS_ON.",
+        evidence: "graphify/extract.py:2758-2789",
+      }
+    - {
+        theirs: "uses_static_prop / references_constant / bound_to / listened_by / uses_<helper>",
+        ours: "(none)",
+        fit: extra,
+        note: "A family of ad hoc, framework-specific (PHP/Laravel container binding, JS event listeners) relation strings with no central registry and no cpg-me-daddy analog.",
+        evidence: "graphify/extract.py:1219-1298",
+      }
+    - {
+        theirs: "semantically_similar_to / conceptually_related_to / shares_data_with / cites / references",
+        ours: "(none)",
+        fit: extra,
+        note: "LLM-only relation vocabulary for the semantic layer; cpg-me-daddy has no fuzzy-similarity edge type.",
+        evidence: "graphify/analyze.py:171-173, graphify/llm.py:44",
+      }
+  ours_unmatched:
+    - {
+        ours: SYMBOL,
+        why_absent_there: "No indirection layer exists; identity is the flat file-local ID + global label-dict relink pattern (see identity_model).",
+        evidence: "graphify/extract.py:3438-3455",
+      }
+    - {
+        ours: PARAM,
+        why_absent_there: "Extractors stop at function/method granularity; parameters are never walked into as nodes.",
+        evidence: "graphify/extract.py:960-997",
+      }
+    - {
+        ours: MEMBER,
+        why_absent_there: "Class fields are not extracted; only class and method/function declarations become nodes.",
+        evidence: "graphify/extract.py:776-857",
+      }
+    - {
+        ours: TAG,
+        why_absent_there: "No triage/labeling subsystem; the closest concept is the free-text 'relation' string on edges.",
+        evidence: "graphify/validate.py:5",
+      }
+    - {
+        ours: DIRECTORY,
+        why_absent_there: "Filesystem hierarchy above the file level is not modeled as nodes at all.",
+        evidence: "graphify/extract.py:763-764",
+      }
+    - {
+        ours: META_DATA,
+        why_absent_there: "No graph-singleton metadata node; run-level facts (token cost, corpus size) live only in the transient GRAPH_REPORT.md text, not in the graph itself.",
+        evidence: "graphify/report.py:56-63",
+      }
+  theirs_unmatched:
+    - {
+        theirs: "semantically_similar_to / conceptually_related_to (LLM-fuzzy edges)",
+        why_we_lack_it: "cpg-me-daddy's resolution model (D26, adapter-native/LSP/SCIP) is deliberately precision-first and structural; there is no place in the schema for a confidence-scored fuzzy-similarity edge between arbitrary node pairs.",
+        would_we_want_it: "no",
+      }
+    - {
+        theirs: "cross-domain (code<->doc<->paper<->image) graph unification",
+        why_we_lack_it: "cpg-me-daddy is scoped to source code only; there is no ingestion path for documents, PDFs, or media.",
+        would_we_want_it: "no",
+      }
+    - {
+        theirs: "git hook-triggered auto-rebuild (post-commit/post-checkout)",
+        why_we_lack_it: "cpg-me-daddy's update trigger is file-save inside the editor (D17's 2s/5s save-to-ready target), not a git event; X2 (git awareness) is about mining history for signal, not about triggering rebuilds off commits.",
+        would_we_want_it: "maybe",
+      }
+    - {
+        theirs: "multi-repo graph merge (merge-graphs)",
+        why_we_lack_it: "cpg-me-daddy is a single-workspace VS Code extension with no recorded multi-repo story.",
+        would_we_want_it: "maybe",
+      }
+
+lessons_for_cpg_me_daddy:
+  - id: L1
+    lesson: "Never let a name-based global dictionary (even a cheap one, even scoped to just calls/imports) stand in for symbol resolution — keep cross-file linking strictly behind the SYMBOL/fqn indirection layer, with no fallback path that resolves-by-label across the whole corpus."
+    stance: reject
+    ties_to: [D5]
+    why: "graphify's global_label_to_nid (extract.py:3438-3455) is exactly the pattern D5 rejects, and it visibly produces two failure modes even in a system that doesn't pretend to be precise: silent last-write-wins on same-named symbols, and incremental updates that can't create/refresh cross-file edges touching unchanged files (see update_model). D5's SYMBOL indirection is the correct answer to both; this repo is the negative case study that justifies it."
+    cost: "None — this is confirmation to hold the line already drawn, not a new cost."
+    evidence: "graphify/extract.py:3438-3455"
+    confidence: verified
+  - id: L2
+    lesson: "When an incremental update pass only re-derives edges from the files it was given, explicitly invalidate (or at minimum flag as stale) any previously-resolved cross-file edge whose target file changed — don't let a partial extraction silently leave old cross-file edges unrefreshed."
+    stance: adopt
+    ties_to: [D5, PR3]
+    why: "graphify's --update path (skill.md:860-935) re-runs extract() only on changed files; its cross-file 'uses'/'calls' resolution dict is rebuilt from only those files, so a changed function's cross-file callers are never notified and never re-linked. cpg-me-daddy's planDelta()/CypherOps model (PR3, the graph is a cache) is exactly the right place to make this explicit — a per-file delta should be required to mark SYMBOL-adjacent edges for re-evaluation, not merely leave stale ones in place."
+    cost: "Requires planDelta() to know which SYMBOL nodes a changed file's edges pointed at (or could point at) so it can flag them; some extra bookkeeping per delta, but far cheaper than a full relink."
+    evidence: "graphify/skill.md:860-897, graphify/extract.py:3438-3443"
+    confidence: verified
+  - id: L3
+    lesson: "Keep node schemas explicitly typed (a `label`/`kind` field, not a string-shape heuristic) even under pressure to support many languages cheaply — do not let downstream consumers (analytics, presentation) re-derive node type by pattern-matching a display label."
+    stance: reject
+    ties_to: [D37]
+    why: "graphify's analyze.py:_is_file_node has to guess whether a node is a real entity, a file hub, or a method stub by checking if the label ends in '()' or equals the source filename (analyze.py:11-36) — a maintenance liability and a source of misclassification (e.g. any real function literally named the same as its file would misclassify). cpg-me-daddy's 14 explicit typed labels avoid this entirely by construction."
+    cost: "None — this is a decision already made (D37, Joern alignment option (b)); this lesson is evidence it was the right one."
+    evidence: "graphify/analyze.py:11-36"
+    confidence: verified
+  - id: L4
+    lesson: "A cheap, file-hash-keyed extraction cache namespaced by extraction kind (ast vs semantic) is worth having even alongside a change-log-based update mechanism — it catches the 'file touched but content byte-identical' case and, for Markdown-like content, can be made metadata-blind (skip YAML frontmatter) to avoid churn on tag-only edits."
+    stance: watch
+    ties_to: [D17]
+    why: "cpg-me-daddy's save-to-ready targets (D17: 2s/5s) are about editor-triggered single-file updates, where a content-hash cache adds little (the file obviously changed, that's why the event fired). It becomes valuable if/when cpg-me-daddy adds a bulk reindex path (e.g. after a branch switch or `cpg index` on a large workspace) where many 'touched' files are byte-identical to what's already indexed."
+    cost: "Trigger: if a bulk/whole-workspace reindex path is added (branch switch, `cpg index --force`, or similar), add a content-hash short-circuit before re-parsing; until then, skip it."
+    evidence: "graphify/cache.py:20-85"
+    confidence: verified
+  - id: L5
+    lesson: "Expose a graph_diff-shaped 'what changed between two graph snapshots' primitive early, even before git-history awareness (X2) is agreed — it is useful on its own (regression/before-after comparison for `cpg index` runs) independent of whether history-mining ships."
+    stance: adopt
+    ties_to: [X2]
+    why: "graph_diff() (analyze.py:459-540) is a small, self-contained NetworkX set-difference utility that graphify does NOT wire to git — proving the primitive is useful in isolation and cheap to build, decoupled from the much bigger X2 question of whether to mine commit history for signal."
+    cost: "A few hours: two graph snapshots in, a diff dict out (added/removed nodes, added/removed edges by (source,target,relation) key). No dependency on X2 being agreed."
+    evidence: "graphify/analyze.py:459-540"
+    confidence: verified
+  - id: L6
+    lesson: "If cpg-me-daddy ever exposes an MCP tool that renders a subgraph as text for an agent, budget-truncate by pre-ranking nodes (e.g. by degree or resolution confidence) before serializing, not by truncating the rendered string — but go further than graphify and drop/re-render edges consistently with whatever nodes survive truncation, rather than leaving dangling edge lines."
+    stance: watch
+    ties_to: [D35, AM3]
+    why: "graphify's _subgraph_to_text (serve.py:92-109) sorts nodes by degree first (good instinct) but then blindly char-truncates the joined output, which can cut a node's label mid-word or leave an EDGE line referencing a NODE line that got truncated away. AM3's ≤12-MCP-tools discipline means whichever tools we do ship need to get this right the first time."
+    cost: "Trigger: when D35's MCP shim adds any tool that returns a bounded-size subgraph rendering (not just a query_graph-analog) — budget the token accounting per-tool at design time, not as an afterthought."
+    evidence: "graphify/serve.py:92-109"
+    confidence: verified
+  - id: L7
+    lesson: "Do not send source content to a third-party LLM API as a default (non-opt-in) step of a 'read my code' pipeline — keep any LLM-touching feature strictly opt-in and clearly separated from the local/offline path, the way D6 separates analytics from the raw CPG."
+    stance: reject
+    ties_to: [PR7]
+    why: "graphify's documented default pipeline dispatches Claude Code subagents (or hits the Anthropic/Moonshot API directly via llm.py) for any non-code file in the corpus — not gated behind an explicit flag for that content type. cpg-me-daddy's PR7 (privacy and local compute) is the correct constraint to hold; this repo shows what happens when a project's core value prop (rich semantic relations) requires giving that up."
+    cost: "We give up graphify's ability to produce fuzzy semantically_similar_to / conceptually_related_to edges across code and docs; acceptable, since cpg-me-daddy's scope is code-only structural/behavioral analysis, not a general knowledge graph."
+    evidence: "graphify/llm.py:48-61, graphify/skill.md:242-290"
+    confidence: verified
+  - id: L8
+    lesson: "A degree-based 'god nodes' + cohesion-scored community view is a legitimate, cheap first analytics surface — worth keeping in mind as a floor for what D6's projection-based analytics should beat, not just a strawman."
+    stance: watch
+    ties_to: [D6, D23]
+    why: "graphify ships god_nodes/cohesion_score/suggest_questions with zero language-specific logic and gets genuinely actionable output (isolated nodes, low-cohesion communities, bridge nodes) purely from graph topology. cpg-me-daddy's overlay tier (COMMUNITY/MEMBER_OF/TARGETS/DEPENDS_ON) is aimed at richer things (import-cycle detection, centrality), but this is a reminder that even trivial topology metrics deliver value before any taint/complexity work lands."
+    cost: "Trigger: when D6's first analytics-on-projections milestone is scoped, check whether pure-topology metrics (degree, cohesion) are already covered before investing in anything more complex."
+    evidence: "graphify/analyze.py:39-58,125-133"
+    confidence: verified
+
+amendment_candidates: []
+
+open_questions:
+  - {
+      q: "Does the 'automatic' cross-file label merge in build.deduplicate_by_label ever get invoked from skill.md (the orchestrator markdown, only partially read) even though no .py file calls it?",
+      blocked_by: "skill.md was not read end-to-end (61KB); its prose could describe manually invoking this function as a step, even though no code path calls it automatically as its own docstring claims",
+      cheap_next_probe: "grep -n 'deduplicate_by_label' graphify/skill.md and the other skill-*.md variants",
+      why_it_matters: "If it IS invoked from the skill, graphify's identity model is materially closer to a full global relinker than this study concludes; if not, the docstring is simply stale/aspirational.",
+    }
+  - {
+      q: "What do the 15 language-specific extract_<lang> functions not read in depth (Go, Rust, Java, C/C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua, Zig, PowerShell, Elixir, Objective-C, Julia, Verilog, Dart) do differently from the generic tree-sitter dispatch path verified here?",
+      blocked_by: "budget — extract.py is 3547 lines and only the generic path plus Python-specific branches were read",
+      cheap_next_probe: "read graphify/extract.py:1937-2664 (extract_go through extract_powershell) since those are structurally distinct (not routed through _extract_generic)",
+      why_it_matters: "If any of these implement genuinely type-aware resolution (e.g. Go's typed AST offers more than string matching), the q2/identity_model verdict of pure-string-label resolution may not hold uniformly across all 22 languages.",
+    }
+  - {
+      q: "How exactly does skill.md's Step 5-8 (wiki generation, canvas export, cost tracking, cluster labeling) work end-to-end?",
+      blocked_by: "budget — only the subagent-dispatch (L210-360) and --update (L860-935) sections of skill.md were read",
+      cheap_next_probe: "read graphify/skill.md in full, or at minimum grep -n '^#### Step' graphify/skill.md and read each step header + first 20 lines",
+      why_it_matters: "Community labeling (used throughout report.py/wiki.py as community_labels) appears to be LLM-generated at some pipeline step not yet located precisely — relevant if cpg-me-daddy ever considers LLM-assisted community naming for its own COMMUNITY overlay.",
+    }

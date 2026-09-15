@@ -1,0 +1,652 @@
+# Comparative study — code-review-graph · investigated 2026-09-14
+# One of five third-party code-graph tools studied to pressure-test cpg-me-daddy's own design.
+# House rules, enforced by schema shape, not by good intentions:
+#   * Every claim is a {claim, evidence, confidence} record. evidence is a path:line INSIDE THIS REPO.
+#   * confidence: verified = the cited lines were read. inferred = deduced from a manifest/doc/dep list.
+#   * A "no" is a finding: use not_applicable{} with >= 2 confirmed_by probes, never an empty field.
+# Sibling index: 00-index.yaml. Our schema under comparison: ../../.agent/knowledge/planning-sessions/
+#   2026-09-11.project-outline/50-schema.md.
+
+meta:
+  repo: code-review-graph
+  repo_path: /Users/brianhenson/projects/foss/code-review-graph
+  upstream: https://github.com/tirth8205/code-review-graph.git
+  commit: "0919071 2026-04-21"
+  investigated_on: "2026-09-14"
+  language: "Python >=3.10 (core engine); TypeScript (companion VS Code extension, separate npm package)"
+  size:
+    source_files: 56
+    loc: 25600
+    counted_by: >
+      find code_review_graph -name "*.py" ! -name "* 2.py" ! -name "* 3.py" | wc -l   # -> 56 files
+      find code_review_graph -name "*.py" ! -name "* 2.py" ! -name "* 3.py" -exec cat {} + | wc -l  # -> 25600 lines
+      (excludes tests/, code-review-graph-vscode/, and literal duplicate " 2.py"/" 3.py" copies
+       committed alongside several modules — see caveat below)
+  license:
+    {
+      spdx: MIT,
+      reuse: safe_to_borrow,
+      note: "MIT, LICENSE:1-3; permissive, no copyleft friction for borrowing ideas or code.",
+    }
+  citation_base: /Users/brianhenson/projects/foss/code-review-graph
+  relevance:
+    verdict: in_scope
+    why: "Core function is parsing source with tree-sitter into a persistent node/edge knowledge graph, queried for blast-radius and review context."
+    evidence: code_review_graph/graph.py:1-6
+  coverage:
+    read_fully:
+      - pyproject.toml
+      - docs/architecture.md
+      - docs/schema.md
+      - AGENTS.md
+      - hooks/hooks.json
+      - code_review_graph/tools/__init__.py
+    skimmed:
+      - code_review_graph/parser.py
+      - code_review_graph/graph.py
+      - code_review_graph/incremental.py
+      - code_review_graph/communities.py
+      - code_review_graph/analysis.py
+      - code_review_graph/daemon.py
+      - code_review_graph/jedi_resolver.py
+    not_read:
+      - code_review_graph/refactor.py
+      - code_review_graph/flows.py
+      - code_review_graph/visualization.py
+      - code_review_graph/main.py
+      - code_review_graph/tools/query.py
+      - code_review_graph/tools/build.py
+      - code_review_graph/tools/review.py
+      - code_review_graph/embeddings.py
+      - code_review_graph/search.py
+      - code_review_graph/wiki.py
+      - code_review_graph/eval/**
+      - code_review_graph/migrations.py
+      - code_review_graph/enrich.py
+      - code_review_graph/hints.py
+      - code_review_graph/skills.py
+      - code_review_graph/cli.py
+      - code_review_graph/daemon_cli.py
+      - tests/**
+      - code-review-graph-vscode/src/**  (grep-level only, not read)
+    read_ratio: "13 of 56 non-duplicate source files opened via Read; ~12 more inspected via targeted grep with literal line output"
+  caveat: >
+    The repository has literal duplicate files committed alongside several modules — "analysis 2.py",
+    "enrich 2.py", "enrich 3.py", "memory 2.py", "memory 3.py", "exports 2.py", "exports 3.py",
+    "jedi_resolver 2.py", "graph_diff 2.py", "token_benchmark 2.py", plus ".coverage 2"/".coverage 3"
+    and "AGENTS 2.md"/"GEMINI 2.md"/"README.ja-JP 2.md" etc. A diff of enrich.py vs "enrich 2.py"/"enrich 3.py"
+    showed byte-identical content, so these look like accidental sync/conflict-copy artifacts rather than
+    forks with independent logic — but this was spot-checked on one file only, not all of them, and is not
+    explained anywhere in the repo. This study cites only the canonical (non-suffixed) filenames throughout.
+    Several large modules (parser.py at 4750 lines, refactor.py, flows.py, main.py, most of tools/) were
+    read only via function-signature greps and targeted excerpts, not read start-to-end — see coverage above.
+
+study_summary:
+  thesis: >
+    code-review-graph is a mature, actively-versioned (v2.3.2) Claude-Code-first MCP server that parses a
+    repo with tree-sitter into a 5-kind/8-edge-kind SQLite graph, then serves 28 MCP tools for blast-radius
+    review, dead-code/refactor suggestions, Leiden-detected "communities," and execution-flow tracing. The
+    single most interesting thing relative to cpg-me-daddy is that it ships a working, repo-corpus-based
+    token-efficiency eval harness (exactly what cpg's X10 proposes but hasn't built) while simultaneously
+    shipping a "global relink" cross-file call-resolution function that is fully implemented but never
+    called from either the full-build or incremental-update path — an identity-indirection mechanism that
+    exists on paper only, which is precisely the failure mode cpg's D5 SYMBOL design is built to prevent.
+  one_line_verdict: "A peer in ambition (agent-first, incremental, MCP-served) but a different product in rigor — sparser schema, file-embedded identity instead of indirection, and a resolution guarantee that silently doesn't hold in the shipped pipeline."
+  most_useful_finding: L3
+  sharpest_disagreement: >
+    code-review-graph persists community membership as a first-class, queryable column
+    (nodes.community_id, migrations v4) and a communities table (schema.md:200-221), directly
+    contradicting D15 ("communities exposed, no persisted labels"). It manages staleness not with true
+    incremental clustering but with a dirty-check-then-full-recompute trigger (communities.py:634-652):
+    if any changed file touches a community that already has members, it reruns Leiden over the *entire*
+    graph and overwrites the table. This is a working middle ground D15 didn't consider — persisted labels
+    without incremental clustering, paid for with an occasional full recompute — worth revisiting D15
+    against.
+
+# The seven questions, in the user's order and numbering. Never renumber, never drop, never merge.
+q1_graph_construction:
+  pipeline:
+    collect: "collect_all_files() gathers git-tracked files, applying .code-review-graphignore and .gitignore"
+    parse: "CodeParser.parse_file()/parse_bytes() runs tree-sitter per file, walks the AST, returns (NodeInfo[], EdgeInfo[])"
+    resolve_local: "_resolve_call_targets() qualifies same-file bare call targets using a per-file symbol table"
+    store: "GraphStore.store_file_nodes_edges() atomically replaces all nodes/edges for that file_path in one SQLite transaction"
+    postprocess: "optional passes: Jedi enrichment (Python), rescript resolver, community detection, flow tracing, embeddings"
+  entry_points:
+    - claim: "MCP entry point is FastMCP server `mcp = FastMCP(...)` with 28 @mcp.tool() registrations, delegating to functions imported from code_review_graph/tools/"
+      evidence: code_review_graph/main.py:78-88
+      confidence: verified
+    - claim: "CLI entry points are `code-review-graph` (cli.py:main) and `crg-daemon` (daemon_cli.py:main), per pyproject.toml [project.scripts]"
+      evidence: pyproject.toml:44-46
+      confidence: verified
+    - claim: "Claude Code hooks (hooks/hooks.json) call the CLI directly on file edits, independent of the MCP server process"
+      evidence: hooks/hooks.json:1-27
+      confidence: verified
+  build_model:
+    verdict: multi_pass_pipeline
+    claim: "A full build is one parse pass per file (parallelized via ProcessPoolExecutor) writing straight to SQLite, with no separate pass over the whole graph for cross-file linking in the normal path; community/flow/embedding passes are distinct, separately-invoked post-processing steps."
+    evidence: code_review_graph/incremental.py:724-815
+    confidence: verified
+  findings:
+    - claim: "full_build() purges stale files no longer on disk, then parses all files (parallel if file_count>=8, else serial) and stores each file's nodes/edges atomically."
+      evidence: code_review_graph/incremental.py:737-805
+      confidence: verified
+    - claim: "incremental_update() computes changed files via `git diff --name-only`, finds single-hop dependents through the graph, and re-parses only changed+dependent files."
+      evidence: code_review_graph/incremental.py:818-822
+      confidence: inferred
+      note: "Function signature and docstring/architecture.md describe this; the body (819-962) was not read line-by-line."
+    - claim: "A standalone watch daemon (crg-daemon, daemon.py) exists as an opt-in alternative to the Claude Code hook model, supporting multiple registered repos, health checks, and a config file watcher."
+      evidence: "code_review_graph/daemon.py:52,470-497,864"
+      confidence: verified
+      note: "Surprising relative to cpg's still-deferred headless-engine design (D8): this repo ships BOTH a lightweight hook-triggered CLI-subprocess model AND a heavier persistent multi-repo daemon, as two independently selectable update mechanisms."
+
+q2_ast_to_cpg:
+  mechanism:
+    verdict: direct_ast_walk
+    claim: "_extract_from_tree() recursively walks tree-sitter's concrete syntax tree and pattern-matches on `child.type` against per-language type-name sets (_CLASS_TYPES, _FUNCTION_TYPES, etc.), not tree-sitter queries (.scm files)."
+    evidence: code_review_graph/parser.py:1734-1900
+    confidence: verified
+  walk_strategy:
+    claim: "Single recursive top-down walk with an explicit depth counter (_MAX_AST_DEPTH=180) guarding against pathological nesting; language-specific dispatch blocks (R, Lua, Bash, Elixir, Dart, JS/TS, Solidity) intercept and handle their own constructs before falling through to the generic class/function/import/call handlers."
+    evidence: code_review_graph/parser.py:1746-1900
+    confidence: verified
+  resolution:
+    claim: "Two-tier by design, but only the first tier actually runs: (1) same-file resolution via a local symbol table built during parse_bytes (parser.py:_resolve_call_targets, file-local); (2) a global cross-file batch relinker (GraphStore.resolve_bare_call_targets) that updates ambiguous/bare CALLS targets against the whole nodes table, using IMPORTS_FROM edges to disambiguate — but this method is never called anywhere in code_review_graph/ or tests/."
+    evidence: code_review_graph/graph.py:466-542
+    confidence: verified
+    note: "grep -rln resolve_bare_call_targets code_review_graph/ tests/ returns only graph.py itself (the definition). Cross-file CALLS therefore remain stored as bare names on disk; read-time tools fall back to exact-name matching (search_edges_by_target_name, graph.py:353) which is ambiguous with no import-based disambiguation. This is the sharpest single technical finding of this study — see study_summary and L1."
+  findings:
+    - claim: "The docstring for architecture.md explicitly justifies the choice of manual AST walking over tree-sitter queries as 'more robust than tree-sitter queries across grammar versions.'"
+      evidence: docs/architecture.md:101
+      confidence: verified
+    - claim: "Comment-marker heuristics also feed the walk: e.g. Databricks notebook detection sniffs the literal header `# Databricks notebook source` before choosing a parse path."
+      evidence: code_review_graph/parser.py:676-679
+      confidence: verified
+
+q3_ast_tooling:
+  parser:
+    claim: "tree-sitter via the `tree_sitter_language_pack` (tslp) wrapper, which lazily loads and caches a per-language Parser object (CodeParser._get_parser), catching LookupError/ValueError/ImportError for unpackaged grammars."
+    evidence: "code_review_graph/parser.py:17,632-640"
+    confidence: verified
+  grammars:
+    claim: "tree-sitter-language-pack is a pre-built pack bundling many grammars behind one dependency pin (>=0.3.0,<1) rather than per-language grammar packages pinned individually; EXTENSION_TO_LANGUAGE (parser.py:74+) maps ~30 extensions to language names passed straight to tslp.get_parser(). One exception: ReScript has no bundled grammar and is parsed with a hand-written regex-based parser instead (_parse_rescript)."
+    evidence: "code_review_graph/parser.py:74,635,682-683"
+    confidence: verified
+    note: "Different from cpg's explicit per-grammar WASM pins (web-tree-sitter 0.27 with typescript/tsx/javascript/python individually). A pack dependency means a single version bump can silently change many grammars' behavior at once — cpg's individually-pinned approach trades that convenience for narrower, more auditable version surface."
+  incrementality:
+    verdict: full_reparse_per_file
+    claim: "No tree-sitter incremental re-parse (Tree.edit()) API usage found; each changed file is re-read and parsed from scratch (parser.parse_bytes / parse_file), with incrementality achieved at the file-selection level (git diff + hash comparison), not at the AST-edit level."
+    evidence: code_review_graph/incremental.py:760-765
+    confidence: inferred
+    note: "grep for 'tree.edit' / 'old_tree' across code_review_graph/ returned nothing; inferring absence from a negative grep plus the parse_bytes signature taking only (path, source) with no previous-tree argument (parser.py:653)."
+  findings:
+    - claim: "README claims support for 23 languages plus Jupyter/Databricks notebooks and Perl XS, including less-common grammars (Zig, PowerShell, Julia, Svelte SFC)."
+      evidence: README.md:107-113
+      confidence: inferred
+      note: "Deduced from README prose, not independently counted against EXTENSION_TO_LANGUAGE's full entry list."
+
+q4_language_server:
+  verdict: no_lsp
+  not_applicable:
+    reason: >
+      No Language Server Protocol client of any kind is used. Python-specific cross-file call resolution
+      is done with the `jedi` static-analysis library directly (Jedi's own Script/Project API), not via
+      LSP — jedi is invoked in-process as a library, not spawned as a language server and not talked to
+      over JSON-RPC.
+    confirmed_by:
+      - {
+          probe: manifest,
+          command: "grep -n 'lsp\\|language-server\\|language_server' pyproject.toml",
+          result: "no matches",
+          evidence: "pyproject.toml:1-100",
+          confidence: verified,
+        }
+      - {
+          probe: source,
+          command: "grep -rniE '\\blanguage.?server\\b|\\blsp_client\\b' code_review_graph/ --include=*.py",
+          result: "no matches",
+          evidence: "code_review_graph/jedi_resolver.py:0",
+          confidence: verified,
+        }
+    what_fills_the_gap:
+      - {
+          claim: "jedi (optional 'enrichment' extra) resolves receiver.method() calls tree-sitter's AST walk drops for Python, via jedi.Script.goto(), run as a distinct post-build enrichment pass over already-parsed files.",
+          evidence: "code_review_graph/jedi_resolver.py:1-60",
+          confidence: verified,
+        }
+    confidence: verified
+  findings: []
+
+q5_graph_representation:
+  storage:
+    claim: "SQLite (not a graph database) with WAL mode, one file per repo at .code-review-graph/graph.db; nodes/edges/metadata/flows/flow_memberships/communities/nodes_fts(FTS5) tables plus a separate embeddings DB file."
+    evidence: code_review_graph/graph.py:145-176
+    confidence: verified
+  node_schema:
+    claim: "Exactly 5 node kinds — File, Class, Function, Type, Test (Test is Function with kind='Test'/is_test=True, not a distinct construct) — each a flat row: kind, name, qualified_name, file_path, line_start/end, language, parent_name, params (source-text string, not structured), return_type, modifiers, is_test, file_hash, extra(json)."
+    evidence: "code_review_graph/parser.py:42-56, code_review_graph/graph.py:32-49"
+    confidence: verified
+    note: "No PARAM or MEMBER node kind exists — parameters and return types are string properties on the owning Function row, not first-class graph entities. Considerably sparser node vocabulary than cpg's 14 labels even accounting for cpg's own PR1 sparsity rule."
+  edge_schema:
+    claim: "8 edge kinds — CALLS, IMPORTS_FROM, INHERITS, IMPLEMENTS, CONTAINS, TESTED_BY, DEPENDS_ON, REFERENCES — each a flat row: kind, source_qualified, target_qualified, file_path, line, extra(json), confidence(float, default 1.0), confidence_tier(text, default 'EXTRACTED')."
+    evidence: "code_review_graph/graph.py:51-62, docs/schema.md:61-118"
+    confidence: verified
+    note: "confidence/confidence_tier columns exist but grep across the whole package found no call site that ever writes a value other than the defaults (1.0/'EXTRACTED') — the per-edge confidence machinery is schema-only, unlike cpg's designed CALLS.status enum with resolvedBy/reason."
+  identity:
+    claim: "Identity is a single UNIQUE TEXT column, qualified_name, built by string-joining file_path and name (e.g. '/repo/src/auth.py::AuthService.login') — the file path is baked directly into the primary key, not indirected through a separate symbol layer."
+    evidence: "docs/schema.md:119-135, code_review_graph/graph.py:36,1281-1287"
+    confidence: verified
+    note: "This is the structural opposite of cpg's D5 bet: because qualified_name embeds file_path, a per-file delete/replace (remove_file_data + re-upsert, graph.py:256-280) changes the node's own identity key whenever a symbol moves file — any edge referencing the old qualified_name from another, unmodified file is not auto-repaired unless that file is also re-parsed. This is exactly the fragility D5's file-independent SYMBOL/fqn indirection is designed to eliminate."
+  findings:
+    - claim: "store_file_nodes_edges() replaces a file's nodes/edges atomically (BEGIN IMMEDIATE, DELETE then re-INSERT) per file, mirroring cpg's per-file delete/create replace model at the mechanism level."
+      evidence: code_review_graph/graph.py:262-280
+      confidence: verified
+
+q6_presentation_layer:
+  surfaces:
+    - {
+        name: "MCP tool server",
+        kind: mcp,
+        claim: "28 @mcp.tool() registrations (query, impact, review, communities, flows, refactor, wiki, cross-repo search) served over stdio via FastMCP.",
+        evidence: "code_review_graph/tools/__init__.py:1-32",
+        confidence: verified,
+      }
+    - {
+        name: "MCP prompts",
+        kind: mcp_prompt,
+        claim: "5 @mcp.prompt() definitions (e.g. review_changes) that template a review workflow for the calling agent.",
+        evidence: "code_review_graph/main.py:857-869",
+        confidence: verified,
+      }
+    - {
+        name: "Standalone HTML visualization",
+        kind: static_html_export,
+        claim: "visualization.py generates a self-contained, offline D3.js v7 force-directed graph (dark theme, zoomable, draggable) from the SQLite store — a plain HTML file, not a live webview.",
+        evidence: "code_review_graph/visualization.py:1-4,360,427,767-775",
+        confidence: verified,
+      }
+    - {
+        name: "VS Code extension (separate package)",
+        kind: editor_extension,
+        claim: "A companion npm package (code-review-graph-vscode) reads the SAME SQLite graph.db file directly from TypeScript (its own SqliteReader class), with no MCP or server hop between engine and UI.",
+        evidence: "code-review-graph-vscode/src/extension.ts:5-6,28-33,140-173; code-review-graph-vscode/package.json:1-30",
+        confidence: verified,
+      }
+    - {
+        name: "CLI",
+        kind: cli,
+        claim: "`code-review-graph` CLI exposes build/update/status/install/eval subcommands (988-line cli.py), separate from the MCP tool surface.",
+        evidence: "code_review_graph/cli.py:1",
+        confidence: inferred,
+      }
+  findings:
+    - claim: "The VS Code extension's direct-SQLite-read design means two different language runtimes (Python writer, TypeScript reader) share one on-disk WAL-mode SQLite file concurrently, with no database server process at all."
+      evidence: "code_review_graph/graph.py:153; code-review-graph-vscode/src/backend/sqlite.ts:0"
+      confidence: inferred
+      note: "Notable relative to cpg's FalkorDB-over-Cypher client-server choice (RK4 flags FalkorDB's SSPL license as a risk): this repo demonstrates that file-embedded, server-less concurrent read/write across two languages is achievable with SQLite+WAL, at the cost of both runtimes needing their own query-layer reimplementation (here, a hand-written TS SqliteReader duplicating GraphStore's Python queries)."
+
+q7_bad_code_analytics:
+  detectors:
+    - {
+        name: "hub nodes",
+        technique: "in+out degree over all edges",
+        output: "ranked list with community_id",
+        evidence: "code_review_graph/analysis.py:14-55",
+        confidence: verified,
+      }
+    - {
+        name: "bridge nodes",
+        technique: "networkx betweenness_centrality, sampled (k=500) above 5000 nodes",
+        output: "ranked list of architectural chokepoints",
+        evidence: "code_review_graph/analysis.py:58-112",
+        confidence: verified,
+      }
+    - {
+        name: "untested hotspots",
+        technique: "degree>=5 AND no TESTED_BY edge AND not is_test",
+        output: "list of high-fan-in/out symbols with zero test coverage",
+        evidence: "code_review_graph/analysis.py:172-189",
+        confidence: verified,
+      }
+    - {
+        name: "isolated / thin-community / single-file-community",
+        technique: "degree<=1; community size<3; community spans exactly 1 file",
+        output: "structural-weakness report (find_knowledge_gaps)",
+        evidence: "code_review_graph/analysis.py:115-210",
+        confidence: verified,
+      }
+    - {
+        name: "surprising connections",
+        technique: "heuristic edge scoring: +0.3 cross-community, +0.2 cross-language, +0.2 peripheral-to-hub (degree ratio), +0.15 test/non-test boundary, +0.15 unusual edge kind",
+        output: "scored, reasoned list of unexpected couplings",
+        evidence: "code_review_graph/analysis.py:240-305",
+        confidence: verified,
+      }
+    - {
+        name: "dead code",
+        technique: "graph reachability from detected entry points (framework decorators, name heuristics) minus test/type-referenced names",
+        output: "list of unreferenced symbols, exposed via refactor_tool(mode='dead_code')",
+        evidence: "code_review_graph/refactor.py:181-240,566",
+        confidence: verified,
+      }
+    - {
+        name: "risk-scored change review",
+        technique: "detect_changes_func combines impacted-file counts and heuristics into a low/medium/high risk label",
+        output: "risk level + priority-ordered review guidance",
+        evidence: "code_review_graph/tools/review.py:74-108,358-393",
+        confidence: verified,
+      }
+  fix_support:
+    verdict: preview_and_apply
+    claim: "refactor_tool(mode='rename') previews qualified-name renames; a separate apply_refactor_tool actually rewrites source occurrences after preview — a two-step propose/apply flow rather than autonomous fixing."
+    evidence: "code_review_graph/refactor.py:73,665"
+    confidence: verified
+  absent:
+    - {
+        detector: "cyclomatic complexity / McCabe metric",
+        looked_in: "code_review_graph/*.py, code_review_graph/tools/*.py",
+        result: "no matches for 'cyclomatic' or a per-function complexity score anywhere in source",
+        confidence: verified,
+      }
+    - {
+        detector: "taint tracking (source/sink/sanitizer)",
+        looked_in: "code_review_graph/*.py, code_review_graph/tools/*.py",
+        result: "no matches for 'taint', 'sanitiz', 'source/sink' vocabulary",
+        confidence: verified,
+      }
+    - {
+        detector: "named 'code smell' / 'god object' / 'god class' detector",
+        looked_in: "code_review_graph/*.py, code_review_graph/tools/*.py",
+        result: "no matches; the closest concepts are the generic hub/bridge/hotspot detectors above, which are graph-topology proxies rather than named smell rules",
+        confidence: verified,
+      }
+  findings:
+    - claim: "find_large_functions is the closest analogue to a size-based smell rule: it flags oversized functions/classes purely by line count (line_end - line_start), with no cyclomatic or nesting metric."
+      evidence: code_review_graph/main.py:385-410
+      confidence: inferred
+      note: "Signature and docstring seen via grep; the line-count threshold logic itself (in tools/query.py) was not read."
+
+adjacent_findings:
+  - topic: "repo-corpus token-efficiency eval harness"
+    claim: "code_review_graph/eval/benchmarks/ ships token_efficiency.py, impact_accuracy.py, flow_completeness.py, build_performance.py, and search_quality.py, run via `code-review-graph eval --all` against a pinned set of real open-source repos, with reports checked into evaluate/reports/summary.md and surfaced in the README as headline marketing numbers (8.2x average token reduction)."
+    evidence: code_review_graph/eval/benchmarks/token_efficiency.py:13-68
+    confidence: verified
+    ties_to: [X10]
+    note: "This is a working instance of exactly what X10 proposes and cpg has not yet built — including the uncomfortable finding they publish anyway (express repo shows 0.7x, i.e. the graph context is *larger* than the raw diff for small single-file changes), which is a useful honesty benchmark for how cpg should report X10 results."
+  - topic: "companion VS Code extension is a pure read-only presentation client"
+    claim: "The code-review-graph-vscode extension has no parsing or graph-construction logic of its own; it activates on `workspaceContains:.code-review-graph/graph.db` and reads that file directly via its own TypeScript SqliteReader."
+    evidence: code-review-graph-vscode/package.json:28-30; code-review-graph-vscode/src/extension.ts:5-33
+    confidence: verified
+    ties_to: [D8]
+    note: "Same engine/editor split cpg-me-daddy already has (packages/engine vs packages/vscode) but achieved by direct file access to a portable SQLite artifact rather than a running service the extension connects to — cheaper to ship, but couples the extension to the store's on-disk format instead of a query API."
+  - topic: "persistent multi-repo watch daemon as an opt-in alternative to hook-driven updates"
+    claim: "crg-daemon (daemon.py/daemon_cli.py) is a full background process — config file (TOML) driven, multi-repo, with health checks, a config watcher, PID file management, and per-repo watchdog Observers — offered alongside (not instead of) the lighter PostToolUse-hook model."
+    evidence: "code_review_graph/daemon.py:52,359,470,864; hooks/hooks.json:9-27"
+    confidence: verified
+    ties_to: [D8]
+    note: "Directly relevant to cpg's still-undecided headless-engine shape: this project ships both ends of the spectrum (cheap hook-triggered subprocess vs. heavyweight persistent daemon) as user-selectable options rather than picking one."
+  - topic: "git-history awareness is minimal — commit-diff based, not history-mining"
+    claim: "get_changed_files() and incremental_update() consume `git diff --name-only` against a base ref; no commit-message parsing, blame integration, or historical-churn scoring was found in the modules read."
+    evidence: code_review_graph/incremental.py:409-445
+    confidence: inferred
+    ties_to: [X2]
+    note: "git awareness here is strictly 'what changed since ref X', not the deeper history-mining X2 gestures at (churn hotspots, co-change coupling); no evidence either way on whether such features exist in unread modules (changes.py, graph_diff.py were not opened)."
+
+schema_mapping:
+  verdicts:
+    joern_aligned:
+      {
+        verdict: "no",
+        why: "No mention of Joern anywhere; the schema (File/Class/Function/Type/Test nodes, 8 flat edge kinds) is an independently designed, SQLite-relational model with no Joern CPG vocabulary (no METHOD_FULL_NAME, no AST_NODE hierarchy, no CFG/DDG layers).",
+        evidence: "docs/schema.md:1-4",
+        confidence: inferred,
+      }
+    density:
+      {
+        verdict: sparse,
+        why: "Only 5 node kinds, no per-parameter/member/statement nodes; params/return types are string properties, not structured entities — sparser in node-kind count than cpg's 14, though edge-kind count (8) is comparable to cpg's ~15.",
+        evidence: "code_review_graph/parser.py:42-56",
+        confidence: verified,
+      }
+    identity_model:
+      {
+        verdict: file_local,
+        why: "qualified_name embeds file_path as a string prefix (no separate fqn/symbol table), and the one function that would make it global-relinked (resolve_bare_call_targets) is dead code — so in practice identity resolution that crosses files falls back to unindirected, ambiguity-prone exact-name matching at query time, closer to 'none' than 'file_local' in effect even though the schema's intent reads as file_local.",
+        evidence: "code_review_graph/graph.py:36,353,466-542",
+        confidence: verified,
+      }
+    update_model:
+      {
+        verdict: hybrid,
+        why: "Full rebuild (full_build) and true incremental (git-diff + dependent lookup + hash comparison, incremental_update) both exist and are separately selectable from tools/build.py; community detection uses its own dirty-check-then-full-recompute trigger rather than incrementally updating clusters.",
+        evidence: "code_review_graph/incremental.py:724-822; code_review_graph/communities.py:634-652",
+        confidence: verified,
+      }
+  node_vocabulary:
+    - {
+        theirs: File,
+        ours: FILE,
+        fit: approx,
+        note: "Both represent one source file; theirs stores language/hash/line_end directly on the node rather than cpg's separate META_DATA/ownership-class model.",
+        evidence: "docs/schema.md:5-15",
+      }
+    - {
+        theirs: Class,
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "Covers class/struct/interface/enum/module definitions in one kind, wider than cpg's TYPE_DECL scope.",
+        evidence: "docs/schema.md:17-28",
+      }
+    - {
+        theirs: Function,
+        ours: METHOD,
+        fit: approx,
+        note: "Covers both free functions and methods; parent_name links a method to its class instead of a structural MEMBER_OF edge.",
+        evidence: "docs/schema.md:30-44",
+      }
+    - {
+        theirs: Test,
+        ours: (METHOD + TAG),
+        fit: approx,
+        note: "Modeled as kind='Test' on the same row shape as Function, not a distinct label; cpg's TAG/TAGGED_BY overlay would be the nearer fit.",
+        evidence: "docs/schema.md:45-49",
+      }
+    - {
+        theirs: Type,
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "Type aliases/interfaces/enums for TS/Go/Rust overlap with Class in their own schema (both map to our TYPE_DECL), suggesting Class vs Type is a looser split than cpg's TYPE_DECL scope.",
+        evidence: "docs/schema.md:51-59",
+      }
+  edge_vocabulary:
+    - {
+        theirs: CALLS,
+        ours: CALLS,
+        fit: exact,
+        note: "Same concept; theirs lacks cpg's resolved/ambiguous/external/unresolved/dynamic status enum (confidence_tier column exists but is never populated).",
+        evidence: "docs/schema.md:63-71",
+      }
+    - {
+        theirs: IMPORTS_FROM,
+        ours: IMPORTS,
+        fit: exact,
+        note: "Direct match.",
+        evidence: "docs/schema.md:73-81",
+      }
+    - {
+        theirs: INHERITS,
+        ours: INHERITS_FROM,
+        fit: exact,
+        note: "Direct match.",
+        evidence: "docs/schema.md:83-90",
+      }
+    - {
+        theirs: IMPLEMENTS,
+        ours: INHERITS_FROM,
+        fit: approx,
+        note: "cpg does not distinguish interface-implements from class-extends; theirs does.",
+        evidence: "docs/schema.md:92-98",
+      }
+    - {
+        theirs: CONTAINS,
+        ours: "(HAS_ENTRY / DECLARES / MEMBER_OF)",
+        fit: approx,
+        note: "One generic containment edge vs. cpg's several typed structural edges.",
+        evidence: "docs/schema.md:100-106",
+      }
+    - {
+        theirs: TESTED_BY,
+        ours: "(none)",
+        fit: extra,
+        note: "cpg has no dedicated test-coverage edge in v1; this is a genuinely useful edge kind cpg lacks.",
+        evidence: "docs/schema.md:108-114",
+      }
+    - {
+        theirs: DEPENDS_ON,
+        ours: DEPENDS_ON,
+        fit: exact,
+        note: "Both use this as a catch-all/overlay-tier dependency edge.",
+        evidence: "docs/schema.md:116-117",
+      }
+    - {
+        theirs: REFERENCES,
+        ours: "(ALIAS_OF, partial)",
+        fit: approx,
+        note: "Used for function-as-value references (callbacks, map/array entries); no single cpg edge covers this precisely.",
+        evidence: "code_review_graph/parser.py:60-61",
+      }
+  ours_unmatched:
+    - {
+        ours: SYMBOL,
+        why_absent_there: "No indirection layer between a name and its defining node; qualified_name IS the identity key, file_path baked in.",
+        evidence: "code_review_graph/graph.py:36",
+      }
+    - {
+        ours: PARAM,
+        why_absent_there: "Parameters are a string property on Function/Method rows, never separate nodes.",
+        evidence: "code_review_graph/parser.py:51",
+      }
+    - {
+        ours: MEMBER,
+        why_absent_there: "Class fields are not modeled as nodes at all in the schema described by docs/schema.md.",
+        evidence: "docs/schema.md:17-28",
+      }
+    - {
+        ours: TAG,
+        why_absent_there: "No triage/tag overlay; closest analogue is the boolean is_test flag and the heuristic 'surprising connections' scorer.",
+        evidence: "code_review_graph/analysis.py:240-305",
+      }
+    - {
+        ours: DIRECTORY,
+        why_absent_there: "No directory nodes; file_path strings are used directly wherever a path grouping is needed (e.g. community 'single_file' checks).",
+        evidence: "code_review_graph/analysis.py:191-203",
+      }
+  theirs_unmatched:
+    - {
+        theirs: TESTED_BY,
+        why_we_lack_it: "v1 schema has no coverage-awareness edge; taint/analytics were deferred (D10).",
+        would_we_want: yes,
+      }
+    - {
+        theirs: "execution flows (flows/flow_memberships tables, criticality scoring)",
+        why_we_lack_it: "No analogous traced-path overlay exists in cpg's v1 schema or COMMUNITY/MEMBER_OF/TARGETS/DEPENDS_ON overlay tier.",
+        would_we_want: maybe,
+      }
+    - {
+        theirs: "persisted community_id per node",
+        why_we_lack_it: "D15 explicitly rejects persisted community labels.",
+        would_we_want: "no — see sharpest_disagreement",
+      }
+
+lessons_for_cpg_me_daddy:
+  - id: L1
+    lesson: "Never ship a cross-file identity-relink mechanism that isn't wired into the actual build path — test that the resolution function your design depends on is actually invoked, not just implemented."
+    stance: reject
+    ties_to: [D5, D26]
+    why: "graph.py:466 implements a real, reasonably careful global relinker (single-candidate direct match, import-based disambiguation for multiples) but it is never called from full_build, incremental_update, or any tool — cross-file CALLS silently stay as bare, ambiguous names on disk. The gap between designed and shipped resolution is invisible until someone runs a query and gets wrong or missing callers."
+    cost: "What we give up by not doing what they did: nothing — this is a pure caution. The cost of avoiding it is one integration test asserting zero unresolved bare CALLS targets remain after a full build, wired into CI (cpg's test:integration is the natural home)."
+    evidence: code_review_graph/graph.py:466-542
+    confidence: verified
+  - id: L2
+    lesson: "Record build provenance (build type: full vs incremental, last-updated timestamp) directly in graph metadata, not derived after the fact."
+    stance: adopt
+    ties_to: [D21, D17]
+    why: "A one-line metadata write after every build/update gives any downstream reader (CLI status, MCP tool, extension) an O(1) staleness check instead of re-deriving freshness from file mtimes."
+    cost: "Two extra key-value writes per build cycle; negligible against the 2s/5s save-to-ready budget."
+    evidence: code_review_graph/incremental.py:802-804
+    confidence: verified
+  - id: L3
+    lesson: "Build a repo-corpus token-efficiency eval harness now, even a minimal one, rather than leaving X10 fully deferred."
+    stance: adopt
+    ties_to: [X10]
+    why: "code-review-graph's eval/benchmarks/ package proves this is buildable at modest cost (5 benchmark modules, ~a few hundred lines each) and that publishing an honest result (their own express-repo 0.7x regression) builds more credibility than hiding it. Without a harness, cpg has no way to know whether its own MCP context assembly is actually smaller than naive file reads."
+    cost: "Requires pinning a small corpus of real repos + commits as fixtures and maintaining them as the schema evolves; the harness itself needs re-running whenever query/serialization shape changes."
+    evidence: code_review_graph/eval/benchmarks/token_efficiency.py:13-68
+    confidence: verified
+  - id: L4
+    lesson: "Do not let the MCP tool surface grow past what an agent can hold in context on every turn — treat AM3's ≤12 budget as a hard ceiling, not an aspiration."
+    stance: reject
+    ties_to: [AM3, D35]
+    why: "code-review-graph ships 28 @mcp.tool() registrations plus 5 prompts. Their own AGENTS.md has to work around this by hand-curating an 8-tool 'Key Tools' shortlist for agents to actually use (AGENTS.md:105-116) — an implicit admission that the full 28-tool surface is too much to reason about directly."
+    cost: "What we give up by staying at ≤12: some MCP tools that would otherwise map 1:1 to every analysis function (dead code, wiki, cross-repo search, individual community/flow getters) — those need to be composed into fewer, parameterized tools instead."
+    evidence: code_review_graph/tools/__init__.py:3-31
+    confidence: verified
+  - id: L5
+    lesson: "Watch: if cpg's community/centrality overlay ever needs betweenness-style analytics at scale, adopt sampled approximation (nx.betweenness_centrality(k=...)) rather than building custom infrastructure first."
+    stance: watch
+    ties_to: [D6]
+    why: "They run betweenness centrality directly against the full in-memory NetworkX graph (not a separate projection store), switching to k=500-node sampling only above 5000 nodes — a cheap, dependency-light way to get 'bridge node' analytics without a projection tier."
+    cost: "Trigger: if/when cpg's overlay tier needs centrality-class metrics and the raw-CPG node count for a target repo exceeds roughly 5,000 analyzable (non-punctuation) nodes, evaluate whether direct NetworkX-on-cache suffices before building a dedicated projection pipeline for it."
+    evidence: code_review_graph/analysis.py:70-84
+    confidence: verified
+  - id: L6
+    lesson: "Watch: persisted community labels with a dirty-check-then-full-recompute trigger is a real, working alternative to D15's 'never persist' stance — worth re-evaluating if MCP read latency for communities becomes a problem."
+    stance: watch
+    ties_to: [D15]
+    why: "Their staleness handling (recompute the whole graph's communities only when a changed file touches an already-labeled community) is cheap to implement and avoids the concurrency/consistency hazards of true incremental clustering, which D15 was presumably trying to sidestep entirely by not persisting at all."
+    cost: "Trigger: if computing communities on every MCP read (cpg's current no-persistence plan) becomes measurably slow for large repos, prototype their dirty-check-then-full-recompute pattern as a middle ground before abandoning D15 outright."
+    evidence: code_review_graph/communities.py:634-652
+    confidence: verified
+  - id: L7
+    lesson: "Model precision upgrades (Jedi for Python, jedi_resolver.py) as an optional, separately-invoked post-build enrichment pass over an already-complete graph, not a fork of the primary parse path."
+    stance: adopt
+    ties_to: [D26, D28]
+    why: "This cleanly matches cpg's own stated plan (TypeScript compiler API and LSP/SCIP as deferred precision upgrades layered onto the adapter-native tree-sitter baseline, D26) — code-review-graph demonstrates the pattern works in production: tree-sitter parses everything, Jedi/rescript-resolver only patch specific known gaps afterward, and are cleanly optional (pyproject.toml 'enrichment' extra)."
+    cost: "Extra post-build pass adds latency (full Jedi project init/goto resolution over all Python files) and a second dependency surface; must stay strictly additive so a missing optional dependency degrades gracefully (jedi_resolver.py:36-40 already does this)."
+    evidence: code_review_graph/jedi_resolver.py:1-40
+    confidence: verified
+  - id: L8
+    lesson: "Offer hook-triggered CLI-subprocess updates as the lightweight default, with a persistent watch daemon as an opt-in heavier alternative for users/CI that need always-on freshness — don't force one model."
+    stance: adopt
+    ties_to: [D8]
+    why: "code-review-graph ships both: PostToolUse hooks firing `code-review-graph update --skip-flows` on every Write/Edit/Bash keep things current inside a Claude Code session without any background process, while crg-daemon exists for users who want continuous multi-repo watching outside an editor session."
+    cost: "Maintaining two update triggers (hook-driven subprocess vs. daemon watchdog) means two codepaths into the same incremental_update logic must be kept in sync; worth it only if cpg's headless-engine design (still undecided) actually needs the always-on daemon case."
+    evidence: hooks/hooks.json:9-27; code_review_graph/daemon.py:864-923
+    confidence: verified
+  - id: L9
+    lesson: "Watch: a 5-kind node schema with no PARAM/MEMBER nodes is evidently sufficient for blast-radius review and dead-code detection at their target scale — don't assume cpg's fuller 14-label schema is load-bearing for every use case until a concrete query needs the extra structure."
+    stance: watch
+    ties_to: [PR1]
+    why: "Their entire review/impact/dead-code/community feature set operates on File/Class/Function/Type/Test with string-only params/return-types — no query in the modules read ever needed a structured PARAM or MEMBER node."
+    cost: "Trigger: before adding PARAM/MEMBER-consuming features (e.g. signature-diff-aware blast radius, structured taint through parameters) to cpg's roadmap, confirm no cheaper string-property equivalent (as here) would serve the same MCP tool output."
+    evidence: code_review_graph/parser.py:42-56
+    confidence: verified
+
+amendment_candidates: []
+
+open_questions:
+  - q: "Does incremental_update() actually re-run resolve_bare_call_targets or any cross-file relink step that full_build skips, or is cross-file CALLS resolution genuinely absent from both paths?"
+    blocked_by: "incremental.py:818-962 body was not read line-by-line; only the full_build body (724-815) was confirmed not to call it."
+    cheap_next_probe: "Read code_review_graph/incremental.py:818-962 in full and re-grep resolve_bare_call_targets against the resulting call graph."
+    why_it_matters: "Directly changes the identity_model verdict from 'file_local (broken in practice)' to something more charitable if some other codepath does call it."
+  - q: "Do changes.py and graph_diff.py add any git-history-mining beyond single-ref diffing (churn scoring, co-change coupling, blame)?"
+    blocked_by: "Neither file was opened; only incremental.py's get_changed_files (plain git diff) was read."
+    cheap_next_probe: "Read code_review_graph/changes.py and code_review_graph/graph_diff.py in full."
+    why_it_matters: "Would materially change the X2 (git awareness) comparison from 'minimal' to something closer to what X2 proposes."
+  - q: "Are the committed duplicate files (' 2.py'/' 3.py' suffixed copies) truly byte-identical everywhere, or do some diverge in ways that matter (e.g. a bugfix landed in one copy but not the canonical file)?"
+    blocked_by: "Only enrich.py vs its two duplicates was diffed; the other ~8 duplicate pairs were not checked."
+    cheap_next_probe: "diff each canonical file against its ' 2'/' 3' sibling: analysis.py, memory.py, exports.py, jedi_resolver.py, graph_diff.py, token_benchmark.py."
+    why_it_matters: "If any diverge, citations in this study could be pointing at a stale or superseded copy of the logic."
+  - q: "What does the VS Code extension's SqliteReader.ts actually query, and does it duplicate GraphStore's read logic exactly or diverge (e.g. missing the confidence_tier/community fields)?"
+    blocked_by: "code-review-graph-vscode/src/backend/sqlite.ts was not opened, only referenced via extension.ts imports."
+    cheap_next_probe: "Read code-review-graph-vscode/src/backend/sqlite.ts in full."
+    why_it_matters: "Determines how tightly coupled the TS reader is to the Python writer's schema, and whether that coupling has already caused drift bugs (worth checking CHANGELOG.md for extension-schema-mismatch fixes)."

@@ -12,6 +12,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import { type GrammarId, grammarForPath } from "../parser/grammars";
+import { admitEntry } from "./admit";
 import { DEFAULT_EXCLUDES, DEFAULT_INCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from "./defaults";
 import { compileMatcher } from "./glob";
 
@@ -137,20 +138,39 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
     for (const entry of entries) {
       const relPath = toPosix(relDir === "" ? entry.name : `${relDir}/${entry.name}`);
       const absPath = join(absDir, entry.name);
+      const isSymlink = entry.isSymbolicLink();
+      const isDir = entry.isDirectory();
 
-      if (entry.isSymbolicLink()) {
-        if (!followSymlinks) {
-          stats.symlinksSkipped++;
-          continue;
-        }
-      }
-
-      if (entry.isDirectory()) {
-        if (exclude.test(relPath, true)) {
-          stats.directoriesSkipped++;
+      if (isDir) {
+        const verdict = admitEntry(
+          relPath,
+          { isSymbolicLink: isSymlink, isDirectory: true, isRegularFile: false },
+          { include, exclude },
+          { maxFileSizeBytes, followSymlinks },
+        );
+        if (!verdict.admitted) {
+          // A directory `Dirent` is never simultaneously a symlink `Dirent`
+          // (mutually exclusive `d_type`s), so only "excluded" can reach here
+          // in practice — this branch stays exhaustive for admitEntry's sake.
+          if (verdict.reason === "symlink") {
+            stats.symlinksSkipped++;
+          } else {
+            stats.directoriesSkipped++;
+          }
           continue;
         }
         await visitDir(absPath, relPath, dirPath(relDir));
+        continue;
+      }
+
+      if (isSymlink) {
+        // Same admission call as above, kept for a single source of truth on
+        // the symlink policy — but a non-directory symlink `Dirent` is never
+        // "excluded" or "too-large" (both need real stat data this path
+        // doesn't fetch), so the only reachable verdict here is "symlink".
+        if (!followSymlinks) {
+          stats.symlinksSkipped++;
+        }
         continue;
       }
 
@@ -161,8 +181,32 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
 
       stats.filesSeen++;
 
-      if (exclude.test(relPath, false) || !include.test(relPath, false)) {
-        stats.filesExcluded++;
+      let fileStat;
+      try {
+        fileStat = await stat(absPath);
+      } catch {
+        continue;
+      }
+
+      const verdict = admitEntry(
+        relPath,
+        {
+          isSymbolicLink: false,
+          isDirectory: false,
+          isRegularFile: true,
+          sizeBytes: fileStat.size,
+        },
+        { include, exclude },
+        { maxFileSizeBytes, followSymlinks },
+      );
+      if (!verdict.admitted) {
+        if (verdict.reason === "too-large") {
+          stats.filesTooLarge++;
+        } else {
+          // "excluded" — "non-regular" can't reach here, `entry.isFile()`
+          // already gated it above.
+          stats.filesExcluded++;
+        }
         continue;
       }
 
@@ -173,17 +217,6 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
       const language = grammarForPath(relPath) ?? null;
       if (language === null) {
         stats.filesUnsupported++;
-      }
-
-      let fileStat;
-      try {
-        fileStat = await stat(absPath);
-      } catch {
-        continue;
-      }
-      if (fileStat.size > maxFileSizeBytes) {
-        stats.filesTooLarge++;
-        continue;
       }
 
       files.push({
