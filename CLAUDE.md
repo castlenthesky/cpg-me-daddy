@@ -88,12 +88,12 @@ The integration suite is separate because it needs a database:
 bun run db:up && bun run test:integration && bun run db:down
 ```
 
-`lefthook.yml` runs lint + format check on `pre-commit` (staged files only) and a whole-repo format
-check + typecheck + unit tests + the schema gate on `pre-push` — the whole-repo format check is there
-because `pre-commit`'s only ever sees this push's diff, so a file already mis-formatted before it landed
-(changed oxfmt rules, a `--no-verify` commit) would pass every future `pre-commit` untouched and only
-surface in CI otherwise. `.github/workflows/ci.yml` runs the same five
-commands on ubuntu-latest and macos-latest (job `gates`, deliberately DB-free), plus a ubuntu-only
+`lefthook.yml` runs lint (staged files only) + a whole-repo format check on `pre-commit`, and typecheck +
+unit tests + the schema gate on `pre-push`, so the gate fires before a commit exists. The format check is
+whole-repo, not staged-files-only, because a staged-only check can only ever see this commit's own diff —
+a file already mis-formatted before it landed (changed oxfmt rules, a `--no-verify` commit) would pass
+every future `pre-commit` untouched and only surface in CI otherwise. `.github/workflows/ci.yml` runs the
+same five commands on ubuntu-latest and macos-latest (job `gates`, deliberately DB-free), plus a ubuntu-only
 `integration` job that brings the pinned FalkorDB up with the same `docker/falkordb.yml` developers use —
 every integration test ends by asserting both `assertGraphInvariants()` and `assertSchemaConformance()`.
 
