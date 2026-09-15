@@ -572,7 +572,7 @@ units:
         case); every call site in the fixture appears exactly once; NO bare-name SYMBOLs created for
         unresolved calls (README rule 2); REACHING_DEF emitted for every MEMBER/PARAM whose value
         reaches a CALL argument in the fixture.
-      status: in_progress
+      status: done
       verified_2026-09-13: >
         CALL nodes, IN_SCOPE, minimal SYMBOL minting (MEMBER/METHOD/TYPE_DECL DEFINES; bare-name
         and receiver-qualified callee attribution via local-name/local-this/builtin, README rule 2
@@ -584,7 +584,18 @@ units:
         real parse, both signed off (GR4): the TS golden's CALL range was the `expression_statement`
         extent (2:0-2:26, including the `;`), not the `call_expression`'s (2:0-2:25); and both
         goldens' local SYMBOL fqn was missing its opening backtick and `/` against R2 §158(b)'s
-        canonical SCIP form. IMPORT/IMPORTS remain — status stays in_progress until they land.
+        canonical SCIP form.
+      verified_2026-09-13_imports: >
+        IMPORT/IMPORTS landed in a follow-on PR (same session): one IMPORT node per statement,
+        `classifyImport` checked before `classify()` at MODULE level so an import is never
+        misclassified as an unclaimed expression region. Only an EXTERNAL target (a frozen
+        `node:`/bare-specifier heuristic; see `resolveModuleOwner` in extract/typescript.ts) mints a
+        SYMBOL + IMPORTS edge — a workspace-relative or tsconfig-alias path gets the IMPORT node and
+        nothing else, deliberately (a guessed fqn would be a permanent orphan, M0.10's job to
+        resolve for real). Adjacent fix taken here: python.ts now unwraps `decorated_definition` to
+        the function/class it wraps, so a decorated declaration and its body are no longer invisible
+        (the decorator's own application call remains unmodeled, a documented gap). This unit's
+        `delivers:` text is now fully satisfied.
       known_gap_2026-09-13: >
         SYMBOL garbage collection does not exist yet. A workspace-local SYMBOL's `merge-on-key`
         write mechanism means nothing ever deletes it once its DEFINES source is gone (a rename, a
@@ -673,16 +684,26 @@ units:
       gate: >
         Golden snapshots (test/fixtures/golden/simple/python/hello_world.cpg.json is the smoke case);
         call sites exactly once; no bare-name SYMBOLs; REACHING_DEF emitted per M0.7's gate.
-      status: in_progress
+      status: done
       verified_2026-09-13: >
         Landed together with M0.7 in the same PR (the shared walk.ts spine, per the M0.6+M0.8
         precedent) — see that unit's verified_2026-09-13 note for the shared design, the two golden
         defects found and fixed, and the known SYMBOL-GC gap. Python-specific: `self.foo()` is
         text-detected (`self` is a plain bound identifier here, not its own node type the way TS's
-        `this` is); only BARE Python builtins resolve (`print`, `len`, …) — no stdlib-module-name
-        table exists yet, so a qualified call like `os.path.join(...)` is unattributed in this
-        slice, unlike TS's bare-global table reaching qualified `console.*` calls too. IMPORT/
-        IMPORTS remain — status stays in_progress until they land.
+        `this` is); only BARE Python builtins resolve (`print`, `len`, …) — a call attribution never
+        consults imported bindings at all (cross-file/import-aware resolution is M0.10's scope), so
+        a qualified call like `os.path.join(...)` is unattributed the same way TS's qualified calls
+        to non-global receivers are.
+      verified_2026-09-13_imports: >
+        IMPORT/IMPORTS landed in a follow-on PR (same session) — see M0.7's verified_2026-09-13_imports
+        note for the shared design. Python-specific: `import os`, `import os.path as p`, `import os,
+        sys` (each namedChild its own whole-module binding, so the comma form mints multiple bindings
+        under one IMPORT node), `from y import z[, ...]`, `from . import z` / `from ..pkg.mod import
+        z` (always `{where: "workspace"}` — any leading `.`), `from y import *`. Resolution against a
+        new `PYTHON_STDLIB_MODULES` table (extract/builtins/python-stdlib.ts) — an absolute import
+        whose root isn't in that table is `{where: "unknown"}`, not guessed. Adjacent fix:
+        `decorated_definition` is now unwrapped in `classify()` (see M0.7's note) — this unit's own
+        `delivers:` text ("As M0.7, Python") is now fully satisfied.
       entanglement_found_2026-09-12: "Same fix as M0.7 (see that unit's entanglement_found note) — the Python hello_world golden requires the same minimal SYMBOL minting, folded in here rather than waiting on M0.10."
 
     - id: M0.10

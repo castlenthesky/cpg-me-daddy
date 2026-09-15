@@ -1,0 +1,15 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "dist",
+		"rootDir": "src",
+		// Browser context (runs inside a webview) — the repo's other packages
+		// are all Node/CommonJS and set "types": ["node"]; this is the first
+		// exception. See AGENTS.md for why the package still emits CommonJS
+		// (module/moduleResolution are inherited unchanged from
+		// tsconfig.base.json) despite the DOM lib.
+		"lib": ["ES2022", "DOM"],
+		"types": []
+	},
+	"include": ["src/**/*"]
+}

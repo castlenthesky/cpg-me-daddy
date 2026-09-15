@@ -1,0 +1,653 @@
+# Comparative study — repowise · investigated 2026-09-14
+# One of five third-party code-graph tools studied to pressure-test cpg-me-daddy's own design.
+# House rules, enforced by schema shape, not by good intentions:
+#   * Every claim is a {claim, evidence, confidence} record. evidence is a path:line INSIDE THIS REPO.
+#   * confidence: verified = the cited lines were read. inferred = deduced from a manifest/doc/dep list.
+#   * A "no" is a finding: use not_applicable{} with >= 2 confirmed_by probes, never an empty field.
+# Sibling index: 00-index.yaml. Our schema under comparison: ../../.agent/knowledge/planning-sessions/
+#   2026-09-11.project-outline/50-schema.md.
+
+meta:
+  repo: repowise
+  repo_path: /Users/brianhenson/projects/foss/repowise
+  upstream: https://github.com/repowise-dev/repowise.git
+  commit: 383c5db 2026-04-30
+  investigated_on: 2026-09-14
+  language: "Python 3.11+ (primary, packages/core|cli|server); TypeScript/Next.js dashboard (packages/web, not analyzed in depth)"
+  size:
+    source_files: 252
+    loc: 56660
+    counted_by: "find packages -name '*.py' | wc -l  →  252;  find packages -name '*.py' -exec cat {} + | wc -l  →  56660 (Python only; packages/web has an additional 185 .ts/.tsx files, not counted or read)"
+  license:
+    spdx: AGPL-3.0-only
+    reuse: ideas_only
+    note: >
+      pyproject.toml:14 declares "AGPL-3.0-only" and LICENSE:1-4 is the full AGPLv3 text. README.md:625-629
+      explicitly sells a separate commercial license for "embedding repowise in a product, white-labeling,
+      or SaaS use without AGPL obligations" — the same open-core/commercial-dual-license shape RK4 flags for
+      FalkorDB's SSPL/RSAL. Code cannot be vendored into cpg-me-daddy without triggering copyleft (and the
+      engine-purity/falkordb-service-independence rules would make an AGPL dependency radioactive); reading
+      it for architecture ideas is safe, copying implementation is not.
+  citation_base: /Users/brianhenson/projects/foss/repowise
+  relevance:
+    verdict: in_scope
+    why: >
+      Core function is parsing source across 14 languages with tree-sitter into a two-tier
+      (file + symbol) dependency/call graph via NetworkX, persisted to SQLite/Postgres and served
+      through MCP tools — squarely a "code knowledge graph" builder, adjacent-but-qualifying per the
+      task brief's own criteria.
+    evidence: packages/core/src/repowise/core/ingestion/graph.py:1-24
+  coverage:
+    read_fully:
+      - README.md
+      - pyproject.toml
+      - packages/core/src/repowise/core/ingestion/parser.py
+      - packages/core/src/repowise/core/ingestion/models.py
+      - packages/core/src/repowise/core/ingestion/graph.py
+      - packages/core/src/repowise/core/ingestion/call_resolver.py
+      - packages/core/src/repowise/core/pipeline/orchestrator.py
+      - packages/core/src/repowise/core/ingestion/change_detector.py
+      - packages/core/src/repowise/core/persistence/models.py
+      - packages/core/src/repowise/core/analysis/decision_extractor.py
+      - packages/core/src/repowise/core/ingestion/git_indexer.py
+      - packages/core/src/repowise/core/analysis/security_scan.py
+      - packages/server/src/repowise/server/mcp_server/tool_why.py
+    skimmed:
+      - packages/cli/src/repowise/cli/commands/update_cmd.py (lines 1-280 of 571)
+      - packages/core/src/repowise/core/analysis/communities.py (lines 1-150 of 583)
+      - packages/core/src/repowise/core/analysis/execution_flows.py (lines 1-90 of 359)
+      - packages/core/src/repowise/core/analysis/dead_code/analyzer.py (lines 1-120 of 519)
+      - packages/core/src/repowise/core/workspace/cross_repo.py (lines 1-40 of unread total)
+      - packages/server/src/repowise/server/mcp_server/*.py (16 files — decorator + signature only, via grep)
+      - docs/MCP_TOOLS.md (headers only)
+      - LICENSE (header lines only)
+    not_read:
+      - packages/core/src/repowise/core/ingestion/resolvers/**
+      - packages/core/src/repowise/core/ingestion/extractors/**
+      - packages/core/src/repowise/core/ingestion/dynamic_hints/**
+      - packages/core/src/repowise/core/generation/**
+      - packages/core/src/repowise/core/providers/**
+      - packages/core/src/repowise/core/persistence/{crud,search,vector_store,coordinator}.py
+      - packages/core/src/repowise/core/workspace/{config,contracts,registry,scanner,update}.py
+      - packages/core/src/repowise/core/analysis/pr_blast.py
+      - packages/server/src/repowise/server/{routers,services}/**
+      - packages/web/** (185 TS/TSX files — the entire Next.js dashboard)
+      - tests/**
+      - packages/core/alembic/versions/**
+      - website/*.md, docs/architecture/**, docs/internals/**
+    read_ratio: "~13 of 252 Python source files opened in full or in significant part; web dashboard (185 TS/TSX files) not opened at all"
+  caveat: >
+    Generation (LLM doc-writing), the vector/RAG search stack, per-language import resolvers/extractors
+    (14 languages' worth), the web dashboard, and the workspace multi-repo internals beyond cross_repo.py's
+    header were not read in depth — this study leans on the ingestion/graph/git/decision core and the MCP
+    surface, which is where the repo's comparative interest to cpg-me-daddy concentrates. Claims about those
+    unread areas are marked open_questions, not asserted.
+
+study_summary:
+  thesis: >
+    repowise is a mature, LLM-native "codebase intelligence" product: tree-sitter → NetworkX dependency/call
+    graph, mined git history, LLM-generated wiki pages, and an architectural-decision layer, all exposed
+    through an MCP server and a local web dashboard. The single most interesting thing relative to
+    cpg-me-daddy is that it validates our central architectural bet by contradiction: its Symbol identity is
+    a file-path-prefixed string (the "global load-time linker" shape D5 explicitly rejects), and its
+    `update` command openly re-parses and rebuilds the *entire* graph on every run rather than patching it —
+    exactly the two failure modes cpg-me-daddy's SYMBOL-indirection and planDelta designs were built to avoid.
+  one_line_verdict: "A more mature, more marketed predecessor of the docs/analytics half of cpg-me-daddy's ambition, built on a structurally weaker graph substrate than the one we already committed to."
+  most_useful_finding: L2
+  sharpest_disagreement: >
+    D5 (SYMBOL indirection, keyed by fqn, no `file` property, so a single-file replace can never break a
+    cross-file edge) is directly contradicted by repowise's design: Symbol.id is literally
+    "{file_path}::{name}" (models.py:143, parser.py:644-649), and CallResolver rebuilds global symbol/import
+    indices for the WHOLE repo on every construction (call_resolver.py:60-152), while GraphBuilder.build()
+    clears and re-resolves ALL import/heritage/call edges on every call (graph.py:184-249). `repowise update`
+    then makes this visible end-to-end: its own comment says "Full re-ingest for graph (needed for cascade
+    analysis)" (update_cmd.py:213-214) and it re-walks and re-parses every file in the repo, not just the
+    git-diff'd ones, before doing anything incremental. This is not a hypothetical failure mode we guarded
+    against speculatively — it is the concrete shape of a shipping product's design, which strengthens the
+    case for D5/PR3 rather than weakening it.
+
+# The seven questions, in the user's order and numbering. Never renumber, never drop, never merge.
+q1_graph_construction:
+  pipeline:
+    traverse: "FileTraverser walks the repo tree, applies .gitignore/pathspec filters, builds FileInfo per file (parser.py imports FileInfo from .models; driven from orchestrator.py:378-416)"
+    parse: "ASTParser.parse_file() runs per file in a ProcessPoolExecutor (one process-local parser per worker); tree-sitter Query capture → symbols/imports/calls/heritage/exports/docstring (orchestrator.py:40-59, 428-494; parser.py:480-532)"
+    graph_build: "GraphBuilder.add_file() adds file+symbol nodes and DEFINES/HAS_METHOD edges per file (graph.py:117-182), then .build() resolves imports → heritage → calls in three explicit phases across the WHOLE parsed-file set (graph.py:184-249)"
+    git_indexing: "GitIndexer mines up to 500 commits per file (ownership/hotspot/co-change) concurrently with ingestion via asyncio.gather (orchestrator.py:213-245; git_indexer.py:189-360)"
+    post_graph_edges: "framework-aware synthetic edges (Django/FastAPI/etc.) and dynamic-hint edges (reflection/DI/plugins) are added after the static graph is built (orchestrator.py:511-530; graph.py:590-641)"
+    analysis: "dead-code detection and architectural-decision extraction run as Phase 2, both pure-graph/git or LLM-assisted, no re-parsing (orchestrator.py:290-303)"
+    generation: "optional Phase 3 LLM wiki-page generation over the finished graph (orchestrator.py:305-324)"
+  entry_points:
+    - claim: "CLI entry point is repowise.cli.main:cli, installed as the `repowise` console script"
+      evidence: pyproject.toml:112-113
+      confidence: verified
+    - claim: "The programmatic/headless entry point is run_pipeline() in pipeline/orchestrator.py, used by both the CLI and (per its own docstring) a Modal worker and tests — explicitly zero imports from click/rich/cli"
+      evidence: packages/core/src/repowise/core/pipeline/orchestrator.py:1-13,137-155
+      confidence: verified
+  build_model:
+    verdict: multi_pass_pipeline
+    claim: >
+      Ingestion is itself multi-phase (traverse → parse → graph-build with three internal sub-phases →
+      framework edges → dynamic-hint edges), run concurrently with a separate git-mining pipeline, followed
+      by analysis and optional generation phases — not a single AST-to-graph pass and not a streaming/
+      on-demand model.
+    evidence: packages/core/src/repowise/core/pipeline/orchestrator.py:204-330
+    confidence: verified
+  findings:
+    - claim: "Parsing is parallelized across CPU cores via ProcessPoolExecutor; the ASTParser itself is never pickled (only picklable FileInfo/ParsedFile dataclasses cross the process boundary), constructed lazily once per worker process"
+      evidence: packages/core/src/repowise/core/pipeline/orchestrator.py:36-59,448-465
+      confidence: verified
+      note: "cpg-me-daddy's engine is single-process/WASM (web-tree-sitter); this is the kind of throughput lever that becomes available once parsing leaves the extension host."
+    - claim: "Git-history indexing and AST ingestion run concurrently as two independent asyncio tasks joined with asyncio.gather — a deliberate pipelining choice, not an afterthought"
+      evidence: packages/core/src/repowise/core/pipeline/orchestrator.py:208-245
+      confidence: verified
+
+q2_ast_to_cpg:
+  mechanism:
+    verdict: query_dsl
+    claim: >
+      Symbols, imports, and calls are extracted via compiled tree-sitter Query objects loaded from
+      per-language .scm files using a fixed set of shared capture names (@symbol.def, @symbol.name,
+      @import.statement, @call.site, etc.) — ASTParser itself "contains no if/elif language branches"
+      per its own docstring; only heritage-parent-class detection and async-node detection fall back to
+      a small manual ancestor walk.
+    evidence: packages/core/src/repowise/core/ingestion/parser.py:1-23,538-563
+    confidence: verified
+  walk_strategy:
+    claim: >
+      One tree-sitter QueryCursor pass per file per concern (symbols, imports, calls), each iterating
+      match/capture dicts rather than a recursive node-by-node walk; the one genuine AST walk is
+      _find_parent(), which climbs def_node.parent chain looking for a class/impl ancestor to attach
+      methods to their owning type.
+    evidence: packages/core/src/repowise/core/ingestion/parser.py:671-698,861-882
+    confidence: verified
+  resolution:
+    claim: >
+      Resolution is a separate, later graph-build phase, not folded into the AST walk: CallResolver runs
+      a three-tier fallback (same-file exact 0.95 → import-scoped 0.85-0.93 → global-unique 0.50, with an
+      explicit cross-language rejection guard on tier 3) after the whole-repo symbol index is built;
+      heritage (extends/implements) goes through a separate HeritageResolver in the same build() call.
+    evidence: packages/core/src/repowise/core/ingestion/call_resolver.py:1-21,236-243; packages/core/src/repowise/core/ingestion/graph.py:274-330
+    confidence: verified
+  findings:
+    - claim: "Barrel/re-export files (e.g. __init__.py that re-exports a name it doesn't define) are followed one hop during index-building so downstream imports resolve through them"
+      evidence: packages/core/src/repowise/core/ingestion/call_resolver.py:98-110
+      confidence: verified
+      note: "Cheap, deterministic heuristic for a real pain point (Python package barrels, JS/TS index re-exports) that cpg-me-daddy's adapter-native resolver doesn't yet document a stance on."
+
+q3_ast_tooling:
+  parser:
+    claim: "python tree-sitter bindings (tree_sitter.Language/Parser/Query/QueryCursor), CPython-native, not WASM"
+    evidence: packages/core/src/repowise/core/ingestion/parser.py:32,508-509,553,865-867
+    confidence: verified
+  grammars:
+    claim: >
+      14 tree-sitter grammar PACKAGES pinned in the manifest (python, typescript, javascript, go, rust,
+      java, cpp, kotlin, ruby, c-sharp, swift, scala, php, luau) producing 16 effective LANGUAGE TAGS in
+      LANGUAGE_CONFIGS/parser.py, because "c" shares the cpp grammar object (parser.py:98-103) and "tsx"
+      is loaded as a second entry point off the typescript package (parser.py:120-127). The triage note's
+      "16 grammars" is the tag count, not the distinct-package count — worth flagging since the two numbers
+      diverge and a reader could cite either.
+    evidence: pyproject.toml:36-51; packages/core/src/repowise/core/ingestion/parser.py:97-129,184-454
+    confidence: verified
+  incrementality:
+    verdict: full_reparse_per_run
+    claim: >
+      Nothing in ASTParser is incremental at the parse level — every parse_file() call constructs a fresh
+      tree-sitter Parser and re-parses the full source from bytes; there is no tree-sitter edit()/reparse
+      API usage anywhere in the module. Incrementality (such as it exists) is implemented one layer up, by
+      ChangeDetector deciding WHICH files to re-run this same full-parse function on.
+    evidence: packages/core/src/repowise/core/ingestion/parser.py:480-532
+    confidence: verified
+  findings:
+    - claim: "Query compilation is cached per-language on the ASTParser instance (self._query_cache), not per-call, so repeated files in the same process amortize .scm compilation"
+      evidence: packages/core/src/repowise/core/ingestion/parser.py:476-478,538-562
+      confidence: verified
+
+q4_language_server:
+  verdict: no_lsp
+  not_applicable:
+    reason: >
+      repowise does all name/type/call resolution itself via tree-sitter captures + heuristic tiers
+      (CallResolver, HeritageResolver, per-language import resolvers) with zero language-server
+      integration anywhere in the codebase or dependency manifest.
+    confirmed_by:
+      - probe: manifest
+        command: "grep -in \"pyright\\|language.server\\|lsp\\|tsserver\" pyproject.toml"
+        result: "no match (exit 1) — no LSP client/server package of any kind in the dependency list"
+        evidence: pyproject.toml:33-90
+        confidence: verified
+      - probe: source
+        command: "rg -ni \"language server|lsp|pyright|tsserver\" packages/core/src/repowise/core/generation/__init__.py packages/core/src/repowise/core/generation/context_assembler.py"
+        result: "only false-positive substring matches inside the identifier 'SymbolSpotlightContext'; no genuine LSP reference anywhere in the two files that matched the broader repo-wide grep"
+        evidence: packages/core/src/repowise/core/generation/context_assembler.py:73,365,384
+        confidence: verified
+    what_fills_the_gap:
+      - claim: "Three-tier heuristic CallResolver (same-file / import-scoped / global-unique, confidence-scored) stands in for what an LSP's go-to-definition/find-references would give for free, at the cost of the confidence ceiling topping out at 0.95 even for same-file matches"
+        evidence: packages/core/src/repowise/core/ingestion/call_resolver.py:1-21
+        confidence: verified
+    confidence: verified
+
+q5_graph_representation:
+  storage:
+    claim: >
+      In-memory graph is a single networkx.DiGraph built and held by GraphBuilder for the duration of a
+      run; it is then flattened into SQLAlchemy ORM rows (GraphNode/GraphEdge tables, SQLite by default via
+      aiosqlite, optional Postgres+pgvector) for persistence across runs, and separately as node-link JSON
+      via to_json(). There is a second, simpler ad hoc SQLite persist() path on GraphBuilder itself
+      (raw executescript CREATE TABLE) that appears to be a leaner/older persistence route than the ORM one.
+    evidence: packages/core/src/repowise/core/ingestion/graph.py:432-507; packages/core/src/repowise/core/persistence/models.py:150-207
+    confidence: verified
+  node_schema:
+    claim: >
+      Two node "tiers": node_type="file" (path, language, symbol_count, has_error, is_test, is_entry_point)
+      and node_type="symbol" (kind, name, qualified_name, file_path, start_line/end_line, visibility,
+      is_async, language, parent_name, signature) — kind is a 14-value SymbolKind enum (function, class,
+      method, interface, enum, constant, type_alias, decorator, trait, impl, struct, module, macro,
+      variable). A synthetic "__module__" symbol node is added per file to anchor top-level/module-scope
+      calls. No node exists below symbol granularity — no PARAM, no per-statement, no per-identifier nodes.
+    evidence: packages/core/src/repowise/core/ingestion/graph.py:117-182; packages/core/src/repowise/core/ingestion/models.py:78-93,140-157
+    confidence: verified
+  edge_schema:
+    claim: >
+      Runtime edge_type values observed in the builder: imports, defines, has_method, calls (+confidence),
+      extends/implements/trait_impl/mixin (heritage, +confidence), co_changes (+weight, from git), dynamic_*
+      (from per-language dynamic-hint extractors), and framework (synthetic, framework-mediated). The
+      EdgeType Literal in models.py additionally declares has_property/method_overrides/method_implements
+      that I did not find an emit site for in the files read — worth flagging as declared-but-possibly-
+      unused, or implemented in the unread extractors/heritage/* modules.
+    evidence: packages/core/src/repowise/core/ingestion/graph.py:14-19,152-608; packages/core/src/repowise/core/ingestion/models.py:222-235
+    confidence: verified
+    note: "cpg-me-daddy's CALLS.status enum (resolved/ambiguous/external/unresolved/dynamic + reason/confidence/resolvedBy) is a richer status taxonomy than repowise's bare float confidence on the same edge type."
+  identity:
+    verdict: file_local
+    claim: >
+      Symbol.id is literally "{file_path}::{name}" or "{file_path}::{parent_name}::{name}" — a
+      file-path-prefixed composite key, the opposite of fqn/SCIP-style resolver-independent identity.
+      A file rename or move therefore changes every symbol id it contains and every edge referencing
+      them, and CallResolver/HeritageResolver rebuild whole-repo symbol/class indices fresh on every
+      GraphBuilder.build() call rather than doing an incremental relink.
+    evidence: packages/core/src/repowise/core/ingestion/models.py:143; packages/core/src/repowise/core/ingestion/parser.py:644-649; packages/core/src/repowise/core/ingestion/call_resolver.py:60-152
+    confidence: verified
+  findings:
+    - claim: "No academic Code-Property-Graph framing anywhere — no AST/CFG/PDG layering, no reference to Joern or the Yamaguchi CPG paper found in the whole repo; the README itself only ever calls it a 'dependency graph', which is the more accurate label"
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:1-24
+      confidence: verified
+      note: "Worth noting since the triage brief and this comparative study both use 'code-graph tool' loosely — repowise is honest that it isn't attempting a CPG in the formal sense, unlike cpg-me-daddy's explicit Joern-alignment goal (D37)."
+
+q6_presentation_layer:
+  surfaces:
+    - name: "MCP server (marketed surface)"
+      kind: mcp_tools
+      claim: "README/docs/MCP_TOOLS.md market exactly 7 tools: get_overview, get_answer, get_context, search_codebase, get_risk, get_why, get_dead_code"
+      evidence: README.md:174-186; docs/MCP_TOOLS.md:30,52,75,102,127,152,183
+      confidence: verified
+    - name: "MCP server (actual registered surface)"
+      kind: mcp_tools
+      claim: >
+        The mcp_server package actually registers 16 @mcp.tool()-decorated functions: get_overview,
+        get_answer, get_context, search_codebase, get_risk, get_why, get_dead_code (the documented 7) PLUS
+        get_symbol, get_community, get_callers_callees, get_dependency_path, get_execution_flows,
+        get_graph_metrics, get_architecture_diagram, annotate_file, and update_decision_records — none of
+        the latter 9 appear in README.md or docs/MCP_TOOLS.md.
+      evidence: "packages/server/src/repowise/server/mcp_server/tool_{dead_code.py:25,decision_records.py:46,dependency.py:24,flows.py:35,why.py:30,metrics.py:38,symbol.py:279,overview.py:162,context.py:1057,diagram.py:41,community.py:39,search.py:89,callers.py:91,risk.py:346,annotate.py:21,answer.py:704}"
+      confidence: verified
+      note: >
+        Directly relevant to AM3 (≤12 MCP tools): repowise's actual tool count (16) already exceeds our
+        cap, and the gap between its marketed count (7) and its real count (16) is itself the risk AM3 is
+        trying to head off — undocumented tool-surface growth outpacing what the project claims about itself.
+    - name: "Local web dashboard"
+      kind: webview
+      claim: "Next.js app (packages/web) with Chat/Docs/Graph/Search/Symbols/Coverage/Ownership/Hotspots/Dead-Code/Decisions/Costs/Blast-Radius views, served alongside the MCP server by `repowise serve`; graph view explicitly handles 2,000+ nodes with community color mode and a path finder"
+      evidence: README.md:243-269
+      confidence: inferred
+      note: "Inferred from README's feature table only — packages/web/src was not opened, so the implementation (rendering library, whether it's a real force-directed layout or a canned one) is unverified."
+    - name: "CLI report commands"
+      kind: cli
+      claim: "repowise dead-code, repowise decision health, repowise costs, repowise status, repowise query/search as terminal-native report surfaces distinct from the MCP tools"
+      evidence: README.md:486-544
+      confidence: inferred
+  findings:
+    - claim: "generate-claude-md produces a managed, marker-delimited block in the target project's CLAUDE.md (REPOWISE:START/END) so it can be regenerated without clobbering user-authored content above it — deterministic, no LLM call, claimed under 5 seconds"
+      evidence: README.md:343-369
+      confidence: inferred
+      note: "A directly reusable idea for cpg-me-daddy's own CLAUDE.md/AGENTS.md story if one is ever wanted — code for it wasn't read (packages/core/src/repowise/core/generation/editor_files/ is in not_read)."
+
+q7_bad_code_analytics:
+  detectors:
+    - name: "Dead code (4 passes)"
+      technique: "pure graph traversal: unreachable files (in-degree 0, not entry/test), unused exports, unused internals, zombie packages — each gated by a dynamic-import/framework-decorator allowlist to suppress false positives, plus a confidence-scored, config-adjustable safe_to_delete threshold (default 0.7)"
+      output: "DeadCodeReport with per-finding confidence/lines/safe_to_delete, persisted to a dead_code_findings table with a resolve/acknowledge/false_positive workflow"
+      evidence: packages/core/src/repowise/core/analysis/dead_code/analyzer.py:34-89; packages/core/src/repowise/core/persistence/models.py:468-499
+      confidence: verified
+    - name: "Git hotspots / churn"
+      technique: "exponentially time-decayed per-commit churn score (half-life 180 days) combined with a percentile rank across all files; top-25th-percentile-by-churn-with-recent-activity = hotspot"
+      output: "is_hotspot boolean + churn_percentile + temporal_hotspot_score columns per file"
+      evidence: packages/core/src/repowise/core/ingestion/git_indexer.py:102-106,614-624,916-945
+      confidence: verified
+    - name: "Community detection"
+      technique: "Leiden (graspologic) preferred, Louvain (networkx) fallback, with a second partition pass to split any community exceeding 30% of the graph, plus a heuristic cohesion score and directory/keyword-based labeling"
+      output: "community_id per file/symbol node, CommunityInfo (label, members, size, cohesion, dominant_language) cached alongside the graph"
+      evidence: packages/core/src/repowise/core/analysis/communities.py:1-8,30-31,66-76,104-150
+      confidence: verified
+    - name: "Security signal scan"
+      technique: "line-by-line regex pattern match (eval/exec, pickle.loads, shell=True, hardcoded secrets, f-string SQL, weak hashes) plus a symbol-name keyword scan (auth/token/password/jwt/session/crypto) — explicitly not dataflow/taint tracking"
+      output: "SecurityFinding rows (kind, severity, snippet, line)"
+      evidence: packages/core/src/repowise/core/analysis/security_scan.py:1-9,20-37
+      confidence: verified
+    - name: "Execution flow tracing"
+      technique: "composite entry-point scoring by name-pattern tier (main/run/start/... > handle_/on_/... > get_/create_/...) with test/fixture/demo path exclusion, then BFS from scored entry points classifying flows as intra- vs cross-community"
+      output: "ExecutionFlowReport (per-flow trace, depth, crosses_community, communities_visited)"
+      evidence: packages/core/src/repowise/core/analysis/execution_flows.py:1-6,19-46,54-83
+      confidence: verified
+  fix_support:
+    verdict: surface_only
+    claim: >
+      No auto-fix / codemod capability found anywhere read — findings are surfaced with confidence,
+      suggested action text ("safe to delete", "review first"), and a resolve/acknowledge/false-positive
+      workflow, but the engineer applies the change by hand.
+    evidence: README.md:389-406; packages/core/src/repowise/core/persistence/models.py:490-496
+    confidence: inferred
+  absent:
+    - detector: "taint analysis / data-flow (PDG-equivalent, our REACHING_DEF)"
+      looked_in: "whole-repo keyword grep for taint/dataflow/data-flow/cfg/control-flow-graph, plus a second grep restricted to docs/architecture/deep-dives.md"
+      result: >
+        Zero genuine hits in either probe — every regex match was a false positive on the `cfg` local
+        variable name used for the loaded config dict (e.g. `cfg = load_config(repo_path)`), not on any
+        control-flow/dataflow construct. Confirmed by opening the one doc-side hit directly.
+      confidence: verified
+      note: "security_scan.py's regex scanner is the closest thing to a taint feature and is explicitly line-pattern based, not graph-based — see q7_bad_code_analytics.detectors above."
+  findings:
+    - claim: "cyclomatic_complexity exists as a Symbol field name (complexity_estimate) but I found no computation site for it in the files read — it defaults to 1 and I did not locate where/if it's actually derived from the AST"
+      evidence: packages/core/src/repowise/core/ingestion/models.py:154
+      confidence: inferred
+      note: "Flagged rather than asserted 'computed' or 'unused' — the computation, if any, likely lives in an unread extractor module."
+
+# Architecture outside the 7 questions that bears on cpg-me-daddy's deferred/proposed items.
+adjacent_findings:
+  - topic: "git-history awareness as a first-class intelligence layer"
+    claim: >
+      GitIndexer mines up to 500 commits per file in parallel (semaphore of 20), producing ownership
+      (via git blame, capped at 100KB files), bus factor (smallest author set covering 80% of commits),
+      temporal-decayed hotspot scores, and co-change pairs (also temporal-decayed, min-count-3 threshold,
+      computed from one `git log --name-only` call rather than one `git diff` per commit). All of this
+      degrades gracefully to an empty summary on a non-git directory or GitPython failure.
+    evidence: packages/core/src/repowise/core/ingestion/git_indexer.py:100-128,807-945
+    confidence: verified
+    ties_to: [X2]
+    note: >
+      This is a complete, shipping implementation of exactly what X2 proposes and cpg-me-daddy has not yet
+      agreed to build. The single-git-log-call co-change technique (vs. one diff per commit) is a concrete
+      performance lesson independent of whether X2 itself is adopted.
+  - topic: "architectural-decision intelligence (inline markers + git archaeology + doc mining + staleness)"
+    claim: >
+      DecisionExtractor runs three capture sources in parallel — inline `# WHY:`/`# DECISION:`/`# TRADEOFF:`/
+      `# ADR:`/`# RATIONALE:`/`# REJECTED:` comment markers (confidence 0.95, or 0.70 raw without an LLM),
+      git-archaeology over commit messages matching a decision-signal keyword list (confidence 0.70-0.85),
+      and README/docs mining (confidence 0.60) — each source degrades to a deterministic non-LLM fallback on
+      provider failure. A separate compute_staleness() detects when a later commit's message contains a
+      keyword (replace/remove/deprecate/...) that shares 2+ content words with the original decision text,
+      boosting staleness — i.e. it tries to detect when code has since contradicted a recorded decision.
+    evidence: packages/core/src/repowise/core/analysis/decision_extractor.py:1-9,61-153,379-398,629-719
+    confidence: verified
+    ties_to: [X2, D10]
+    note: >
+      The single most distinctive layer in this repo relative to the other tools in this comparative study,
+      and the one with no analog anywhere in cpg-me-daddy's current or deferred design (D10's TAG/FINDING
+      overlay is about taint, not decision provenance). The inline-marker convention in particular is cheap,
+      deterministic, and has a zero-LLM fallback — worth evaluating on its own even independent of X2.
+  - topic: "MCP tool-surface drift beyond what the project documents about itself"
+    claim: "16 tools are registered; only 7 are documented in either README.md or docs/MCP_TOOLS.md — see q6 finding for the full list and evidence."
+    evidence: "packages/server/src/repowise/server/mcp_server/tool_symbol.py:279 (get_symbol, undocumented example)"
+    confidence: verified
+    ties_to: [AM3]
+    note: "Concrete cautionary evidence for keeping a machine-checked ceiling on MCP tool count rather than a doc claim alone — see lessons_for_cpg_me_daddy L7."
+  - topic: "multi-repo workspace intelligence (cross-repo co-change + contract extraction)"
+    claim: >
+      Cross-repo co-change detection reuses the same exponential-decay formula as intra-repo co-change
+      (same _CO_CHANGE_DECAY_TAU=180.0 constant) but is stored separately, outside the SQL schema, as
+      .repowise-workspace/cross_repo_edges.json rather than as new DB tables or graph edges — an explicit
+      design choice per the module's own docstring to avoid new tables for a workspace-only concern.
+    evidence: packages/core/src/repowise/core/workspace/cross_repo.py:1-8,32-33
+    confidence: verified
+    ties_to: []
+    ties_to_none_reason: "cpg-me-daddy has no multi-repo/workspace concept in its v1 scope and no decision id covers it; noting for completeness only."
+
+schema_mapping:
+  verdicts:
+    joern_aligned:
+      verdict: "no"
+      why: "No CPG academic framing (AST+CFG+PDG) attempted anywhere; the graph is a plain NetworkX file+symbol dependency/call graph with attribute dicts, and the repo never once mentions Joern — confirmed by a whole-repo case-insensitive grep returning zero hits."
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:1-24
+      confidence: verified
+    density:
+      verdict: sparse
+      why: "LANGUAGE_CONFIGS' symbol_node_types dicts map only definition-level tree-sitter node types (function/class/method/etc., 2-15 entries per language) to symbols — no node per statement, identifier, or punctuation, converging with cpg-me-daddy's PR1 independently."
+      evidence: packages/core/src/repowise/core/ingestion/parser.py:184-454
+      confidence: verified
+    identity_model:
+      verdict: file_local
+      why: "Symbol.id is '{file_path}::{name}' (or with a parent segment) — see q5_graph_representation.identity above for the full argument."
+      evidence: packages/core/src/repowise/core/ingestion/models.py:143
+      confidence: verified
+    update_model:
+      verdict: hybrid
+      why: >
+        `repowise update` fully re-walks and re-parses every file and fully rebuilds the in-memory graph
+        on every run (its own comment: "Full re-ingest for graph (needed for cascade analysis)"), so the
+        graph substrate itself is full_reindex, not incremental. Only two layers above it are genuinely
+        incremental: wiki-page regeneration is capped by an adaptive cascade budget prioritized by PageRank
+        (ChangeDetector.get_affected_pages), and git metadata re-indexing only re-mines changed files
+        (GitIndexer.index_changed_files) rather than all 500 commits × all files again.
+      evidence: packages/cli/src/repowise/cli/commands/update_cmd.py:213-236; packages/core/src/repowise/core/ingestion/change_detector.py:260-346; packages/core/src/repowise/core/ingestion/git_indexer.py:362-415
+      confidence: verified
+  node_vocabulary:
+    - theirs: "file (node_type=file)"
+      ours: FILE
+      fit: exact
+      note: "identical concept — the filesystem-entry node"
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:124-132
+    - theirs: "symbol (kind=function/method)"
+      ours: METHOD
+      fit: approx
+      note: "no formal AST/CFG membership or resolution-status field on the node itself; our METHOD carries Joern-alignment and lives in a typed 14-label vocabulary rather than one open kind enum"
+      evidence: packages/core/src/repowise/core/ingestion/models.py:78-93
+    - theirs: "symbol (kind=class/struct/interface/enum/trait/impl)"
+      ours: TYPE_DECL
+      fit: approx
+      evidence: packages/core/src/repowise/core/ingestion/models.py:78-93
+    - theirs: "symbol (kind=constant/variable)"
+      ours: MEMBER
+      fit: approx
+      note: "no distinction between a class-owned MEMBER and a free module-level constant/variable"
+      evidence: packages/core/src/repowise/core/ingestion/models.py:78-93
+    - theirs: "Import (dataclass folded into an 'imports' edge, never its own node)"
+      ours: IMPORT
+      fit: absent
+      note: "repowise never reifies an import statement as a node; it's edge data (imported_names) on a file→file 'imports' edge"
+      evidence: packages/core/src/repowise/core/ingestion/models.py:176-184
+    - theirs: "community_id (node attribute + durable SQL column, not a first-class overlay node)"
+      ours: COMMUNITY
+      fit: approx
+      note: "theirs stamps an int on file/symbol nodes and persists it to a GraphNode.community_id column; ours is meant to be a queryable overlay node with MEMBER_OF edges, exposed but never persisted as a label (D15)"
+      evidence: packages/core/src/repowise/core/persistence/models.py:167
+    - theirs: "DecisionRecord (SQL table, never a graph node)"
+      ours: "(none — closest is the deferred FINDING/TAG overlay)"
+      fit: extra
+      note: "a whole intelligence layer with no node-level analog on either side of the comparison"
+      evidence: packages/core/src/repowise/core/persistence/models.py:335-393
+  edge_vocabulary:
+    - theirs: imports
+      ours: IMPORTS
+      fit: exact
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:236-241
+    - theirs: defines
+      ours: DEFINES
+      fit: exact
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:152-157
+    - theirs: calls
+      ours: CALLS
+      fit: approx
+      note: "ours carries an explicit status enum (resolved/ambiguous/external/unresolved/dynamic) + reason + resolvedBy; theirs carries only a bare float confidence 0.50-0.95 with no status taxonomy"
+      evidence: packages/core/src/repowise/core/ingestion/call_resolver.py:42-49
+    - theirs: has_method
+      ours: "DECLARES (TYPE_DECL→METHOD direction)"
+      fit: approx
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:159-167
+    - theirs: "extends / implements / trait_impl / mixin (HeritageKind, 4-way sub-typed)"
+      ours: INHERITS_FROM
+      fit: approx
+      note: "ours collapses all four into one edge type; theirs keeps them distinct as a HeritageKind literal"
+      evidence: packages/core/src/repowise/core/ingestion/models.py:201
+    - theirs: co_changes
+      ours: "(none — closest is the deferred X2/overlay concept)"
+      fit: absent
+      note: "git co-change is wired directly into the SAME graph as import/call edges, not a separate overlay tier"
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:534-575
+    - theirs: "framework (synthetic framework-mediated edges, e.g. FastAPI route→handler)"
+      ours: "(none — closest is CALLS with a framework-derived resolvedBy, not yet built)"
+      fit: absent
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:613-641
+  ours_unmatched:
+    - ours: "PARAM / HAS_PARAM"
+      why_absent_there: "parameters are stored as a flat, unparsed signature string on Symbol (params_text), never decomposed into individual param nodes/edges"
+      evidence: packages/core/src/repowise/core/ingestion/parser.py:618,635-636
+    - ours: "DIRECTORY / HAS_ENTRY"
+      why_absent_there: "traversal produces only file-level nodes; there is no directory-tier node anywhere in the schema's own docstring"
+      evidence: packages/core/src/repowise/core/ingestion/graph.py:1-24
+    - ours: REACHING_DEF
+      why_absent_there: "no data-flow/PDG layer exists at all — confirmed by a whole-repo grep for taint/dataflow/cfg keywords returning zero genuine hits (see q7_bad_code_analytics.absent)"
+      evidence: packages/core/src/repowise/core/analysis/security_scan.py:1-32
+    - ours: "TAG / TAGGED_BY"
+      why_absent_there: "dead-code and security findings live in separate SQL tables and are never written back into the graph as TAG nodes attached to the code they concern"
+      evidence: packages/core/src/repowise/core/persistence/models.py:449-500
+    - ours: "SYMBOL fqn-keyed identity / ALIAS_OF"
+      why_absent_there: "symbol identity is the file-path-prefixed string id (file_local), not a resolver-independent fqn with a separate alias layer"
+      evidence: packages/core/src/repowise/core/ingestion/models.py:143
+  theirs_unmatched:
+    - theirs: "co_changes edges (git hidden-coupling)"
+      why_we_lack_it: "X2 (git awareness) is proposed, not yet agreed, for cpg-me-daddy"
+      would_we_want_it: "yes"
+    - theirs: "architectural-decision layer (inline markers + git archaeology + doc mining + staleness scoring)"
+      why_we_lack_it: "no decision-provenance concept exists in cpg-me-daddy's v1 schema at all; D10's TAG/FINDING overlay targets taint, not decision tracking"
+      would_we_want_it: "yes"
+    - theirs: "temporal-decayed hotspot score + bus-factor + blame-based ownership"
+      why_we_lack_it: "same X2 gap"
+      would_we_want_it: "maybe"
+    - theirs: "cross-repo co-change + API-contract extraction (workspace mode)"
+      why_we_lack_it: "cpg-me-daddy is single-repo scoped in v1; no workspace/multi-repo concept exists"
+      would_we_want_it: "maybe"
+
+lessons_for_cpg_me_daddy:
+  - id: L1
+    lesson: "Keep symbol-node cardinality confined to definition-level AST constructs (functions/classes/methods/etc.), never per-statement or per-identifier."
+    stance: adopt
+    ties_to: [PR1]
+    why: "repowise's LANGUAGE_CONFIGS independently converges on the same choice across 14 languages — this is convergent industry practice, not an idiosyncrasy of our own design, and reinforces PR1's 'sparse by design' cardinality rule."
+    cost: "None — this reinforces an existing decision rather than proposing new work."
+    evidence: packages/core/src/repowise/core/ingestion/parser.py:184-196
+    confidence: verified
+  - id: L2
+    lesson: "Never key symbol node identity on the file path the symbol currently lives in; keep the fqn-keyed SYMBOL indirection so a single-file replace can't cascade into every edge that touches a renamed/moved file."
+    stance: reject
+    ties_to: [D5, PR3]
+    why: >
+      repowise does exactly the file-path-keyed identity D5 rejects (Symbol.id = '{file_path}::{name}'),
+      and pays for it with whole-repo index rebuilds in CallResolver/HeritageResolver on every
+      GraphBuilder.build() call — the concrete cost D5's reasoning predicted in the abstract.
+    cost: "We already pay this cost by having built D5/PR3; this is confirming evidence, not new work."
+    evidence: packages/core/src/repowise/core/ingestion/models.py:143
+    confidence: verified
+  - id: L3
+    lesson: "Make sure `cpg index`'s incremental path never silently falls back to a full re-parse + full graph rebuild while still being marketed as an incremental update — add a test that asserts single-file-changed indexing touches O(1) files, not O(repo size)."
+    stance: reject
+    ties_to: [D17, PR3, X12]
+    why: >
+      repowise's own `update` command comment says "Full re-ingest for graph (needed for cascade
+      analysis)" and then re-walks and re-parses every file in the repo on every update, regardless of
+      how many files actually changed — the update time is bounded by total repo size, not diff size,
+      which is the opposite of PR3's "graph is a cache" philosophy and would blow past D17's 2s/5s ceiling
+      on any repo bigger than a toy one.
+    cost: "A CI/interface-hash test (X12) that fails if `cpg index` on a 1-file change touches more than a small, bounded set of files is cheap insurance against silently regressing into repowise's shape."
+    evidence: packages/cli/src/repowise/cli/commands/update_cmd.py:213-236
+    confidence: verified
+  - id: L4
+    lesson: "Keep (and consider borrowing) the discipline of an explicit cross-language rejection guard on any low-confidence, name-only call-resolution tier — a global-unique-name match should never fire across two different languages even when it's technically unambiguous."
+    stance: adopt
+    ties_to: [D26]
+    why: "repowise's Tier-3 fallback explicitly checks caller/callee language and returns None on a mismatch rather than trusting a same-name coincidence across languages — a small, cheap guard against a plausible-looking wrong edge, directly applicable to our own adapter-native resolver's lowest-confidence tier."
+    cost: "One extra language-equality check per low-confidence resolution attempt; negligible."
+    evidence: packages/core/src/repowise/core/ingestion/call_resolver.py:236-243
+    confidence: verified
+  - id: L5
+    lesson: "Do not persist community_id as a durable, un-versioned column on graph nodes across re-indexes without an explicit staleness/confidence field next to it."
+    stance: reject
+    ties_to: [D15, RK8]
+    why: >
+      repowise's GraphNode.community_id is a plain persisted integer column with no staleness or
+      confidence field alongside it (contrast with its own DecisionRecord.staleness_score, which DOES
+      track this for decisions) — exactly the RK8 risk of a community label being trusted after it has
+      gone stale. D15's choice to expose communities read-only and never persist labels avoids this by
+      construction.
+    cost: "We give up nothing by rejecting this — D15 already avoids it; this is confirming evidence for staying the course."
+    evidence: packages/core/src/repowise/core/persistence/models.py:167
+    confidence: verified
+  - id: L6
+    lesson: "Watch for AGPL/SSPL-shaped dual-licensing in any future dependency or reference implementation, the same way RK4 already flags FalkorDB."
+    stance: watch
+    ties_to: [RK4]
+    why: "repowise is AGPL-3.0-only with a separate paid commercial license for embedding — structurally identical to the FalkorDB SSPL/RSAL risk RK4 already tracks, just from a different vendor."
+    cost: "Trigger: if we ever consider vendoring code or algorithms (not just reading for design ideas) from repowise or a similarly-licensed project into falkordb-service or engine."
+    evidence: pyproject.toml:14
+    confidence: verified
+  - id: L7
+    lesson: "Enforce AM3's ≤12 MCP tool cap with an automated count check (e.g. a test that counts registered tool functions), not a doc claim alone."
+    stance: adopt
+    ties_to: [AM3]
+    why: "repowise's own docs market 7 tools while the server actually registers 16 — a real, observable case of tool-surface drift outrunning what a project says about itself, which is exactly the failure AM3's cap is meant to prevent."
+    cost: "A small CI check (count @tool-equivalent registrations, fail above 12) — cheap relative to the alternative of silently drifting past our own stated cap."
+    evidence: packages/server/src/repowise/server/mcp_server/tool_symbol.py:279
+    confidence: verified
+  - id: L8
+    lesson: "If/when X2 (git awareness) is promoted from proposed to agreed, evaluate repowise's exponential-decay hotspot/co-change formulas (half-life ~180 days, single git-log-call co-change computation) as a starting point before designing our own from scratch."
+    stance: watch
+    ties_to: [X2]
+    why: "It's a complete, working implementation of the exact feature X2 proposes, with a specific performance trick (one `git log --name-only` call instead of one `git diff` per commit) worth not re-deriving independently."
+    cost: "Trigger: X2 moving from 'proposed' to 'agreed' in a planning session."
+    evidence: packages/core/src/repowise/core/ingestion/git_indexer.py:807-847
+    confidence: verified
+  - id: L9
+    lesson: "If a decision-provenance layer is ever considered for cpg-me-daddy, evaluate repowise's cheap, deterministic inline-marker convention (# WHY:/# DECISION:/# TRADEOFF:) with its zero-LLM fallback before assuming an LLM-only design."
+    stance: watch
+    ties_to: [X2, D10]
+    why: "This is the single most distinctive layer in the repo and has no analog in cpg-me-daddy's design at all (D10's TAG/FINDING overlay targets taint, not decision provenance); its non-LLM fallback path means the core capability doesn't require an API key, which matches our own PR7 (privacy and local compute) posture better than repowise's LLM-first framing does."
+    cost: "Trigger: a planning session proposing a decision/ADR-tracking layer as a new X-item."
+    evidence: packages/core/src/repowise/core/analysis/decision_extractor.py:379-398
+    confidence: verified
+  - id: L10
+    lesson: "Keep PARAM as an explicit node with a HAS_PARAM edge rather than collapsing a symbol's parameter list into an opaque signature string."
+    stance: adopt
+    ties_to: [D31]
+    why: "repowise stores params as a flat, unparsed signature string (Symbol.signature/params_text), which means its own MCP tools can only pattern-match text to answer parameter-shaped questions ('does this call pass the right arity/type') rather than traverse structured nodes — a concrete cost of the choice we've already avoided by keeping PARAM first-class."
+    cost: "We already pay the indexing cost of PARAM nodes; this is confirming evidence that the cost buys real query capability repowise's shortcut gives up."
+    evidence: packages/core/src/repowise/core/ingestion/parser.py:635-636
+    confidence: verified
+
+amendment_candidates: []
+
+open_questions:
+  - q: "Is complexity_estimate (cyclomatic_complexity analog) actually computed anywhere, or does it always default to 1?"
+    blocked_by: "The computation site, if any, is not in ASTParser or GraphBuilder and likely lives in an unread extractor module."
+    cheap_next_probe: "rg -n 'complexity_estimate' packages/core/src/repowise/core/ingestion/extractors/"
+    why_it_matters: "If it's genuinely unused/dead, that's a second dead-code finding inside repowise itself worth noting; if it's computed, it's a second METHOD-metric precedent alongside cpg-me-daddy's own designed-not-shipped cyclomatic_complexity property."
+  - q: "Do has_property / method_overrides / method_implements (declared in the EdgeType Literal) actually get emitted anywhere, or are they aspirational/dead?"
+    blocked_by: "No emit site found in graph.py, call_resolver.py, or heritage_resolver.py's call path — likely in an unread extractors/heritage/* module."
+    cheap_next_probe: "rg -n 'method_overrides|method_implements|has_property' packages/core/src/repowise/core/ingestion/"
+    why_it_matters: "Affects how literally to trust models.py's EdgeType enum as 'the edge schema' vs. what's actually wired into GraphBuilder — matters for any node/edge-vocabulary comparison drawn from that file alone."
+  - q: "How does the web dashboard's Graph view actually render 2,000+ nodes, and does it match cpg-me-daddy's @cosmos.gl/graph WebGL approach or something lighter?"
+    blocked_by: "packages/web/** (185 TS/TSX files) was not opened at all in this pass."
+    cheap_next_probe: "rg -n 'cosmos|sigma|cytoscape|d3-force|force-graph' packages/web/src/"
+    why_it_matters: "Q6's presentation-layer comparison currently rests on the README's own description of the dashboard, not verified code — a real gap in an otherwise well-evidenced study."
+  - q: "Does the workspace/cross-repo layer persist any graph structure at all, or is .repowise-workspace/cross_repo_edges.json truly the only artifact (no cross-repo nodes/edges in any per-repo graph)?"
+    blocked_by: "cross_repo.py was only skimmed for its header; workspace/{registry,scanner,update}.py were not read."
+    cheap_next_probe: "rg -n 'cross_repo' packages/server/src/repowise/server/mcp_server/_enrichment.py"
+    why_it_matters: "Determines whether 'multi-repo workspace intelligence' is a true graph-level feature or a read-time JSON-merge convenience layered on top of independent per-repo graphs — relevant if cpg-me-daddy ever considers workspace scope."

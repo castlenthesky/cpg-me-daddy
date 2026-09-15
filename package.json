@@ -1,38 +1,73 @@
 {
   "name": "cpg-me-daddy",
+  "displayName": "cpg-me-daddy",
+  "description": "",
   "version": "0.0.1",
-  "private": true,
-  "description": "Code Property Graph for TypeScript/JavaScript/Python — workspace root",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
   "workspaces": [
     "packages/*"
   ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cpgMeDaddy",
+          "title": "CPG Me Daddy",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cpgMeDaddy": [
+        {
+          "id": "cpgMeDaddy.graph",
+          "name": "Graph",
+          "icon": "media/icon.svg",
+          "type": "webview"
+        },
+        {
+          "id": "cpgMeDaddy.insights",
+          "name": "Insights",
+          "icon": "media/icon.svg"
+        },
+        {
+          "id": "cpgMeDaddy.config",
+          "name": "Config",
+          "icon": "media/icon.svg"
+        }
+      ]
+    }
+  },
   "scripts": {
-    "lint": "oxlint packages tools",
-    "format": "oxfmt . '!.claude/**'",
-    "format:check": "oxfmt --check . '!.claude/**'",
-    "typecheck": "tsc --build && tsc -p tsconfig.test.json",
-    "watch": "tsc --build --watch",
-    "typecheck:clean": "tsc --build --clean",
-    "test:unit": "bun test packages/falkordb-service/test/unit packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit",
-    "test:schema": "bun test packages/engine/test/unit/schema",
-    "test:goldens": "bun test packages/engine/test/unit/golden",
-    "test:integration": "bun test packages/engine/test/integration",
-    "test:integration:network": "bun run --filter falkordb-service test:integration:network",
-    "db:up": "bun run tools/falkordb-up.ts",
-    "db:down": "bun run tools/falkordb-down.ts",
-    "db:dev:up": "bun run tools/falkordb-dev-up.ts",
-    "db:dev:stop": "docker compose -f docker/falkordb.dev.yml stop",
-    "db:dev:down": "bun run tools/falkordb-dev-down.ts",
-    "db:dev:reset": "bun run tools/falkordb-dev-down.ts --destroy",
-    "cpg": "bun run packages/cli/src/main.ts",
-    "prepare": "lefthook install || true"
+    "vscode:prepublish": "npm run compile",
+    "compile": "npm run compile:packages && npm run compile:ext && npm run compile:web",
+    "compile:packages": "tsc -b packages/ast-generator packages/cpg-generator packages/file-watcher packages/graph-builder packages/graph-visualizer",
+    "compile:ext": "tsc -b ./",
+    "compile:web": "node esbuild.js",
+    "watch": "npm run watch:web & npm run watch:ext",
+    "watch:ext": "tsc -b -w ./ --preserveWatchOutput",
+    "watch:web": "node esbuild.js --watch"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.11",
-    "@types/node": "22.x",
-    "lefthook": "2.1.12",
-    "oxfmt": "0.67.0",
-    "oxlint": "1.82.0",
-    "typescript": "^5.9.3"
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@cpg/ast-generator": "*",
+    "@cpg/cpg-generator": "*",
+    "@cpg/file-watcher": "*",
+    "@cpg/graph-builder": "*",
+    "@cpg/graph-visualizer": "*"
   }
 }

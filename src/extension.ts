@@ -1,9 +1,60 @@
 import * as vscode from 'vscode';
-import { bootstrap } from './bootstrap';
+import { GraphViewProvider } from './views/graphViewProvider';
+import { LogsTreeProvider } from './views/logsTreeProvider';
+import { PlaceholderTreeProvider } from './views/placeholderTreeProvider';
+import { VsCodeWatchBackend } from './watch/vscodeWatchBackend';
+import { WorkspaceSession } from './workspaceSession';
 
-export function activate(context: vscode.ExtensionContext): void {
-	console.log('Congratulations, your extension "codegraph" is now active!');
-	bootstrap(context);
+export function activate(context: vscode.ExtensionContext) {
+	const output = vscode.window.createOutputChannel('cpg-me-daddy');
+	context.subscriptions.push(output);
+
+	const logs = new LogsTreeProvider();
+
+	const log = (message: string) => {
+		output.appendLine(message);
+		logs.log(message);
+	};
+	
+	const graphView = new GraphViewProvider(context.extensionUri, log);
+	
+	log('CPG-Me-Daddy activated');
+	// output.show(true);
+
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider('cpgMeDaddy.graph', graphView),
+		vscode.window.registerTreeDataProvider('cpgMeDaddy.insights', logs),
+		vscode.window.registerTreeDataProvider('cpgMeDaddy.config', new PlaceholderTreeProvider('Config'))
+	);
+
+	// Single-root for now — multi-root merging into one graph is a later
+	// increment (dropped, along with this branch's raw per-folder logging,
+	// when the watcher moved onto WorkspaceSession — see the project plan).
+	const [firstFolder] = vscode.workspace.workspaceFolders ?? [];
+	if (firstFolder) {
+		const session = new WorkspaceSession(
+			firstFolder.uri.fsPath,
+			new VsCodeWatchBackend(),
+			(delta) => {
+				log(`graph delta for ${firstFolder.name}: +${delta.addedNodes.length}/-${delta.removedNodeIds.length} nodes`);
+				graphView.postDelta(delta);
+			},
+			(error) => {
+				log(`file watcher error on ${firstFolder.uri.fsPath}: ${error.message}`);
+			},
+			log
+		);
+		context.subscriptions.push({ dispose: () => session.dispose() });
+
+		// ParseWorkspace first, then MonitorWorkspace — session.start() awaits
+		// the parse before starting the watcher; see WorkspaceSession.
+		session
+			.start()
+			.then((payload) => graphView.postGraph(payload))
+			.catch((error) => {
+				log(`failed to index ${firstFolder.name}: ${error instanceof Error ? error.message : String(error)}`);
+			});
+	}
 }
 
-export function deactivate(): void {}
+export function deactivate() {}

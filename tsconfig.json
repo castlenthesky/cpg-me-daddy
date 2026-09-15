@@ -1,10 +1,29 @@
 {
-  "//": "Solution file. Builds every workspace package: `tsc --build` from the repo root.",
-  "files": [],
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2022",
+    "outDir": "out",
+    "lib": [
+      "ES2022"
+    ],
+    "sourceMap": true,
+    "rootDir": "src",
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    ".vscode-test",
+    "src/webview"
+  ],
   "references": [
-    { "path": "packages/falkordb-service" },
-    { "path": "packages/engine" },
-    { "path": "packages/cli" },
-    { "path": "packages/vscode" }
+    { "path": "packages/ast-generator" },
+    { "path": "packages/cpg-generator" },
+    { "path": "packages/file-watcher" },
+    { "path": "packages/graph-builder" },
+    { "path": "packages/graph-visualizer" }
   ]
 }
