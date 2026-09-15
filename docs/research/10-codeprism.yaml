@@ -138,7 +138,7 @@ q2_ast_to_cpg:
     confidence: verified
   findings:
     - claim: "No tree-sitter Query/S-expression DSL is used anywhere in the repo; every extraction is imperative cursor-walk + string match, not `.scm` queries"
-      evidence: "grep -rln \"tree_sitter::Query|QueryCursor\" crates --include=\"*.rs\" (no matches)"
+      evidence: 'grep -rln "tree_sitter::Query|QueryCursor" crates --include="*.rs" (no matches)'
       confidence: verified
     - claim: "The same EdgeKind::Calls variant is reused for three semantically different relationships: module→function containment, module→class containment, and caller→call-expression invocation"
       evidence: crates/codeprism-lang-js/src/ast_mapper.rs:177,207,291
@@ -188,7 +188,7 @@ q4_language_server:
         evidence: Cargo.toml:24-77
         confidence: verified
       - probe: source
-        command: "grep -rIn \"lsp|language_server|LanguageServer\" crates --include=\"*.rs\" -l | grep -v test"
+        command: 'grep -rIn "lsp|language_server|LanguageServer" crates --include="*.rs" -l | grep -v test'
         result: "One file matched, crates/codeprism-lang-java/src/analysis.rs — both hits are `evaluate_lsp`/Liskov Substitution Principle scoring, not Language Server Protocol"
         evidence: crates/codeprism-lang-java/src/analysis.rs:2288
         confidence: verified
@@ -207,7 +207,7 @@ q5_graph_representation:
       GraphStore::new() at startup. A separate codeprism-storage crate implements
       InMemory/File/SqliteGraphStorage backends, but it is declared as a Cargo dependency of
       codeprism-mcp-server and never referenced by name anywhere in that crate's source.
-    evidence: "crates/codeprism-core/src/graph.rs:16-43; crates/codeprism-mcp-server/src/server.rs:221,248; crates/codeprism-mcp-server/Cargo.toml:48; grep -rn \"codeprism_storage|GraphStorage\" crates/codeprism-mcp-server/src (zero matches)"
+    evidence: 'crates/codeprism-core/src/graph.rs:16-43; crates/codeprism-mcp-server/src/server.rs:221,248; crates/codeprism-mcp-server/Cargo.toml:48; grep -rn "codeprism_storage|GraphStorage" crates/codeprism-mcp-server/src (zero matches)'
     confidence: verified
     note: >
       No persistence of the graph itself exists on the path a user actually runs — restarting the MCP
@@ -241,7 +241,7 @@ q5_graph_representation:
       a separate, whole-graph pass rather than a per-file incremental one (see q1).
   findings:
     - claim: "Literal, Route, SqlQuery, and Event node kinds are declared in the enum but never constructed by any of the four language extractors"
-      evidence: "grep -rn \"NodeKind::Parameter|NodeKind::Literal|NodeKind::Route|NodeKind::SqlQuery|NodeKind::Event\" crates/codeprism-lang-*/src/*.rs — only NodeKind::Parameter appears, and only in codeprism-lang-rust/src/ast_mapper.rs:952"
+      evidence: 'grep -rn "NodeKind::Parameter|NodeKind::Literal|NodeKind::Route|NodeKind::SqlQuery|NodeKind::Event" crates/codeprism-lang-*/src/*.rs — only NodeKind::Parameter appears, and only in codeprism-lang-rust/src/ast_mapper.rs:952'
       evidence_note: crates/codeprism-lang-rust/src/ast_mapper.rs:952
       confidence: verified
       note: "Schema vocabulary is aspirationally dense (route/SQL/event awareness suggests a framework-detection ambition) but practically unpopulated — the opposite failure mode from PR1's sparse-by-cardinality rule, which is deliberate rather than accidental here."
@@ -265,15 +265,15 @@ q6_presentation_layer:
       confidence: inferred
       note: "Located the crate (53 .rs files) but did not open its source; classification from README + file count only."
   findings:
-    - claim: "Tool dispatch logic lives inline in server.rs rather than in the separate tools/ module directory that exists alongside it (tools/{core,search,analysis,workflow}.rs contain zero '\"name\":' tool-registration literals when grepped)"
-      evidence: "grep -c '\"name\":' crates/codeprism-mcp-server/src/tools/*.rs → all zero"
+    - claim: 'Tool dispatch logic lives inline in server.rs rather than in the separate tools/ module directory that exists alongside it (tools/{core,search,analysis,workflow}.rs contain zero ''"name":'' tool-registration literals when grepped)'
+      evidence: 'grep -c ''"name":'' crates/codeprism-mcp-server/src/tools/*.rs → all zero'
       confidence: verified
       note: "The modular tools/ directory appears to be scaffolding; the actual 20-tool surface is one large match in server.rs, making per-tool testing/auditing harder than a registry pattern would."
 
 q7_bad_code_analytics:
   detectors:
     - name: analyze_complexity
-      technique: "keyword/substring counting over raw file text (not the graph): cyclomatic = 1 + count of decision keywords like \"if\"/\"while\"/\"&&\"; cognitive = line-by-line brace/keyword heuristic with a manually tracked nesting_level counter"
+      technique: 'keyword/substring counting over raw file text (not the graph): cyclomatic = 1 + count of decision keywords like "if"/"while"/"&&"; cognitive = line-by-line brace/keyword heuristic with a manually tracked nesting_level counter'
       output: "JSON metrics + threshold_warnings (cyclomatic > 10)"
       evidence: crates/codeprism-analysis/src/complexity.rs:114-166
       confidence: verified
@@ -304,17 +304,17 @@ q7_bad_code_analytics:
     confidence: verified
   absent:
     - detector: "centrality / community detection (louvain, leiden, betweenness)"
-      looked_in: "grep -rln \"louvain|leiden|centrality|community_detect|betweenness\" crates --include=\"*.rs\""
+      looked_in: 'grep -rln "louvain|leiden|centrality|community_detect|betweenness" crates --include="*.rs"'
       result: "zero matches across the entire workspace"
       confidence: verified
     - detector: "taint tracking (source/sink/sanitizer dataflow)"
-      looked_in: "grep -rln \"taint\" crates --include=\"*.rs\" (source) + Cargo.toml dependency list (manifest)"
+      looked_in: 'grep -rln "taint" crates --include="*.rs" (source) + Cargo.toml dependency list (manifest)'
       result: "One hit, a hardcoded 'tainted_inputs: 1' constant inside the fabricated analyze_specialized_comprehensive output (server.rs:4210); no dataflow/reaching-definitions machinery anywhere; no taint-related crate in Cargo.toml"
       confidence: verified
       note: "Confirms there is no real taint analysis — the only 'taint' in the codebase is a hardcoded number in the same fabricated-output function noted above."
   findings:
     - claim: "None of the three examined detectors (complexity, security, duplicates) query GraphStore; grep for GraphStore/graph_store/codeprism_core inside crates/codeprism-analysis/src/*.rs returns nothing"
-      evidence: "grep -rn \"GraphStore|graph_store|codeprism_core\" crates/codeprism-analysis/src/*.rs (zero matches)"
+      evidence: 'grep -rn "GraphStore|graph_store|codeprism_core" crates/codeprism-analysis/src/*.rs (zero matches)'
       confidence: verified
       note: "This is the central finding of this study — see study_summary.sharpest_disagreement."
 
@@ -327,7 +327,7 @@ adjacent_findings:
     note: "No X/D id in our list covers multi-repo workspace handling directly; flagged as prior art if that ever becomes a proposal."
   - topic: "git-history awareness"
     claim: "No git2, git-log parsing, or blame-derived features exist anywhere in the codebase"
-    evidence: "grep -rln \"git2|git_log|git blame|GitHistory\" crates --include=\"*.rs\" (zero matches)"
+    evidence: 'grep -rln "git2|git_log|git blame|GitHistory" crates --include="*.rs" (zero matches)'
     confidence: verified
     ties_to: [X2]
     note: "X2 (git awareness, proposed not agreed) has no analog or counter-example here — codeprism is a pure filesystem/AST-state snapshot tool."
@@ -336,7 +336,7 @@ adjacent_findings:
     evidence: README.md:103-126
     confidence: inferred
     ties_to: [X10]
-    note: "grep -rln \"invariant\" crates/mandrel-mcp-th crates/codeprism-moth-specs returns zero matches — confirms there is nothing analogous to cpg-me-daddy's assertGraphInvariants()/assertSchemaConformance() gates, only protocol-shape testing."
+    note: 'grep -rln "invariant" crates/mandrel-mcp-th crates/codeprism-moth-specs returns zero matches — confirms there is nothing analogous to cpg-me-daddy''s assertGraphInvariants()/assertSchemaConformance() gates, only protocol-shape testing.'
   - topic: "MCP tool-surface sizing"
     claim: "20 tools shipped (vs. cpg-me-daddy's AM3 ceiling of ≤12), all dispatched from one file"
     evidence: README.md:196-227, crates/codeprism-mcp-server/src/server.rs:2752
@@ -348,7 +348,7 @@ schema_mapping:
     joern_aligned:
       verdict: "no"
       why: "No reference to Joern, no METHOD_FULL_NAME-style global keys, no Joern node/edge naming conventions anywhere in the schema or docs"
-      evidence: "grep -rin \"joern\" . --include=\"*.rs\" --include=\"*.md\" --include=\"*.toml\" (zero matches, repo-wide)"
+      evidence: 'grep -rin "joern" . --include="*.rs" --include="*.md" --include="*.toml" (zero matches, repo-wide)'
       confidence: verified
     density:
       verdict: mixed
@@ -455,7 +455,7 @@ schema_mapping:
       evidence: crates/codeprism-core/src/linkers/symbol_resolver.rs:58-85
     - ours: "COMMUNITY, MEMBER_OF, TARGETS, DEPENDS_ON"
       why_absent_there: "No centrality/community-detection code anywhere (see q7 absent)"
-      evidence: "grep -rln \"louvain|leiden|centrality\" crates (zero matches)"
+      evidence: 'grep -rln "louvain|leiden|centrality" crates (zero matches)'
     - ours: "TAG, TAGGED_BY"
       why_absent_there: "No overlay-tagging system; findings are ad hoc regex-scanner JSON, not graph-attached tags"
       evidence: crates/codeprism-analysis/src/security.rs:63-70
@@ -575,5 +575,5 @@ open_questions:
     why_it_matters: "L4/L1 are currently strongest for JS/TS; confirming parity across languages would remove the caveat in meta.caveat"
   - q: "Is codeprism-storage's SqliteGraphStorage ever exercised by any binary target (CLI subcommand, benchmark), or is it purely dead code reachable only from its own crate's tests?"
     blocked_by: "Only grepped codeprism-mcp-server for references (zero); did not check crates/codeprism-dev-tools or any benches/ for usage"
-    cheap_next_probe: "grep -rn \"SqliteGraphStorage|FileGraphStorage\" crates benches --include=\"*.rs\""
+    cheap_next_probe: 'grep -rn "SqliteGraphStorage|FileGraphStorage" crates benches --include="*.rs"'
     why_it_matters: "Would confirm L8's 'unused dependency' claim extends beyond just the MCP server crate"

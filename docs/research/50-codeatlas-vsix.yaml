@@ -33,7 +33,15 @@ meta:
     why: "Builds a call/use/derive graph from source code (via doxygen) as its core function and renders it interactively — adjacent-but-qualifying per the 'call graph' criterion."
     evidence: README.md:4
   coverage:
-    read_fully: [README.md, CodeAtlasVSIX/DBManager.cs, CodeAtlasVSIX/packages.config, DoxygenDB/Program.cs, LICENSE, GraphLayout/LICENSE]
+    read_fully:
+      [
+        README.md,
+        CodeAtlasVSIX/DBManager.cs,
+        CodeAtlasVSIX/packages.config,
+        DoxygenDB/Program.cs,
+        LICENSE,
+        GraphLayout/LICENSE,
+      ]
     skimmed:
       - DoxygenDB/DoxygenDB.cs
       - CodeAtlasVSIX/CodeUIItem.cs
@@ -319,30 +327,130 @@ schema_mapping:
       evidence: DoxygenDB/DoxygenDB.cs:1796-1804
       confidence: verified
   node_vocabulary:
-    - { theirs: CLASS/STRUCT/UNION, ours: TYPE_DECL, fit: approx, note: "doxygen collapses class/struct/union into one compound-kind family; no separate INTERFACE/PROTOCOL distinction survives into ours", evidence: "DoxygenDB/DoxygenDB.cs:26-28" }
-    - { theirs: FUNCTION/PROTOTYPE, ours: METHOD, fit: approx, note: "no PARAM child nodes are modeled at this layer (see ours_unmatched)", evidence: "DoxygenDB/DoxygenDB.cs:47,49" }
-    - { theirs: VARIABLE, ours: MEMBER, fit: approx, note: "doxygen VARIABLE covers both class fields and free/global variables; cpg-me-daddy splits MEMBER (class-scoped) from SYMBOL", evidence: "DoxygenDB/DoxygenDB.cs:43" }
-    - { theirs: FILE, ours: FILE, fit: exact, note: "both are filesystem-owned compound units", evidence: "DoxygenDB/DoxygenDB.cs:33" }
+    - {
+        theirs: CLASS/STRUCT/UNION,
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "doxygen collapses class/struct/union into one compound-kind family; no separate INTERFACE/PROTOCOL distinction survives into ours",
+        evidence: "DoxygenDB/DoxygenDB.cs:26-28",
+      }
+    - {
+        theirs: FUNCTION/PROTOTYPE,
+        ours: METHOD,
+        fit: approx,
+        note: "no PARAM child nodes are modeled at this layer (see ours_unmatched)",
+        evidence: "DoxygenDB/DoxygenDB.cs:47,49",
+      }
+    - {
+        theirs: VARIABLE,
+        ours: MEMBER,
+        fit: approx,
+        note: "doxygen VARIABLE covers both class fields and free/global variables; cpg-me-daddy splits MEMBER (class-scoped) from SYMBOL",
+        evidence: "DoxygenDB/DoxygenDB.cs:43",
+      }
+    - {
+        theirs: FILE,
+        ours: FILE,
+        fit: exact,
+        note: "both are filesystem-owned compound units",
+        evidence: "DoxygenDB/DoxygenDB.cs:33",
+      }
     - { theirs: DIR, ours: DIRECTORY, fit: exact, evidence: "DoxygenDB/DoxygenDB.cs:39" }
-    - { theirs: NAMESPACE, ours: MODULE, fit: approx, note: "doxygen namespaces are a compound kind like any other; no ownership-class distinction", evidence: "DoxygenDB/DoxygenDB.cs:34" }
-    - { theirs: TYPEDEF, ours: TYPE_DECL, fit: approx, note: "typedefs are folded into the same compound family rather than treated as an alias edge", evidence: "DoxygenDB/DoxygenDB.cs:44" }
+    - {
+        theirs: NAMESPACE,
+        ours: MODULE,
+        fit: approx,
+        note: "doxygen namespaces are a compound kind like any other; no ownership-class distinction",
+        evidence: "DoxygenDB/DoxygenDB.cs:34",
+      }
+    - {
+        theirs: TYPEDEF,
+        ours: TYPE_DECL,
+        fit: approx,
+        note: "typedefs are folded into the same compound family rather than treated as an alias edge",
+        evidence: "DoxygenDB/DoxygenDB.cs:44",
+      }
   edge_vocabulary:
-    - { theirs: "call / callby", ours: CALLS, fit: approx, note: "no resolution status/confidence field exists on their side", evidence: "DoxygenDB/DoxygenDB.cs:59,152-153" }
-    - { theirs: "base / derive", ours: INHERITS_FROM, fit: exact, evidence: "DoxygenDB/DoxygenDB.cs:60,154-155" }
-    - { theirs: "include / includedby", ours: IMPORTS, fit: approx, note: "modeled as a USE-kind reference between file compounds, not a dedicated IMPORT node+edge pair", evidence: "DoxygenDB/DoxygenDB.cs:158-159" }
-    - { theirs: "member / memberin", ours: MEMBER_OF, fit: approx, evidence: "DoxygenDB/DoxygenDB.cs:160-161" }
-    - { theirs: "declare / define", ours: DEFINES, fit: approx, evidence: "DoxygenDB/DoxygenDB.cs:162-165" }
-    - { theirs: "override / overriddenby", ours: absent, fit: extra, note: "cpg-me-daddy's 15 edge types have no direct OVERRIDE relation", evidence: "DoxygenDB/DoxygenDB.cs:166-168" }
+    - {
+        theirs: "call / callby",
+        ours: CALLS,
+        fit: approx,
+        note: "no resolution status/confidence field exists on their side",
+        evidence: "DoxygenDB/DoxygenDB.cs:59,152-153",
+      }
+    - {
+        theirs: "base / derive",
+        ours: INHERITS_FROM,
+        fit: exact,
+        evidence: "DoxygenDB/DoxygenDB.cs:60,154-155",
+      }
+    - {
+        theirs: "include / includedby",
+        ours: IMPORTS,
+        fit: approx,
+        note: "modeled as a USE-kind reference between file compounds, not a dedicated IMPORT node+edge pair",
+        evidence: "DoxygenDB/DoxygenDB.cs:158-159",
+      }
+    - {
+        theirs: "member / memberin",
+        ours: MEMBER_OF,
+        fit: approx,
+        evidence: "DoxygenDB/DoxygenDB.cs:160-161",
+      }
+    - {
+        theirs: "declare / define",
+        ours: DEFINES,
+        fit: approx,
+        evidence: "DoxygenDB/DoxygenDB.cs:162-165",
+      }
+    - {
+        theirs: "override / overriddenby",
+        ours: absent,
+        fit: extra,
+        note: "cpg-me-daddy's 15 edge types have no direct OVERRIDE relation",
+        evidence: "DoxygenDB/DoxygenDB.cs:166-168",
+      }
   ours_unmatched:
-    - { ours: SYMBOL, why_absent_there: "identity is baked directly into Entity via doxygen's refid; there is no separate fqn-keyed indirection node", evidence: "DoxygenDB/DoxygenDB.cs:403-406" }
-    - { ours: PARAM, why_absent_there: "doxygen's EntKind has no PARAM/PARAMETER kind — parameters are not indexed as first-class entities at the level DoxygenDB queries", evidence: "DoxygenDB/DoxygenDB.cs:22-53" }
-    - { ours: IMPORT, why_absent_there: "modeled only as a USE-kind edge between file compounds (include/includedby), never materialized as its own node", evidence: "DoxygenDB/DoxygenDB.cs:158-159" }
-    - { ours: COMMUNITY, why_absent_there: "no clustering/community-detection analytics exist anywhere in the repo (see q7)" }
-    - { ours: TAG, why_absent_there: "the only per-symbol annotation mechanism is a free-text 'comment' string, not a structured tag/finding node", evidence: "CodeAtlasVSIX/CodeScene.cs:96,277" }
+    - {
+        ours: SYMBOL,
+        why_absent_there: "identity is baked directly into Entity via doxygen's refid; there is no separate fqn-keyed indirection node",
+        evidence: "DoxygenDB/DoxygenDB.cs:403-406",
+      }
+    - {
+        ours: PARAM,
+        why_absent_there: "doxygen's EntKind has no PARAM/PARAMETER kind — parameters are not indexed as first-class entities at the level DoxygenDB queries",
+        evidence: "DoxygenDB/DoxygenDB.cs:22-53",
+      }
+    - {
+        ours: IMPORT,
+        why_absent_there: "modeled only as a USE-kind edge between file compounds (include/includedby), never materialized as its own node",
+        evidence: "DoxygenDB/DoxygenDB.cs:158-159",
+      }
+    - {
+        ours: COMMUNITY,
+        why_absent_there: "no clustering/community-detection analytics exist anywhere in the repo (see q7)",
+      }
+    - {
+        ours: TAG,
+        why_absent_there: "the only per-symbol annotation mechanism is a free-text 'comment' string, not a structured tag/finding node",
+        evidence: "CodeAtlasVSIX/CodeScene.cs:96,277",
+      }
   theirs_unmatched:
-    - { theirs: "DEFINE (preprocessor macro)", why_we_lack_it: "cpg-me-daddy's v1 schema has no MACRO node; macros are a C/C++-specific concept the TS/Python-first schema doesn't yet cover", would_we_want_it: maybe }
-    - { theirs: "GROUP / PAGE (doxygen documentation grouping)", why_we_lack_it: "these are documentation-authoring constructs (manual \\group/\\page directives), not code-structural facts", would_we_want_it: "no" }
-    - { theirs: "ENUM / ENUMVALUE", why_we_lack_it: "no enum-specific node in the v1 14-label schema; would currently fold into TYPE_DECL/MEMBER", would_we_want_it: maybe }
+    - {
+        theirs: "DEFINE (preprocessor macro)",
+        why_we_lack_it: "cpg-me-daddy's v1 schema has no MACRO node; macros are a C/C++-specific concept the TS/Python-first schema doesn't yet cover",
+        would_we_want_it: maybe,
+      }
+    - {
+        theirs: "GROUP / PAGE (doxygen documentation grouping)",
+        why_we_lack_it: "these are documentation-authoring constructs (manual \\group/\\page directives), not code-structural facts",
+        would_we_want_it: "no",
+      }
+    - {
+        theirs: "ENUM / ENUMVALUE",
+        why_we_lack_it: "no enum-specific node in the v1 14-label schema; would currently fold into TYPE_DECL/MEMBER",
+        would_we_want_it: maybe,
+      }
 
 lessons_for_cpg_me_daddy:
   - id: L1

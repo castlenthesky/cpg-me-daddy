@@ -217,7 +217,7 @@ q4_language_server:
         evidence: pyproject.toml:33-90
         confidence: verified
       - probe: source
-        command: "rg -ni \"language server|lsp|pyright|tsserver\" packages/core/src/repowise/core/generation/__init__.py packages/core/src/repowise/core/generation/context_assembler.py"
+        command: 'rg -ni "language server|lsp|pyright|tsserver" packages/core/src/repowise/core/generation/__init__.py packages/core/src/repowise/core/generation/context_assembler.py'
         result: "only false-positive substring matches inside the identifier 'SymbolSpotlightContext'; no genuine LSP reference anywhere in the two files that matched the broader repo-wide grep"
         evidence: packages/core/src/repowise/core/generation/context_assembler.py:73,365,384
         confidence: verified

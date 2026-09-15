@@ -15,9 +15,19 @@ pre-commit:
 pre-push:
   parallel: false
   jobs:
-    # Both delegate to the root scripts rather than repeating their commands.
+    # All delegate to the root scripts rather than repeating their commands.
     # The unit-test job used to list the package paths itself, which silently
     # stopped covering a package the moment a fourth one was added.
+    #
+    # format check runs whole-repo here (not just {staged_files}, unlike
+    # pre-commit's oxfmt job) because pre-commit can only ever see the files
+    # in *this* push's diff — a file that was already mis-formatted when it
+    # landed (oxfmt rules changed since, or a commit went in via --no-verify)
+    # would pass every future pre-commit untouched and only surface in CI.
+    # This is that same whole-repo check, just moved a step earlier.
+    - name: format check
+      run: bun run format:check
+
     - name: typecheck
       run: bun run typecheck
 
