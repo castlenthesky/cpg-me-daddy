@@ -27,8 +27,8 @@ describe("isExcludedPath", () => {
 
 describe("pairFileRenames", () => {
   test("pairs a delete and a same-hash create into a move", () => {
-    const knownFiles = new Map([["src/old.ts", { contentHash: "h1", parent: "src" }]]);
-    const hashedCreates = new Map([["src/new.ts", { contentHash: "h1", loc: 3 }]]);
+    const knownFiles = new Map([["src/old.ts", { contentHash: "h1" }]]);
+    const hashedCreates = new Map([["src/new.ts", { contentHash: "h1", sizeBytes: 30 }]]);
 
     const { moves, removals, survivingCreates } = pairFileRenames(
       ["src/old.ts"],
@@ -36,21 +36,13 @@ describe("pairFileRenames", () => {
       knownFiles,
     );
 
-    expect(moves).toEqual([
-      {
-        fromPath: "src/old.ts",
-        toPath: "src/new.ts",
-        toName: "new.ts",
-        toParent: "src",
-        kind: "file",
-      },
-    ]);
+    expect(moves).toEqual([{ fromPath: "src/old.ts", toPath: "src/new.ts", kind: "file" }]);
     expect(removals).toEqual([]);
     expect(survivingCreates.size).toBe(0);
   });
 
   test("a delete with no matching-hash create is a real removal", () => {
-    const knownFiles = new Map([["src/old.ts", { contentHash: "h1", parent: "src" }]]);
+    const knownFiles = new Map([["src/old.ts", { contentHash: "h1" }]]);
     const { moves, removals } = pairFileRenames(["src/old.ts"], new Map(), knownFiles);
 
     expect(moves).toEqual([]);
@@ -58,15 +50,15 @@ describe("pairFileRenames", () => {
   });
 
   test("a create with no matching delete survives as a real create/change", () => {
-    const hashedCreates = new Map([["src/new.ts", { contentHash: "h1", loc: 1 }]]);
+    const hashedCreates = new Map([["src/new.ts", { contentHash: "h1", sizeBytes: 10 }]]);
     const { moves, survivingCreates } = pairFileRenames([], hashedCreates, new Map());
 
     expect(moves).toEqual([]);
-    expect(survivingCreates.get("src/new.ts")).toEqual({ contentHash: "h1", loc: 1 });
+    expect(survivingCreates.get("src/new.ts")).toEqual({ contentHash: "h1", sizeBytes: 10 });
   });
 
   test("a delete for an unknown path (no prior hash) is never paired", () => {
-    const hashedCreates = new Map([["src/new.ts", { contentHash: "h1", loc: 1 }]]);
+    const hashedCreates = new Map([["src/new.ts", { contentHash: "h1", sizeBytes: 10 }]]);
     const { moves, removals, survivingCreates } = pairFileRenames(
       ["src/unknown.ts"],
       hashedCreates,

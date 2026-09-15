@@ -1,58 +1,49 @@
 /**
  * `watchWorkspace` end to end against a real tmp workspace, with a fake
  * `WatchBackend` this test drives directly (so no real `@parcel/watcher`
- * subscription, no OS-level file-event timing) and a fake `IGraphStore`
- * recording every `FilesystemDelta`. The debounce window itself is real
- * (default 100ms/500ms) — these tests await the batch instead of faking
- * the clock, which `debounce.test.ts` already covers in isolation.
+ * subscription, no OS-level file-event timing) and a fake `WatchSink`
+ * recording every delivered `ChangeBatch`. No `IGraphStore` anywhere in this
+ * file — that is the whole point of the watcher/store split this test
+ * exercises; `indexer/filesystem-projector.test.ts` covers the store half.
+ * The debounce window itself is real (default 100ms/500ms) — these tests
+ * await the batch instead of faking the clock, which `debounce.test.ts`
+ * already covers in isolation.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { defineCpgConfig } from "../../../src/config/workspace-config.ts";
-import type { GraphDelta } from "../../../src/schema/validate.ts";
-import type { BootstrapReport } from "../../../src/store/bootstrap.ts";
-import type { FilesystemDelta } from "../../../src/store/cypher.ts";
-import type { GraphMetadata, IGraphStore, WriteReport } from "../../../src/store/store.ts";
 import type { RawEvent, WatchBackend } from "../../../src/watch/backend.ts";
-import type { NormalizedChange } from "../../../src/watch/events.ts";
+import type { ChangeBatch, WatchSink } from "../../../src/watch/sink.ts";
 import { watchWorkspace } from "../../../src/watch/watch-workspace.ts";
 import { makeTmpWorkspace, type TmpWorkspace } from "../../support/tmp-workspace.ts";
 
-class FakeGraphStore implements IGraphStore {
-  readonly fsDeltas: FilesystemDelta[] = [];
-
-  async bootstrap(): Promise<BootstrapReport> {
-    return {
-      indexesCreated: [],
-      indexesExisting: [],
-      constraintsCreated: [],
-      constraintsExisting: [],
-      schemaVersion: { expected: 1, found: 1, action: "matched" },
-    };
-  }
-
-  async writeDelta(delta: GraphDelta): Promise<WriteReport> {
-    return { nodesWritten: delta.nodes.length, edgesWritten: delta.edges.length, opsExecuted: 1 };
-  }
-
-  async writeFilesystem(delta: FilesystemDelta): Promise<WriteReport> {
-    this.fsDeltas.push(delta);
-    const nodesWritten = (delta.directories?.length ?? 0) + (delta.files?.length ?? 0);
-    const edgesWritten =
-      (delta.directories?.filter((d) => d.parent !== undefined).length ?? 0) +
-      (delta.files?.length ?? 0);
-    return { nodesWritten, edgesWritten, opsExecuted: 1 };
-  }
-
-  async deleteFile(): Promise<void> {}
-
-  async readMetadata(): Promise<GraphMetadata | undefined> {
-    return undefined;
-  }
-
-  async close(): Promise<void> {}
+/** A `WatchSink` recording every delivered batch, with a resolvable rejection queue for retry tests. */
+function makeRecordingSink(): {
+  readonly sink: WatchSink;
+  readonly batches: ChangeBatch[];
+  /** Makes the NEXT `onBatch` call reject with `error`, once. */
+  failNext(error: unknown): void;
+} {
+  const batches: ChangeBatch[] = [];
+  let pendingFailure: unknown;
+  return {
+    sink: {
+      async onBatch(batch: ChangeBatch): Promise<void> {
+        if (pendingFailure !== undefined) {
+          const error = pendingFailure;
+          pendingFailure = undefined;
+          throw error;
+        }
+        batches.push(batch);
+      },
+    },
+    batches,
+    failNext(error: unknown): void {
+      pendingFailure = error;
+    },
+  };
 }
 
 /** A `WatchBackend` the test drives directly via `.emit(events)` — no real filesystem watching. */
@@ -79,14 +70,27 @@ function makeFakeWatchBackend(): {
 }
 
 function waitForBatch(): {
-  readonly promise: Promise<[readonly NormalizedChange[], WriteReport]>;
-  readonly hook: (changes: readonly NormalizedChange[], write: WriteReport) => void;
+  readonly promise: Promise<ChangeBatch>;
+  readonly hook: (batch: ChangeBatch) => void;
 } {
-  let resolve!: (value: [readonly NormalizedChange[], WriteReport]) => void;
-  const promise = new Promise<[readonly NormalizedChange[], WriteReport]>((r) => {
+  let resolve!: (value: ChangeBatch) => void;
+  const promise = new Promise<ChangeBatch>((r) => {
     resolve = r;
   });
-  return { promise, hook: (changes, write) => resolve([changes, write]) };
+  return { promise, hook: (batch) => resolve(batch) };
+}
+
+/** A `WatchSink` that forwards only "live" batches to `hook` — every test
+ *  using this also receives the "initial" cold-start batch first, which
+ *  these single-change assertions don't care about. */
+function sinkCallingHookOnLive(hook: (batch: ChangeBatch) => void): WatchSink {
+  return {
+    async onBatch(batch: ChangeBatch): Promise<void> {
+      if (batch.cause === "live") {
+        hook(batch);
+      }
+    },
+  };
 }
 
 let workspace: TmpWorkspace | undefined;
@@ -96,103 +100,89 @@ afterEach(async () => {
 });
 
 describe("watchWorkspace", () => {
-  test("the initial pass writes the full filesystem tree once", async () => {
+  test("the initial pass delivers the full filesystem tree once, as one batch", async () => {
     workspace = await makeTmpWorkspace({ "a.ts": "export const a = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
+    const { sink, batches } = makeRecordingSink();
     const { backend } = makeFakeWatchBackend();
 
-    const session = await watchWorkspace(config, { store, watcher: backend });
+    const session = await watchWorkspace(config, { sink, watcher: backend });
     try {
-      expect(store.fsDeltas.length).toBe(1);
-      expect(store.fsDeltas[0]!.files?.map((f) => f.path)).toEqual(["a.ts"]);
-      expect(store.fsDeltas[0]!.directories?.some((d) => d.path === ".")).toBe(true);
+      expect(batches.length).toBe(1);
+      expect(batches[0]!.cause).toBe("initial");
+      expect(batches[0]!.changes.some((c) => c.entry === "file" && c.path === "a.ts")).toBe(true);
+      expect(batches[0]!.changes.some((c) => c.entry === "directory" && c.path === ".")).toBe(true);
     } finally {
       await session.close();
     }
   });
 
-  test("skipInitialIndex still seeds known state, without writing", async () => {
+  test("skipInitialIndex still seeds known state, without delivering a batch", async () => {
     workspace = await makeTmpWorkspace({ "a.ts": "export const a = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
+    const { sink, batches } = makeRecordingSink();
     const { backend } = makeFakeWatchBackend();
 
     const session = await watchWorkspace(
       config,
-      { store, watcher: backend },
-      {
-        skipInitialIndex: true,
-      },
+      { sink, watcher: backend },
+      { skipInitialIndex: true },
     );
     try {
-      expect(store.fsDeltas.length).toBe(0);
+      expect(batches.length).toBe(0);
     } finally {
       await session.close();
     }
   });
 
-  test("a created file surfaces as one 'created' change and a FILE row", async () => {
+  test("a created file surfaces as one 'created' change with a content hash", async () => {
     workspace = await makeTmpWorkspace({});
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
     const { backend, emit } = makeFakeWatchBackend();
     const { promise, hook } = waitForBatch();
 
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
+    const session = await watchWorkspace(config, {
+      sink: sinkCallingHookOnLive(hook),
+      watcher: backend,
+    });
     try {
       const absPath = join(workspace.root, "new.ts");
       await writeFile(absPath, "export const x = 1;\n");
       emit([{ type: "create", path: absPath }]);
 
-      const [changes] = await promise;
-      expect(changes).toEqual([{ kind: "created", entry: "file", path: "new.ts" }]);
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.files?.map((f) => f.path)).toEqual(["new.ts"]);
-      expect(fsDelta.files?.[0]?.language).toBe("typescript");
+      const batch = await promise;
+      expect(batch.cause).toBe("live");
+      expect(batch.changes).toEqual([
+        {
+          kind: "created",
+          entry: "file",
+          path: "new.ts",
+          contentHash: expect.any(String),
+          sizeBytes: 20,
+        },
+      ]);
     } finally {
       await session.close();
     }
   });
 
-  test("a created non-code file gets the 'none' language sentinel, same as the initial walk", async () => {
-    workspace = await makeTmpWorkspace({});
-    const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
-    const { backend, emit } = makeFakeWatchBackend();
-    const { promise, hook } = waitForBatch();
-
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
-    try {
-      const absPath = join(workspace.root, "README.md");
-      await writeFile(absPath, "# hello\n");
-      emit([{ type: "create", path: absPath }]);
-
-      await promise;
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.files?.[0]?.language).toBe("none");
-    } finally {
-      await session.close();
-    }
-  });
-
-  test("a deleted file surfaces as one 'deleted' change and a FILE removal", async () => {
+  test("a deleted file surfaces as one 'deleted' change", async () => {
     workspace = await makeTmpWorkspace({ "a.ts": "export const a = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
     const { backend, emit } = makeFakeWatchBackend();
     const { promise, hook } = waitForBatch();
 
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
+    const session = await watchWorkspace(config, {
+      sink: sinkCallingHookOnLive(hook),
+      watcher: backend,
+    });
     try {
       const absPath = join(workspace.root, "a.ts");
       await rm(absPath);
       emit([{ type: "delete", path: absPath }]);
 
-      const [changes] = await promise;
-      expect(changes).toEqual([{ kind: "deleted", entry: "file", path: "a.ts" }]);
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.removals).toEqual([{ path: "a.ts", kind: "file" }]);
+      const batch = await promise;
+      expect(batch.changes).toEqual([{ kind: "deleted", entry: "file", path: "a.ts" }]);
     } finally {
       await session.close();
     }
@@ -201,11 +191,13 @@ describe("watchWorkspace", () => {
   test("a rename (paired delete+create, same content) becomes one 'moved' change, not delete+create", async () => {
     workspace = await makeTmpWorkspace({ "old.ts": "export const x = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
     const { backend, emit } = makeFakeWatchBackend();
     const { promise, hook } = waitForBatch();
 
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
+    const session = await watchWorkspace(config, {
+      sink: sinkCallingHookOnLive(hook),
+      watcher: backend,
+    });
     try {
       const fromAbs = join(workspace.root, "old.ts");
       const toAbs = join(workspace.root, "new.ts");
@@ -216,15 +208,15 @@ describe("watchWorkspace", () => {
         { type: "create", path: toAbs },
       ]);
 
-      const [changes] = await promise;
-      expect(changes).toEqual([
-        { kind: "moved", entry: "file", path: "new.ts", fromPath: "old.ts" },
+      const batch = await promise;
+      expect(batch.changes).toEqual([
+        {
+          kind: "moved",
+          entry: "file",
+          path: "new.ts",
+          fromPath: "old.ts",
+        },
       ]);
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.moves).toEqual([
-        { fromPath: "old.ts", toPath: "new.ts", toName: "new.ts", toParent: ".", kind: "file" },
-      ]);
-      expect(fsDelta.removals ?? []).toEqual([]);
     } finally {
       await session.close();
     }
@@ -233,11 +225,13 @@ describe("watchWorkspace", () => {
   test("moving a file into a brand-new directory in the same batch still links it (regression)", async () => {
     workspace = await makeTmpWorkspace({ "src/a.ts": "export const a = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
     const { backend, emit } = makeFakeWatchBackend();
     const { promise, hook } = waitForBatch();
 
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
+    const session = await watchWorkspace(config, {
+      sink: sinkCallingHookOnLive(hook),
+      watcher: backend,
+    });
     try {
       const dirAbs = join(workspace.root, "lib");
       const fromAbs = join(workspace.root, "src", "a.ts");
@@ -252,31 +246,28 @@ describe("watchWorkspace", () => {
         { type: "create", path: toAbs },
       ]);
 
-      const [changes] = await promise;
-      expect(changes).toEqual(
+      const batch = await promise;
+      expect(batch.changes).toEqual(
         expect.arrayContaining([
           { kind: "created", entry: "directory", path: "lib" },
           { kind: "moved", entry: "file", path: "lib/a.ts", fromPath: "src/a.ts" },
         ]),
       );
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.moves).toEqual([
-        { fromPath: "src/a.ts", toPath: "lib/a.ts", toName: "a.ts", toParent: "lib", kind: "file" },
-      ]);
-      expect(fsDelta.directories?.map((d) => d.path)).toEqual(["lib"]);
     } finally {
       await session.close();
     }
   });
 
-  test("a new directory with a file creates DIRECTORY+FILE rows and both surface as 'created'", async () => {
+  test("a new directory with a file creates both, and both surface as 'created'", async () => {
     workspace = await makeTmpWorkspace({});
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
     const { backend, emit } = makeFakeWatchBackend();
     const { promise, hook } = waitForBatch();
 
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
+    const session = await watchWorkspace(config, {
+      sink: sinkCallingHookOnLive(hook),
+      watcher: backend,
+    });
     try {
       const dirAbs = join(workspace.root, "lib");
       const fileAbs = join(dirAbs, "x.ts");
@@ -287,14 +278,10 @@ describe("watchWorkspace", () => {
         { type: "create", path: fileAbs },
       ]);
 
-      const [changes] = await promise;
-      expect(changes.toSorted((a, b) => a.path.localeCompare(b.path))).toEqual([
-        { kind: "created", entry: "directory", path: "lib" },
-        { kind: "created", entry: "file", path: "lib/x.ts" },
-      ]);
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.directories?.map((d) => d.path)).toEqual(["lib"]);
-      expect(fsDelta.files?.map((f) => f.path)).toEqual(["lib/x.ts"]);
+      const batch = await promise;
+      const paths = batch.changes.map((c) => c.path).toSorted();
+      expect(paths).toEqual(["lib", "lib/x.ts"]);
+      expect(batch.changes.every((c) => c.kind === "created")).toBe(true);
     } finally {
       await session.close();
     }
@@ -303,41 +290,32 @@ describe("watchWorkspace", () => {
   test("a deleted (known) directory becomes a subtree removal", async () => {
     workspace = await makeTmpWorkspace({ "lib/x.ts": "export const x = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
     const { backend, emit } = makeFakeWatchBackend();
     const { promise, hook } = waitForBatch();
 
-    const session = await watchWorkspace(config, { store, watcher: backend }, { onBatch: hook });
+    const session = await watchWorkspace(config, {
+      sink: sinkCallingHookOnLive(hook),
+      watcher: backend,
+    });
     try {
       const dirAbs = join(workspace.root, "lib");
       await rm(dirAbs, { recursive: true });
       emit([{ type: "delete", path: dirAbs }]);
 
-      const [changes] = await promise;
-      expect(changes).toEqual([{ kind: "deleted", entry: "directory", path: "lib" }]);
-      const fsDelta = store.fsDeltas.at(-1)!;
-      expect(fsDelta.removals).toEqual([{ path: "lib", kind: "directory" }]);
+      const batch = await promise;
+      expect(batch.changes).toEqual([{ kind: "deleted", entry: "directory", path: "lib" }]);
     } finally {
       await session.close();
     }
   });
 
-  test("a no-op rewrite (byte-identical content) produces no batch at all", async () => {
+  test("a no-op rewrite (byte-identical content) delivers no batch at all", async () => {
     workspace = await makeTmpWorkspace({ "a.ts": "export const a = 1;\n" });
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
+    const { sink, batches } = makeRecordingSink();
     const { backend, emit } = makeFakeWatchBackend();
-    let batches = 0;
 
-    const session = await watchWorkspace(
-      config,
-      { store, watcher: backend },
-      {
-        onBatch: () => {
-          batches++;
-        },
-      },
-    );
+    const session = await watchWorkspace(config, { sink, watcher: backend });
     try {
       const absPath = join(workspace.root, "a.ts");
       await writeFile(absPath, "export const a = 1;\n"); // identical bytes
@@ -345,28 +323,19 @@ describe("watchWorkspace", () => {
 
       // The debounce window is 100ms; give it time to settle with no flush.
       await new Promise((r) => setTimeout(r, 150));
-      expect(batches).toBe(0);
+      expect(batches.length).toBe(1); // only the initial batch
     } finally {
       await session.close();
     }
   });
 
-  test("excluded paths (node_modules) never reach the store", async () => {
+  test("excluded paths (node_modules) never reach the sink", async () => {
     workspace = await makeTmpWorkspace({});
     const config = defineCpgConfig({ root: workspace.root, env: {} });
-    const store = new FakeGraphStore();
+    const { sink, batches } = makeRecordingSink();
     const { backend, emit } = makeFakeWatchBackend();
-    let batches = 0;
 
-    const session = await watchWorkspace(
-      config,
-      { store, watcher: backend },
-      {
-        onBatch: () => {
-          batches++;
-        },
-      },
-    );
+    const session = await watchWorkspace(config, { sink, watcher: backend });
     try {
       const dirAbs = join(workspace.root, "node_modules", "pkg");
       const fileAbs = join(dirAbs, "index.ts");
@@ -379,9 +348,95 @@ describe("watchWorkspace", () => {
       ]);
 
       await new Promise((r) => setTimeout(r, 150));
-      expect(batches).toBe(0);
+      expect(batches.length).toBe(1); // only the initial batch
     } finally {
       await session.close();
     }
   });
+
+  test("a file larger than the size limit is never admitted, matching the walker", async () => {
+    workspace = await makeTmpWorkspace({});
+    const config = defineCpgConfig({ root: workspace.root, env: {}, maxFileSizeBytes: 10 });
+    const { sink, batches } = makeRecordingSink();
+    const { backend, emit } = makeFakeWatchBackend();
+
+    const session = await watchWorkspace(config, { sink, watcher: backend });
+    try {
+      const absPath = join(workspace.root, "big.ts");
+      await writeFile(absPath, "x".repeat(50));
+      emit([{ type: "create", path: absPath }]);
+
+      await new Promise((r) => setTimeout(r, 150));
+      expect(batches.length).toBe(1); // only the initial batch — the big file never admitted
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a batch that fails delivery is retried and does not advance known state", async () => {
+    workspace = await makeTmpWorkspace({});
+    const config = defineCpgConfig({ root: workspace.root, env: {} });
+    const { sink, batches, failNext } = makeRecordingSink();
+    const { backend, emit } = makeFakeWatchBackend();
+
+    const session = await watchWorkspace(config, { sink, watcher: backend });
+    try {
+      expect(batches.length).toBe(1); // initial
+
+      const absPath = join(workspace.root, "flaky.ts");
+      await writeFile(absPath, "export const x = 1;\n");
+      failNext(new Error("transient store error"));
+      emit([{ type: "create", path: absPath }]);
+
+      // withRetry succeeds on its second attempt (first rejects, second lands).
+      await new Promise((r) => setTimeout(r, 400));
+      expect(batches.length).toBe(2);
+      expect(batches[1]!.changes).toEqual([
+        {
+          kind: "created",
+          entry: "file",
+          path: "flaky.ts",
+          contentHash: expect.any(String),
+          sizeBytes: expect.any(Number),
+        },
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a batch that exhausts retries reports onDegraded and never delivers", async () => {
+    workspace = await makeTmpWorkspace({});
+    const config = defineCpgConfig({ root: workspace.root, env: {} });
+    const sink: WatchSink = {
+      async onBatch(): Promise<void> {
+        throw new Error("permanent store failure");
+      },
+    };
+    const { backend, emit } = makeFakeWatchBackend();
+    let degraded: readonly string[] | undefined;
+
+    const session = await watchWorkspace(
+      config,
+      { sink, watcher: backend },
+      {
+        skipInitialIndex: true,
+        onDegraded: (paths) => {
+          degraded = paths;
+        },
+      },
+    );
+    try {
+      const absPath = join(workspace.root, "broken.ts");
+      await writeFile(absPath, "export const x = 1;\n");
+      emit([{ type: "create", path: absPath }]);
+
+      // Default retry policy: 5 attempts, backoff 200/400/800/1600ms — worst
+      // case ~3000ms before the final attempt throws and onDegraded fires.
+      await new Promise((r) => setTimeout(r, 3600));
+      expect(degraded).toEqual(["broken.ts"]);
+    } finally {
+      await session.close();
+    }
+  }, 7000);
 });

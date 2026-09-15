@@ -34,7 +34,6 @@ describe("defineCpgConfig", () => {
   test("the DB target defaults to the cpg dev instance, never the test harness or 6379", () => {
     const config = defineCpgConfig({ env: {} });
     expect(config.falkor.connection.port).toBe(6382);
-    expect(config.falkor.connection.graph).toBe("cpg");
   });
 
   test("CPG_PORT still overrides the DB target's default", () => {
@@ -49,5 +48,34 @@ describe("defineCpgConfig", () => {
     });
     expect(config.falkor.connection.port).toBe(1234);
     expect(config.falkor.connection.graph).toBe("custom");
+  });
+
+  describe("the default graph key", () => {
+    test("is derived per-workspace root, never the flat 'cpg' constant", () => {
+      const a = defineCpgConfig({ root: "/tmp/workspace-a", env: {} });
+      const b = defineCpgConfig({ root: "/tmp/workspace-b", env: {} });
+      expect(a.falkor.connection.graph).toMatch(/^cpg_[0-9a-f]{12}$/);
+      expect(a.falkor.connection.graph).not.toBe(b.falkor.connection.graph);
+    });
+
+    test("is stable for the same root", () => {
+      const first = defineCpgConfig({ root: "/tmp/same-workspace", env: {} });
+      const second = defineCpgConfig({ root: "/tmp/same-workspace", env: {} });
+      expect(first.falkor.connection.graph).toBe(second.falkor.connection.graph);
+    });
+
+    test("CPG_GRAPH still overrides the derived default", () => {
+      const config = defineCpgConfig({ root: "/tmp/workspace-a", env: { CPG_GRAPH: "my_graph" } });
+      expect(config.falkor.connection.graph).toBe("my_graph");
+    });
+
+    test("an explicit --graph (db.connection.graph) still overrides the derived default", () => {
+      const config = defineCpgConfig({
+        root: "/tmp/workspace-a",
+        db: { connection: { graph: "explicit" } },
+        env: {},
+      });
+      expect(config.falkor.connection.graph).toBe("explicit");
+    });
   });
 });

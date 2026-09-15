@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 /** SHA-256 content hashing (M0.2): known vectors, stability, and byte- vs text-sensitivity. */
 import { createHash } from "node:crypto";
 
-import { collectFileRecords, hashBytes, loadFile } from "../../../src/workspace/hash.ts";
+import {
+  collectFileRecords,
+  hashBytes,
+  loadFile,
+  workspaceGraphKey,
+} from "../../../src/workspace/hash.ts";
 import { walkWorkspace } from "../../../src/workspace/walker.ts";
 import { makeTmpWorkspace, type TmpWorkspace } from "../../support/tmp-workspace.ts";
 
@@ -77,6 +82,24 @@ describe("loadFile", () => {
 
     expect(loaded.record.loc).toBe(3);
     expect(loaded.text).toBe("one\ntwo\nthree");
+  });
+});
+
+describe("workspaceGraphKey", () => {
+  test("is a stable, `cpg_`-prefixed, 12-hex-char key derived from the root path", () => {
+    const key = workspaceGraphKey("/Users/someone/projects/repo-a");
+    expect(key).toMatch(/^cpg_[0-9a-f]{12}$/);
+    expect(workspaceGraphKey("/Users/someone/projects/repo-a")).toBe(key);
+  });
+
+  test("two different roots never collide on the same key", () => {
+    expect(workspaceGraphKey("/tmp/repo-a")).not.toBe(workspaceGraphKey("/tmp/repo-b"));
+  });
+
+  test("can never start with 'cpg_test_' — hex digits never spell 't' or 's'", () => {
+    for (const root of ["/tmp/a", "/tmp/b", "/Users/x/y/z", "/repos/cpg-me-daddy"]) {
+      expect(workspaceGraphKey(root).startsWith("cpg_test_")).toBe(false);
+    }
   });
 });
 
