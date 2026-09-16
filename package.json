@@ -1,73 +1,75 @@
 {
-  "name": "cpg-me-daddy",
-  "displayName": "cpg-me-daddy",
-  "description": "",
-  "version": "0.0.1",
-  "engines": {
-    "vscode": "^1.90.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [
-    "onStartupFinished"
-  ],
-  "main": "./out/extension.js",
-  "workspaces": [
-    "packages/*"
-  ],
-  "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "cpgMeDaddy",
-          "title": "CPG Me Daddy",
-          "icon": "media/icon.svg"
-        }
-      ]
-    },
-    "views": {
-      "cpgMeDaddy": [
-        {
-          "id": "cpgMeDaddy.graph",
-          "name": "Graph",
-          "icon": "media/icon.svg",
-          "type": "webview"
-        },
-        {
-          "id": "cpgMeDaddy.insights",
-          "name": "Insights",
-          "icon": "media/icon.svg"
-        },
-        {
-          "id": "cpgMeDaddy.config",
-          "name": "Config",
-          "icon": "media/icon.svg"
-        }
-      ]
-    }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "npm run compile:packages && npm run compile:ext && npm run compile:web",
-    "compile:packages": "tsc -b packages/ast-generator packages/cpg-generator packages/file-watcher packages/graph-builder packages/graph-visualizer",
-    "compile:ext": "tsc -b ./",
-    "compile:web": "node esbuild.js",
-    "watch": "npm run watch:web & npm run watch:ext",
-    "watch:ext": "tsc -b -w ./ --preserveWatchOutput",
-    "watch:web": "node esbuild.js --watch"
-  },
-  "devDependencies": {
-    "@types/node": "^20.x",
-    "@types/vscode": "^1.90.0",
-    "esbuild": "^0.28.2",
-    "typescript": "^5.5.4"
-  },
-  "dependencies": {
-    "@cpg/ast-generator": "*",
-    "@cpg/cpg-generator": "*",
-    "@cpg/file-watcher": "*",
-    "@cpg/graph-builder": "*",
-    "@cpg/graph-visualizer": "*"
-  }
+	"name": "cpg-me-daddy",
+	"displayName": "cpg-me-daddy",
+	"description": "",
+	"version": "0.0.1",
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./out/extension.js",
+	"workspaces": [
+		"packages/*",
+		"!packages/*.md"
+	],
+	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "cpgMeDaddy",
+					"title": "CPG Me Daddy",
+					"icon": "media/icon.svg"
+				}
+			]
+		},
+		"views": {
+			"cpgMeDaddy": [
+				{
+					"id": "cpgMeDaddy.graph",
+					"name": "Graph",
+					"icon": "media/icon.svg",
+					"type": "webview"
+				},
+				{
+					"id": "cpgMeDaddy.insights",
+					"name": "Insights",
+					"icon": "media/icon.svg"
+				},
+				{
+					"id": "cpgMeDaddy.config",
+					"name": "Config",
+					"icon": "media/icon.svg"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "npm run compile:packages && npm run compile:ext && npm run compile:web",
+		"compile:packages": "tsc -b packages/ast-generator packages/cpg-generator packages/file-watcher packages/graph-builder packages/graph-visualizer",
+		"compile:ext": "tsc -b ./",
+		"compile:web": "node esbuild.js",
+		"watch": "npm run watch:web & npm run watch:ext",
+		"watch:ext": "tsc -b -w ./ --preserveWatchOutput",
+		"watch:web": "node esbuild.js --watch",
+		"verify:resolve": "npm run compile:packages && npm run compile:ext && node out/dev/resolveHarness.js"
+	},
+	"devDependencies": {
+		"@types/node": "^20.x",
+		"@types/vscode": "^1.90.0",
+		"esbuild": "^0.28.2",
+		"typescript": "^5.5.4"
+	},
+	"dependencies": {
+		"@cpg/ast-generator": "*",
+		"@cpg/cpg-generator": "*",
+		"@cpg/file-watcher": "*",
+		"@cpg/graph-builder": "*",
+		"@cpg/graph-visualizer": "*"
+	}
 }

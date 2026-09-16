@@ -13,6 +13,18 @@ export interface NodeTypeDescriptor {
 export const NODE_TYPES: NodeTypeDescriptor[] = [
 	{ key: 'directory', label: 'Directories', color: '#ff9933' },
 	{ key: 'file', label: 'Files', color: '#4db3ff' },
+	// CPG node types produced by @cpg/cpg-generator's toSubgraph — palette carried over verbatim
+	// from the pre-rewrite media/graphWebview.js (see `git show master:media/graphWebview.js`).
+	{ key: 'METHOD', label: 'Methods', color: '#4FC1FF' },
+	{ key: 'TYPE_DECL', label: 'Types', color: '#4EC9B0' },
+	{ key: 'CALL', label: 'Calls', color: '#CE9178' },
+	{ key: 'IMPORT', label: 'Imports', color: '#C586C0' },
+	{ key: 'LOCAL', label: 'Locals', color: '#9CDCFE' },
+	// Cross-file symbols. Appended last so the existing legend order is
+	// unchanged. `#DCDCAA` is Dark+'s function-declaration yellow — semantically
+	// "the named thing being declared", which is exactly what a SYMBOL is, and
+	// the only warm-light hue in this palette not already spent.
+	{ key: 'SYMBOL', label: 'Symbols', color: '#DCDCAA' },
 ];
 
 export function hexToRgba(hex: string): [number, number, number, number] {

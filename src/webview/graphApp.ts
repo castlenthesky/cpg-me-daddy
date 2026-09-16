@@ -1,6 +1,9 @@
-import { GraphVisualizer, type GraphDelta, type GraphPayload } from '@cpg/graph-visualizer';
+import { GraphVisualizer, type GraphDelta, type GraphPayload, type WebviewToHost } from '@cpg/graph-visualizer';
 
-declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
+// Typed as WebviewToHost rather than `unknown` so this side of the channel
+// can't post a message the host has no case for — the contract is checked
+// here, at the one place messages leave the webview.
+declare function acquireVsCodeApi(): { postMessage(message: WebviewToHost): void };
 const vscodeApi = acquireVsCodeApi();
 
 const container = document.getElementById('graph-container') as HTMLDivElement;
@@ -10,7 +13,11 @@ const container = document.getElementById('graph-container') as HTMLDivElement;
 // host has no way to know the webview loaded at all.
 let visualizer: GraphVisualizer | undefined;
 try {
-	visualizer = new GraphVisualizer(container);
+	visualizer = new GraphVisualizer(container, {
+		// Only the id travels — the host resolves it against the payload it
+		// already holds. See WebviewToHost in the visualizer's contract.ts.
+		onNodeClick: (node) => vscodeApi.postMessage({ type: 'reveal', nodeId: node.id }),
+	});
 } catch (error) {
 	console.error('cpg-me-daddy: failed to construct GraphVisualizer', error);
 }

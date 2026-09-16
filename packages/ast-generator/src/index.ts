@@ -61,6 +61,34 @@ function resolveGrammarDir(): string {
 	return join(dirname(packageJsonPath), 'wasm');
 }
 
+// `Parser.init()` and `Language.load()` are both one-time setup costs that the
+// original one-file-per-process CLI could afford to pay on every call. A
+// whole-workspace parse (ParseWorkspace's AST pass) calls `parseFile` once per
+// source file, so paying them per file means re-reading and re-compiling the
+// same few megabytes of wasm hundreds of times — and leaking a fresh wasm
+// `Language` each time. Memoized by promise (not by resolved value) so
+// concurrent callers share one in-flight load rather than racing to start
+// their own.
+let parserInit: Promise<void> | undefined;
+const languageByWasmFile = new Map<string, Promise<Language>>();
+
+function initParser(): Promise<void> {
+	parserInit ??= Parser.init();
+	return parserInit;
+}
+
+function loadLanguage(wasmFile: string): Promise<Language> {
+	let language = languageByWasmFile.get(wasmFile);
+	if (!language) {
+		language = readFile(join(resolveGrammarDir(), wasmFile)).then((bytes) => Language.load(new Uint8Array(bytes)));
+		// A failed load must not be cached — the next call should retry rather
+		// than replay the same rejection forever.
+		language.catch(() => languageByWasmFile.delete(wasmFile));
+		languageByWasmFile.set(wasmFile, language);
+	}
+	return language;
+}
+
 function truncate(text: string): string {
 	return text.length <= SNIPPET_MAX_LENGTH ? text : `${text.slice(0, SNIPPET_MAX_LENGTH - 3)}...`;
 }
@@ -83,31 +111,46 @@ export async function parseFile(filePath: string): Promise<ParsedFile> {
 	const wasmFile = wasmFileForPath(filePath);
 	const source = await readFile(filePath, 'utf8');
 
-	await Parser.init();
-	const grammarBytes = await readFile(join(resolveGrammarDir(), wasmFile));
-	const language = await Language.load(new Uint8Array(grammarBytes));
+	await initParser();
+	const language = await loadLanguage(wasmFile);
 
+	// Both the parser and the tree hold wasm-side memory that GC can't reclaim
+	// on its own, so both are released once the plain-JS `AstNode` copy below
+	// has been taken. One-file-at-a-time this was invisible; parsing a whole
+	// workspace in one process, it isn't.
 	const parser = new Parser();
-	parser.setLanguage(language);
-	const tree = parser.parse(source);
-	if (tree === null) {
-		throw new Error(`web-tree-sitter returned no tree for '${filePath}'.`);
+	try {
+		parser.setLanguage(language);
+		const tree = parser.parse(source);
+		if (tree === null) {
+			throw new Error(`web-tree-sitter returned no tree for '${filePath}'.`);
+		}
+		try {
+			return {
+				filePath,
+				grammar: wasmFile,
+				root: nodeToAst(tree.rootNode, source),
+				sExpression: tree.rootNode.toString(),
+			};
+		} finally {
+			tree.delete();
+		}
+	} finally {
+		parser.delete();
 	}
+}
 
-	return {
-		filePath,
-		grammar: wasmFile,
-		root: nodeToAst(tree.rootNode, source),
-		sExpression: tree.rootNode.toString(),
-	};
+/** Writes an already-parsed file's AST as JSON — the disk-write half of `dumpAst`, split out so a caller that already has a `ParsedFile` (e.g. `@cpg/file-watcher`'s AST pipeline) doesn't have to parse the file twice to also get it on disk. */
+export async function writeAstJson(parsed: ParsedFile, outputDir: string = DEFAULT_OUTPUT_DIR): Promise<string> {
+	await mkdir(outputDir, { recursive: true });
+	const outputPath = join(outputDir, `${basename(parsed.filePath)}.ast.json`);
+	await writeFile(outputPath, JSON.stringify(parsed, null, 2), 'utf8');
+	return outputPath;
 }
 
 export async function dumpAst(filePath: string, outputDir: string = DEFAULT_OUTPUT_DIR): Promise<string> {
 	const parsed = await parseFile(filePath);
-	await mkdir(outputDir, { recursive: true });
-	const outputPath = join(outputDir, `${basename(filePath)}.ast.json`);
-	await writeFile(outputPath, JSON.stringify(parsed, null, 2), 'utf8');
-	return outputPath;
+	return writeAstJson(parsed, outputDir);
 }
 
 function resolveArgPath(arg: string): string {

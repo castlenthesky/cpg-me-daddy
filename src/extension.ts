@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { ChainResolver, PythonPathResolver } from '@cpg/cpg-generator';
+import { VsCodeDefinitionResolver } from './resolve/vscodeDefinitionResolver';
 import { GraphViewProvider } from './views/graphViewProvider';
 import { LogsTreeProvider } from './views/logsTreeProvider';
 import { PlaceholderTreeProvider } from './views/placeholderTreeProvider';
@@ -32,6 +34,19 @@ export function activate(context: vscode.ExtensionContext) {
 	// when the watcher moved onto WorkspaceSession — see the project plan).
 	const [firstFolder] = vscode.workspace.workspaceFolders ?? [];
 	if (firstFolder) {
+		// The single construction site that decides how references resolve.
+		//
+		// `VsCodeDefinitionResolver` goes first: it's more precise wherever the
+		// language server is configured correctly, and `ChainResolver` keeps the
+		// first real *answer* per site — `unresolved`/`dynamic` still fall
+		// through — so `PythonPathResolver` behind it keeps answering for the
+		// workspaces a type checker can't resolve imports in at all (a flat
+		// `src/` layout with no `extraPaths`), and keeps classifying builtins the
+		// vscode link deliberately declines to finalize (see that resolver's
+		// `no-definition` fallback for out-of-workspace definitions).
+		const resolver = new ChainResolver([new VsCodeDefinitionResolver(log), new PythonPathResolver()]);
+		log(`resolver: ${resolver.id}`);
+
 		const session = new WorkspaceSession(
 			firstFolder.uri.fsPath,
 			new VsCodeWatchBackend(),
@@ -42,7 +57,8 @@ export function activate(context: vscode.ExtensionContext) {
 			(error) => {
 				log(`file watcher error on ${firstFolder.uri.fsPath}: ${error.message}`);
 			},
-			log
+			log,
+			resolver
 		);
 		context.subscriptions.push({ dispose: () => session.dispose() });
 

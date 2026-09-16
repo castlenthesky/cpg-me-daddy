@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import ignore from 'ignore';
+import type { GraphBuilder } from '@cpg/graph-builder';
 // Type-only, and from the deep 'dist/contract' path rather than the package
 // barrel: erased at compile time either way, but importing the barrel here
 // would make this package's own emitted .d.ts re-export GraphPayload from
@@ -10,13 +11,23 @@ import ignore from 'ignore';
 // dependencies of its own, so this never pulls in graph-visualizer's
 // browser/DOM code (or its @cosmos.gl/graph dependency) either way.
 import type { GraphDelta, GraphPayload } from '@cpg/graph-visualizer/dist/contract';
+// Runtime import — `runAstPass` is called by `parseWorkspace` below. astPass.ts
+// imports only *types* back from this module, so the cycle is erased at compile
+// time and never becomes a runtime require loop.
+import { runAstPass, type AstPassErrorListener, type AstPassProgressListener, type AstPassResult } from './astPass';
+// Same erased-cycle arrangement as `astPass` above: `parseWorkspace` calls
+// `runResolvePass`, and resolvePass.ts imports only `ParseWorkspaceToken` back.
+import { runResolvePass, type ResolvePassErrorListener, type ResolvePassProgressListener, type ResolvePassResult } from './resolvePass';
+import type { Resolver } from '@cpg/cpg-generator';
 
 // The package barrel also re-exports the MonitorWorkspace-phase pieces —
 // same public entry point (`@cpg/file-watcher`) as before, now backing both
 // named phases from the project plan rather than one 388-line module.
+export * from './astPass';
 export * from './changes';
 export * from './monitor';
 export * from './queue';
+export * from './resolvePass';
 export { ChangeBatcher, type ChangeBatcherOptions } from './debounce';
 
 type IgnoreMatcher = ReturnType<typeof ignore>;
@@ -355,9 +366,15 @@ export function createIgnoreFilter(rootPath: string): (relativePath: string) => 
 
 export interface ParseWorkspaceResult {
 	tree: FileTreeNode;
+	/** File/directory nodes, plus the AST nodes of every parsed file when the AST pass ran. */
 	payload: GraphPayload;
 	index: WorkspaceGraphIndex;
+	/** Total nodes in `payload` — file/directory and AST alike. */
 	nodeCount: number;
+	/** How the AST pass went, or `undefined` when it didn't run (no `builder` supplied). */
+	ast?: AstPassResult;
+	/** How the resolve pass went, or `undefined` when it didn't run (no `resolver` supplied). */
+	resolution?: ResolvePassResult;
 }
 
 /** Accepted by `parseWorkspace` — the shape of a `vscode.CancellationToken`, without importing `vscode` into this package. */
@@ -365,31 +382,97 @@ export interface ParseWorkspaceToken {
 	isCancellationRequested: boolean;
 }
 
+export interface ParseWorkspaceOptions {
+	/**
+	 * Turns the AST pass on — same convention as `MonitorOptions.builder`
+	 * (`monitor.ts`), and it must be the *same instance* passed to both, so
+	 * the two phases agree on which AST ids each file currently owns. Omit it
+	 * and `parseWorkspace` walks files and directories only, exactly as it did
+	 * before the pass existed.
+	 */
+	builder?: GraphBuilder;
+	/** Fired once per parsed file during the AST pass. */
+	onProgress?: AstPassProgressListener;
+	/** Fired per file that failed to parse; that file is skipped and the pass continues. */
+	onAstError?: AstPassErrorListener;
+	/** Workspace-wide AST node ceiling — see `DEFAULT_MAX_AST_NODES` in `astPass.ts`. */
+	maxAstNodes?: number;
+	/**
+	 * Turns the resolve pass on — same convention as `builder` above, and like
+	 * it, the *same instance* belongs to both phases so a resolver that caches
+	 * (the precise one will) isn't rebuilt per save. Requires `builder` too:
+	 * with no AST pass there are no `CALL`/`IMPORT` nodes to resolve. Omit it
+	 * and `parseWorkspace` behaves exactly as it did before the pass existed.
+	 */
+	resolver?: Resolver;
+	/** Fired once per file whose references have been resolved. */
+	onResolveProgress?: ResolvePassProgressListener;
+	/** Fired per file whose resolution failed; that file is skipped and the pass continues. */
+	onResolveError?: ResolvePassErrorListener;
+	/** Checked between files, so a cancelled parse returns the tree it has rather than running to completion. */
+	token?: ParseWorkspaceToken;
+}
+
 /**
  * The ParseWorkspace phase's orchestration entry point — see the project
- * plan ("ParseWorkspace / MonitorWorkspace — the eventual structure"). The
- * body is `REAL`: it delegates to today's synchronous `walkWorkspace` and
- * resolves immediately, so this changes no behavior. The signature is
- * already async, with progress and cancellation accepted (both currently
- * ignored — `SEAT`s), so that swapping in a genuinely async, yielding walk
- * later — needed once this also drives a per-file parse — is a body change
- * here, not a change to any caller.
+ * plan ("ParseWorkspace / MonitorWorkspace — the eventual structure").
  *
  * `walkWorkspace` keeps its own name and stays a pure traversal — it
  * enumerates files and directories, it doesn't parse anything. This function
- * is the orchestration layer above it: today that's "walk, then build an
- * index and a payload from the result," and eventually also "then parse
- * each file's content," without `parseWorkspace`'s own signature changing.
+ * is the orchestration layer above it: walk, build an index and a payload
+ * from the result, then (when a `builder` is supplied) parse every supported
+ * file and hang its AST subgraph off its file node.
+ *
+ * That last step is what puts AST nodes on screen at activation. Without it
+ * only `monitorWorkspace`'s watcher-driven `AstPipeline` ever produces them,
+ * so a freshly-opened workspace rendered as directories and files alone until
+ * the user happened to save something — and then grew exactly one file's
+ * worth of AST.
+ *
+ * Note the ordering: the payload is assembled here, in full, *before* the
+ * caller starts `monitorWorkspace`. AST nodes are appended after the
+ * file/directory nodes, which `layoutPayload` doesn't care about (it indexes
+ * the payload by id before laying anything out) — unlike the incremental
+ * `applyDelta` path, which does require a parent to precede its children.
  */
-export async function parseWorkspace(
-	rootPath: string,
-	onProgress?: (count: number, current: string) => void,
-	token?: ParseWorkspaceToken
-): Promise<ParseWorkspaceResult> {
-	void onProgress;
-	void token;
+export async function parseWorkspace(rootPath: string, options: ParseWorkspaceOptions = {}): Promise<ParseWorkspaceResult> {
 	const tree = walkWorkspace(rootPath);
 	const payload = toGraphPayload(tree);
 	const index = new WorkspaceGraphIndex(rootPath, tree);
-	return { tree, payload, index, nodeCount: payload.nodes.length };
+
+	if (!options.builder) {
+		return { tree, payload, index, nodeCount: payload.nodes.length };
+	}
+
+	const ast = await runAstPass(tree, {
+		builder: options.builder,
+		workspaceRoot: rootPath,
+		maxNodes: options.maxAstNodes,
+		onProgress: options.onProgress,
+		onError: options.onAstError,
+		token: options.token,
+	});
+	payload.nodes.push(...ast.nodes);
+	payload.edges.push(...ast.edges);
+
+	if (!options.resolver) {
+		return { tree, payload, index, nodeCount: payload.nodes.length, ast };
+	}
+
+	// The third pass, and it runs here rather than inside `runAstPass` because
+	// it needs the *finished* payload: a call in the first file walked can
+	// target a definition in the last, so resolving mid-walk would report
+	// `unresolved` for resolvable references, non-deterministically by walk
+	// order. See `runResolvePass`.
+	const resolution = await runResolvePass(payload.nodes, {
+		resolver: options.resolver,
+		definitions: options.builder,
+		onProgress: options.onResolveProgress,
+		onError: options.onResolveError,
+		token: options.token,
+	});
+	payload.nodes.push(...resolution.nodes);
+	payload.edges.push(...resolution.edges);
+
+	return { tree, payload, index, nodeCount: payload.nodes.length, ast, resolution };
 }

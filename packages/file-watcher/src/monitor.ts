@@ -1,7 +1,9 @@
 import { join, relative } from 'node:path';
-import { dumpAst, isSupportedExtension } from '@cpg/ast-generator';
+import type { Resolver } from '@cpg/cpg-generator';
+import type { GraphBuilder } from '@cpg/graph-builder';
 // Type-only, deep import — see the note at the top of index.ts.
 import type { GraphDelta } from '@cpg/graph-visualizer/dist/contract';
+import { AstPipeline } from './astPipeline';
 import type { WatchBackend, WatchSubscription, WorkspaceChange } from './changes';
 import { ChangeBatcher } from './debounce';
 import { createIgnoreFilter, type WorkspaceGraphIndex } from './index';
@@ -20,6 +22,29 @@ export type AstDumpListener = (filePath: string, outputPath: string) => void;
  */
 export type AstTriggerListener = (change: WorkspaceChange) => void;
 
+export interface MonitorOptions {
+	onDelta?: GraphDeltaListener;
+	onError?: FileWatcherErrorListener;
+	onAstDump?: AstDumpListener;
+	onAstTrigger?: AstTriggerListener;
+	/**
+	 * Owns the AST-derived node ids currently on screen per file (see `@cpg/graph-builder`) — the
+	 * CPG pipeline SEAT below only runs when this is supplied. Passed in rather than constructed
+	 * here so it's the caller's to own and, eventually, inject a fake of in a test.
+	 */
+	builder?: GraphBuilder;
+	/**
+	 * Re-resolves a saved file's own references, so its cross-file edges survive
+	 * the save. Must be the *same instance* ParseWorkspace used — see
+	 * `AstPipelineOptions.resolver` for why only the saved file needs it.
+	 */
+	resolver?: Resolver;
+	/** Where the AST pipeline writes its debug JSON dump. Defaults to `<rootPath>/out/ast`. */
+	astOutputDir?: string;
+	/** Whether the AST pipeline writes its debug JSON dump at all. Defaults to `true`. */
+	dumpAstToDisk?: boolean;
+}
+
 /**
  * The MonitorWorkspace phase's routing layer — see the project plan
  * ("ParseWorkspace / MonitorWorkspace — the eventual structure", migration
@@ -36,23 +61,31 @@ export type AstTriggerListener = (change: WorkspaceChange) => void;
  * disk-diffing already plays for *what* a rescan finds, applied here to
  * *how often* a rescan runs.
  */
-export function monitorWorkspace(
-	rootPath: string,
-	index: WorkspaceGraphIndex,
-	backend: WatchBackend,
-	onDelta?: GraphDeltaListener,
-	onError?: FileWatcherErrorListener,
-	onAstDump?: AstDumpListener,
-	onAstTrigger?: AstTriggerListener
-): WatchSubscription {
+export function monitorWorkspace(rootPath: string, index: WorkspaceGraphIndex, backend: WatchBackend, options: MonitorOptions = {}): WatchSubscription {
+	const { onDelta, onError, onAstDump, onAstTrigger, builder, resolver, dumpAstToDisk = true } = options;
 	const isIgnored = createIgnoreFilter(rootPath);
+	const pipeline = builder
+		? new AstPipeline({
+				builder,
+				astOutputDir: options.astOutputDir ?? join(rootPath, 'out', 'ast'),
+				dumpAstToDisk,
+				workspaceRoot: rootPath,
+				resolver,
+				onDelta,
+				onError,
+				onAstDump,
+			})
+		: undefined;
 
 	const batcher = new ChangeBatcher<WorkspaceChange>((changes) => {
 		for (const change of changes) {
 			onAstTrigger?.(change);
-			const delta = applyOne(rootPath, index, change, onAstDump, onError);
+			const delta = applyOne(index, change, builder);
 			if (delta) {
 				onDelta?.(delta);
+			}
+			if ((change.kind === 'created' || change.kind === 'changed' || change.kind === 'moved') && pipeline) {
+				pipeline.run(change.path);
 			}
 		}
 	});
@@ -77,59 +110,42 @@ export function monitorWorkspace(
 	};
 }
 
-function applyOne(
-	rootPath: string,
-	index: WorkspaceGraphIndex,
-	change: WorkspaceChange,
-	onAstDump?: AstDumpListener,
-	onError?: FileWatcherErrorListener
-): GraphDelta | undefined {
+/**
+ * The synchronous presence half of a change: whether a file/directory node needs to appear,
+ * disappear, or move. The AST half (parse -> flatten -> `GraphBuilder.replaceFile`) is async and
+ * handled separately by `AstPipeline`, dispatched from `monitorWorkspace` above — a wasm parse is far
+ * too slow to hold up this pass.
+ */
+function applyOne(index: WorkspaceGraphIndex, change: WorkspaceChange, builder: GraphBuilder | undefined): GraphDelta | undefined {
 	switch (change.kind) {
 		case 'created':
-			maybeDumpAst(rootPath, change.path, onAstDump, onError);
 			return index.applyChange(change.path);
 		case 'deleted':
-			// No content left to parse — nothing for the AST step to do. A stale
-			// out/ast/ dump for a deleted file is left behind today; cleaning it
-			// up is future work, not covered by onAstTrigger/onAstDump.
-			return index.applyChange(change.path);
+			return withAstRemovals(index.applyChange(change.path), builder);
 		case 'moved':
-			// The file has real content at its new path — re-parse there so a
-			// rename/move produces a fresh AST dump under its new name, not a
-			// stale one under the old.
-			maybeDumpAst(rootPath, change.path, onAstDump, onError);
-			return index.applyMove(change.fromPath ?? change.path, change.path);
+			return withAstRemovals(index.applyMove(change.fromPath ?? change.path, change.path), builder);
 		case 'changed':
-			// REAL (partial) — the first leg of the CPG pipeline SEAT:
-			//   ast-generator.parse(path) -> cpg-generator.toSubgraph(ast) ->
-			//   graph-builder.replaceFile(path, subgraph) -> a GraphDelta.
-			// maybeDumpAst below now does the ast-generator leg for real. Still no
-			// GraphDelta from a content edit: presence can't change, and
-			// cpg-generator/graph-builder — the rest of the pipeline that would
-			// turn an AST into a graph update — are still hello() stubs with
-			// nothing to call.
-			maybeDumpAst(rootPath, change.path, onAstDump, onError);
+			// Presence can't change from a content edit alone — the file/directory node this
+			// change touches already exists. Its AST, if any, is handled by AstPipeline.
 			return undefined;
 	}
 }
 
 /**
- * Fire-and-forget: parses `filePath` and writes its AST JSON under
- * `<rootPath>/out/ast/` (the workspace's own `out/`, not this extension's —
- * see `@cpg/ast-generator`'s `dumpAst`). Not awaited by `applyOne` — a wasm
- * parse is too slow to block every batch flush on, and nothing downstream
- * yet consumes the result synchronously (no `cpg-generator` to hand it to).
- * Extensions `@cpg/ast-generator` has no grammar for (most of a workspace)
- * are skipped rather than logged as errors; a real failure — a corrupt file,
- * a wasm load problem — still reaches `onError`.
+ * A presence delta's `removedNodeIds` names only the file/directory node(s) that disappeared, never
+ * the AST ids hanging off them — `@cpg/graph-visualizer` only tombstones ids explicitly listed, so
+ * without this, a deleted file's (or an entire deleted directory's descendants') AST subtree would
+ * linger on screen as an orphan once its file node is gone. `builder.removeUnder` sweeps every
+ * tracked file under a removed id (covering a whole-directory delete/move, not just a single file)
+ * and returns their AST ids to fold in here.
  */
-function maybeDumpAst(rootPath: string, filePath: string, onAstDump: AstDumpListener | undefined, onError: FileWatcherErrorListener | undefined): void {
-	if (!isSupportedExtension(filePath)) {
-		return;
+function withAstRemovals(delta: GraphDelta | undefined, builder: GraphBuilder | undefined): GraphDelta | undefined {
+	if (!delta || !builder) {
+		return delta;
 	}
-	dumpAst(filePath, join(rootPath, 'out', 'ast'))
-		.then((outputPath) => onAstDump?.(filePath, outputPath))
-		.catch((error: unknown) => {
-			onError?.(error instanceof Error ? error : new Error(String(error)));
-		});
+	const astRemovals = builder.removeUnder(delta.removedNodeIds);
+	if (astRemovals.length === 0) {
+		return delta;
+	}
+	return { ...delta, removedNodeIds: [...delta.removedNodeIds, ...astRemovals] };
 }

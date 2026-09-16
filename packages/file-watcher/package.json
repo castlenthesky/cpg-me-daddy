@@ -9,6 +9,8 @@
 	},
 	"dependencies": {
 		"@cpg/ast-generator": "*",
+		"@cpg/cpg-generator": "*",
+		"@cpg/graph-builder": "*",
 		"@cpg/graph-visualizer": "*",
 		"ignore": "7.0.9"
 	}

@@ -28,11 +28,16 @@ export const GRAPH_VISUALIZER_STYLES = `
 }
 #fit-view-button:hover { background: rgba(60, 60, 60, 0.9); }
 #fit-view-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
-#legend {
+#legend-container {
 	position: absolute;
 	bottom: 8px;
 	left: 8px;
 	z-index: 10;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+#legend, #relationship-legend {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
@@ -41,6 +46,7 @@ export const GRAPH_VISUALIZER_STYLES = `
 	border-radius: 4px;
 	padding: 4px;
 }
+#relationship-legend:empty { display: none; }
 .legend-item {
 	display: flex;
 	align-items: center;

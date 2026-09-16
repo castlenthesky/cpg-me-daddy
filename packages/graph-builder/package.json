@@ -6,5 +6,8 @@
 	"types": "dist/index.d.ts",
 	"scripts": {
 		"build": "tsc -p ."
+	},
+	"dependencies": {
+		"@cpg/graph-visualizer": "*"
 	}
 }

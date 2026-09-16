@@ -4,3 +4,5 @@ node_modules
 .vscode-test
 packages/*/dist
 *.tsbuildinfo
+__pycache__/
+*.pyc
