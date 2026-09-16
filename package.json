@@ -1,37 +1,33 @@
 {
   "name": "cpg-me-daddy",
+  "displayName": "cpg-me-daddy",
+  "description": "Code Property Graph for TypeScript/JavaScript/Python",
   "version": "0.0.1",
   "private": true,
-  "description": "Code Property Graph for TypeScript/JavaScript/Python — workspace root",
-  "workspaces": [
-    "packages/*"
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
   ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cpg-me-daddy.helloWorld",
+        "title": "Hello World"
+      }
+    ]
+  },
   "scripts": {
-    "lint": "oxlint packages tools",
-    "format": "oxfmt . '!.claude/**'",
-    "format:check": "oxfmt --check . '!.claude/**'",
-    "typecheck": "tsc --build && tsc -p tsconfig.test.json",
-    "watch": "tsc --build --watch",
-    "typecheck:clean": "tsc --build --clean",
-    "test:unit": "bun test packages/falkordb-service/test/unit packages/engine/test/unit packages/cli/test/unit packages/vscode/test/unit",
-    "test:schema": "bun test packages/engine/test/unit/schema",
-    "test:integration": "bun test packages/engine/test/integration",
-    "test:integration:network": "bun run --filter falkordb-service test:integration:network",
-    "db:up": "bun run tools/falkordb-up.ts",
-    "db:down": "bun run tools/falkordb-down.ts",
-    "db:dev:up": "bun run tools/falkordb-dev-up.ts",
-    "db:dev:stop": "docker compose -f docker/falkordb.dev.yml stop",
-    "db:dev:down": "bun run tools/falkordb-dev-down.ts",
-    "db:dev:reset": "bun run tools/falkordb-dev-down.ts --destroy",
-    "cpg": "bun run packages/cli/src/main.ts",
-    "prepare": "lefthook install || true"
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.11",
-    "@types/node": "22.x",
-    "lefthook": "2.1.12",
-    "oxfmt": "0.67.0",
-    "oxlint": "1.82.0",
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.90.0",
     "typescript": "^5.9.3"
   }
 }

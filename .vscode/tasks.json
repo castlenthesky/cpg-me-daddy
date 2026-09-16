@@ -2,28 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "watch",
-      "type": "shell",
-      "command": "bunx tsc --build --watch",
-      "problemMatcher": "$tsc-watch",
-      "isBackground": true,
-      "presentation": {
-        "reveal": "never"
-      },
+      "type": "npm",
+      "script": "compile",
       "group": {
         "kind": "build",
         "isDefault": true
-      }
-    },
-    {
-      "label": "build",
-      "type": "shell",
-      "command": "bunx tsc --build",
-      "problemMatcher": "$tsc",
-      "presentation": {
-        "reveal": "never"
       },
-      "group": "build"
+      "problemMatcher": "$tsc"
     }
   ]
 }
