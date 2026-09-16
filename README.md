@@ -5,8 +5,8 @@ Bare-bones VS Code extension scaffold. See `docs/plans/unified-architecture.md` 
 ## Running
 
 ```
-npm install
-npm run compile
+bun i
+bun run compile
 ```
 
 Then press F5 in VS Code to launch the Extension Development Host.
