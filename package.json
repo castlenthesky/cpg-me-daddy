@@ -4,6 +4,9 @@
   "description": "Code Property Graph for TypeScript/JavaScript/Python",
   "version": "0.0.1",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -16,18 +19,26 @@
     "commands": [
       {
         "command": "cpg-me-daddy.helloWorld",
-        "title": "Hello World"
+        "title": "CPG: Hello World"
       }
     ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "compile": "tsc -b",
+    "watch": "tsc -b -w",
+    "clean": "tsc -b --clean && rm -rf out",
+    "check:deps": "node tools/check-deps.mjs",
+    "test": "vitest run",
+    "verify": "npm run check:deps && npm run compile && npm run test"
+  },
+  "dependencies": {
+    "@cpg/model": "*"
   },
   "devDependencies": {
     "@types/node": "^20.x",
     "@types/vscode": "^1.90.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }

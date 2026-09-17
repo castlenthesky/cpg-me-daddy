@@ -1,12 +1,9 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "module": "commonjs",
-    "target": "ES2022",
     "outDir": "out",
-    "lib": ["ES2022"],
-    "sourceMap": true,
-    "strict": true
+    "rootDir": "."
   },
-  "include": ["src/**/*", "packages/**/*"],
-  "exclude": ["node_modules", ".vscode-test"]
+  "include": ["src/**/*"],
+  "references": [{ "path": "packages/model" }]
 }

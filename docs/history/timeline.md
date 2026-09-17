@@ -65,7 +65,7 @@ the hard parts (async parse, move-preserving renames, VS Code watcher wiring) we
 ## 5. The 2026-09-15 turning point: architecture review + reversed resolver decision
 
 Two things happened the same day. First, `vscode.executeDefinitionProvider` was chosen as the
-**primary** cross-file symbol resolver, behind a `Resolver` seam — reversing D8/X3 from the
+**poc/mvp** cross-file symbol resolver, behind a `Resolver` seam — reversing D8/X3 from the
 planning session, because the headless engine those decisions were protecting had already been
 deleted in the `discovery` rebuild; "must run headless" had quietly become a future option, not a
 constraint. See `docs/research/2026-09-11-planning-session/ERRATA.md`.

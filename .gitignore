@@ -3,3 +3,7 @@ dist
 node_modules
 .vscode-test/
 *.vsix
+*.tsbuildinfo
+
+# multi-agent deliberation working artifacts - never committed
+.debate/

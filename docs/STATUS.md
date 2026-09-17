@@ -1,5 +1,14 @@
 # Status: what's true right now
 
+> **STALE AS OF 2026-09-16 — verify against code before believing any of this.** Three specifics are
+> already known wrong. (1) "TS project references wired across `packages/*`" was never true on
+> `develop`; W0 has now actually wired them, for `packages/model` only. (2) The described active slice
+> (`UpdateQueue` → `WorkspaceGraphIndex` → `GraphDelta`, webview at `src/webview/graphApp.ts`) exists
+> on `archive/discovery-20260916`, not on `develop`. (3) `vscode.executeDefinitionProvider` as primary
+> cross-file resolver is **out of force** — CLI purity is now a hard invariant, so core must run under
+> plain node with zero `vscode` import and a headless resolver is required. This whole file is being
+> superseded by a distilled delivery plan; it is retained only until that lands.
+
 A single at-a-glance answer to "what's current," so nobody has to reconstruct it from the fuller
 history in `docs/history/` or the research corpus in `docs/research/`. If this file and any other
 doc disagree, this file wins for *current state*; the other doc likely just hasn't been reconciled

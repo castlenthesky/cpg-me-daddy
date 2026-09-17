@@ -1,0 +1,259 @@
+# 10 — Lessons
+#
+# Every design choice in this outline that looks arbitrary is a scar. This file carries the 48 lessons
+# from the two prior attempts (L-01..L-48), the 12 cross-seam defects found while specifying the seams
+# (CS-01..CS-12, detailed in 05-contracts.yaml), and the 18 premises-at-risk findings from the retirement
+# audit (LA3-nn) with the decision that closed each. Each lesson: what happened, the rule it implies, and
+# where it bites THIS plan. Archive coordinates read with `git show <tag>:<path>`; four files there
+# contain NUL bytes and need `grep -a`.
+
+archive_tags:
+  - { tag: archive/master-20260916,          commit: 27361a3, what: "engine-first monorepo; the original FalkorDB/Joern CPG implementation" }
+  - { tag: archive/discovery-20260916,       commit: 21754b4, what: "visual-first redo (webview-first, minimal packages)" }
+  - { tag: archive/m0-calls-symbols-20260916, commit: f18ee71, what: "most advanced engine branch (schema registry, two-pass walker, symbol-id)" }
+  - { tag: archive/research-sweep-20260916,  commit: e45574f, what: "WatchSink decoupling + doc sweep" }
+  - { tag: archive/research-corpus-20260916, commit: 8cd478f, what: "the docs/ tree pre-distillation (= develop HEAD at the time)" }
+
+failures:
+  - id: L-01
+    failure: "Two node populations shared the label :FILE (filesystem FILE with `path`; CPG FILE with `filename`); every label-only query swept both; reconciliation threw on `fs.existsSync(null)` or deleted every CPG node as an orphan; the graph fragmented 2–5 s after launch."
+    rule: "A structural label is not an identity. Two producers must never write the same label without a discriminating property, and the distinction lives beside the schema."
+    bites: [DQ-01 owner-discriminated merge, DQ-09 one producer per edge label, 04-schema ownership classes]
+    where: "archive/master-20260916:src/services/sync/Reconciler.ts:224"
+  - id: L-02
+    failure: "A wildcard DELETE of all non-FILE/non-DIRECTORY nodes wiped the whole graph every background reconciliation; the first fix missed an identical second code path (cleanupLegacyNodes)."
+    rule: "Every destructive write funnels through one narrowly scoped method; when you fix a destructive write, grep for the SHAPE of the query, not the function name."
+    bites: [C-STORE DeleteScope closed union + planScopeDelete as the only DELETE emitter, INV-6]
+    where: "archive/master-20260916:src/services/sync/Reconciler.ts (:219, :101)"
+  - id: L-03
+    failure: "DETACH DELETE on per-file re-parse destroyed INBOUND cross-file edges owned by other files; the workaround re-resolved every importer after every save."
+    rule: "A per-file write must not be able to reach another file's data. Cross-file edges route through an identity node the replace never touches."
+    bites: [SYMBOL indirection VD-05, C-STORE INV-5 never DETACH DELETE, INV-12]
+    where: "archive/master-20260916:src/services/storage/FalkorDBStore.ts:169"
+  - id: L-04
+    failure: "The force graph was reheated on every reconciliation even when nothing changed; smartReconciliation returned void so the caller could not know."
+    rule: "A sync routine reports whether it mutated anything; the UI refresh is gated on the answer."
+    bites: [C-STORE WriteReceipt.applied is never silently false, C-SINK DeliveryOutcome]
+  - id: L-05
+    failure: "Force physics too warm to settle (velocityDecay 0.1 vs default 0.4) and every delta reheated to alpha 1."
+    rule: "Never tune a force layout by one knob; small delta => nudge, not reheat; record the library default you deviate from."
+    bites:
+      - "ND-3 renderer: gentle start(0.1) on deltas"
+      - "seed threaded"
+  - id: L-06
+    failure: "The user-facing Re-index command was a no-op that made the graph worse (created FILE stubs, never ran the pipeline)."
+    rule: "Every user-visible command needs an end-to-end assertion on its EFFECT, not its wiring."
+    bites:
+      - "P5 rule: stubbed data never gets a unit; U2's gate asserts counts, not wiring"
+  - id: L-07
+    failure: "vscode.createFileSystemWatcher never fires for directories; the entire directory-handling branch was dead code."
+    rule: "Confirm the event surface emits what your design assumes before building a state machine on it."
+    bites: [C-WATCH WatchCapabilities.directoryEvents declared and tested (INV-9); under P-A the producer never uses the VS Code watcher anyway]
+  - id: L-08
+    failure: "Silent fallbacks: unknown language fell back to the TypeScript adapter; grammar load errors returned null; safeCpgLabel fell back to 'CPG'."
+    rule: "A fallback is legitimate only if the caller can tell it happened. Prefer throwing; if degrading, return a discriminated status."
+    bites: [every contract's typed error model; Read<T>; CoverageManifest; ResolveBatch.degraded; C-PARSE I6 no aliasing]
+  - id: L-09
+    failure: "Cypher injection via string-interpolated file paths and labels; serializeValue did not escape backslash/newline so source snippets caused parse errors."
+    rule: "Parameterize every value; allowlist every structural token (labels, relationship types) Cypher cannot parameterize."
+    bites: [C-STORE INV-9, the allowlist in WritePlanner]
+  - id: L-10
+    failure: "String.prototype.replace for path-prefix rewriting rewrote the wrong segment on directory rename (first occurrence only); ids drifted silently."
+    rule: "Prefix rewriting is startsWith + slice, never replace; fail loudly when the prefix precondition does not hold."
+    bites: [C-WATCH INV-23, WorkspacePath conversion]
+  - id: L-11
+    failure: "Synchronous fs.statSync/readdirSync on the extension host thread froze every extension during a git checkout."
+    rule: "No synchronous I/O in an extension-host path; prefer vscode.workspace.fs so remote filesystems work."
+    bites: [C-EXT FilesystemProbe async, C-RESOLVE may-not sync I/O]
+  - id: L-12
+    failure: "N+1 query storm: three DB queries per filesystem entry, recursive."
+    rule: "Batch by shape, not by item."
+    bites: [UNWIND $rows in the planner; one statement per file]
+  - id: L-13
+    failure: "Orphan reconnection matched on bare `name` with LIMIT 1 and reattached the wrong node."
+    rule: "Identity reconstruction needs more than a display name; ambiguous-match-then-pick-one is never the default."
+    bites: [C-RESOLVE bans bare-name-across-workspace; C-MODEL dangling edges retained, never guessed]
+  - id: L-14
+    failure: "Event coalescing dropped `change` events that arrived after `create` (first-write-wins else-branch)."
+    rule: "Coalescing is a merge, not first-write-wins: write the (existing x incoming) table and test every cell."
+    bites: [C-WATCH merge table, 20 cells, INV-15]
+  - id: L-15
+    failure: "dispose() discarded queued changes; anything inside the last debounce window at shutdown was lost with no marker."
+    rule: "Teardown of a debounced queue must flush, persist, or leave a marker."
+    bites:
+      - "C-WATCH OQ-3: close() drops; the next session's initial walk is the marker"
+  - id: L-16
+    failure: "Error handling had no principle: the same failure class was a modal, a console log, or a swallowed default."
+    rule: "Background service: log everything with context; surface only what needs a user action; state the policy once at the top of the module."
+    bites: [C-SINK onDegraded names files; C-EXT three verification surfaces]
+  - id: L-17
+    failure: "TOCTOU: re-stat of paths already stat'd; substring node_modules check excluded my_node_modules_helper."
+    rule: "Pass the observation, not the path; path predicates match segments, never substrings."
+    bites: [walker admission predicate shared with the watcher; DeleteScope subtree segment-boundary rule]
+  - id: L-18
+    failure: "Cache invalidation cleared the parser cache but left stale data in FalkorDB indefinitely."
+    rule: "'Invalidate' must name what it invalidates; state in two tiers touched in one is a correctness bug."
+    bites: ["P-B revision reconciliation across tiers", "C-STORE not-guaranteed item 12 names partial tier failure"]
+  - id: L-19
+    failure: "A missing `return` before withProgress made an async index resolve immediately; callers proceeded while indexing ran."
+    rule: "Enable no-floating-promises/require-await; this bug is invisible at the call site."
+    bites: [C-SINK INV-9 (a sync throw bypasses the retry wrapper); lint rule in E-GATE]
+  - id: L-20
+    failure: "Each file's CPG was built in isolation; zero cross-file edges; the 'graph' was scattered islands."
+    rule: "Cross-file resolution is the thing that makes it a graph. Design the two-pass shape from the start; 'no inter-file edges yet' means 'not yet a graph'."
+    bites: [U6 ships IMPORTS as the first cross-file edge; the sealed ExtractedFileSet type]
+  - id: L-21
+    failure: "Hardcoded @falkordblite/linux-x64 paths spawned a Linux ELF on macOS (ENOEXEC); require.resolve succeeding proved nothing."
+    rule: "Do not override a library's platform detection without a reason you can name."
+    bites: [ND-2 docker/remote only; spawned deferred]
+  - id: L-22
+    failure: "Bottom-up delivery: twelve gated units before any human saw a graph, and it was a Cypher result table."
+    rule: "Order work by time to first human judgement, not dependency depth."
+    bites: [U2 puts the human's own repo on screen at unit two; P5 order]
+  - id: L-23
+    failure: "A 200-node golden JSON diff was made the human sign-off mechanism."
+    rule: "Goldens guard regressions; humans judge pictures and short tables. Never let one artifact claim both roles."
+    bites:
+      - "every gate: machine assertions AND a human-visible artifact (T-2)"
+  - id: L-24
+    failure: "The FalkorDB/Docker harness entered the critical path at unit 2, before anything existed to store; every later gate needed docker compose up."
+    rule: "Infrastructure enters the critical path when it earns its keep; until then hold it behind a seam with an in-memory implementation."
+    bites: [MemoryStore first; FalkorStore a SEAT until U5; NullGraphStore for --dry-run]
+  - id: L-25
+    failure: "Symbol resolution scheduled second-to-last while upstream units' gates could not pass without it (entanglement found mid-flight)."
+    rule: "Schedule the load-bearing capability early enough that the units before it can prove themselves; mutually dependent gates mean the split is wrong."
+    bites: [IMPORTS resolution at U6, headless calls at U8, not last]
+  - id: L-26
+    failure: "The core type vocabulary lived inside the renderer package; 13 files deep-imported dist/contract; four copies of the same rationale comment; the review-only rule was silently violated."
+    rule: "When the same rationale comment appears twice, the fix belongs in the dependency graph. Shared vocabulary goes in its own zero-dep package and the direction rule is a CI check."
+    bites: ["@cpg/model (U0); check-deps deep-import rule"]
+    where: "archive/discovery-20260916:packages/graph-visualizer/src/contract.ts"
+  - id: L-27
+    failure: "The package named file-watcher contained the scanner, AST pass, resolve pass and orchestration (1,364 LOC) while the real watcher was 46 zero-import lines; it depended on all four of its downstream consumers."
+    rule: "A package's name is its contract with the next reader. A package that depends on everything downstream is the composition root; name it so or split it."
+    bites: [packages/ layout; engine is the only package knowing >1 sibling; DQ-03 stage ownership]
+  - id: L-28
+    failure: "The composition root (WorkspaceSession, 120 LOC, no vscode import) was trapped in src/, so running headless required a 442-line duplicate harness hardcoding one developer's path."
+    rule: "A large duplicate harness reimplementing a small class is a composition root in the wrong package. Never hardcode a developer's path as a default."
+    bites: [DQ-08 apps/ own composition roots; C-CLI I-14]
+    where: "archive/discovery-20260916:src/dev/resolveHarness.ts:25 (grep -a)"
+  - id: L-29
+    failure: "Debug AST-dump-to-disk was a pipeline stage in the hot path, defaulting to ON."
+    rule: "Instrumentation subscribes to output; it never sits in the producing path; debug side effects default off."
+    bites: [C-PARSE I20 debugDumpsWritten === 0; C-CLI I-19]
+  - id: L-30
+    failure: "No test runner at all in a codebase whose seams were built specifically to be faked (WatchBackend, injectable clock, FixtureResolver)."
+    rule: "The seams are the expensive part; the runner is an afternoon. Add it in the same slice."
+    bites: [vitest from U0; every contract's suite runs in CI]
+  - id: L-31
+    failure: "The one declared gate was a hand-run script and nothing ran it; .github/ did not exist."
+    rule: "A gate is defined by what runs it. Every gate has an automated trigger or is explicitly manual with a named owner and a merge block."
+    bites: [CI from U0; GR2/GR5; the archived conformance suites ran in CI zero times — now wired per package]
+  - id: L-32
+    failure: "Design docs went stale the instant the code was rebuilt underneath them, with nothing signalling it; a branch's 'current strategy' doc was a byte-identical copy of another branch's snapshot."
+    rule: "A doc that names file paths is rewritten with the code or carries a machine-checkable staleness marker. Read code for state, docs for intent."
+    bites: [this outline's commit anchors; the schema drift check; the retirement battery re-run at unit boundaries]
+  - id: L-33
+    failure: "A test mock returned a raw array where FalkorDB returns { data: [...] }; the bug surfaced only at integration."
+    rule: "Derive fakes from the real adapter's declared type; at least one test exercises the real shape."
+    bites: [parameterised conformance suites run against MemoryStore AND FalkorStore (C-STORE INV-24)]
+
+what_worked:
+  - id: L-34
+    success: "Database selection decided by quantified benchmark against a stated fallback trigger (LadybugDB), written before measuring; the trigger was never hit."
+    rule: "State the threshold, measure against it, and write down in advance what would change your mind."
+    bites: [every decision's reopen_when; 06-measurements boundaries]
+  - id: L-35
+    success: "Zero-import, consumer-declared, host-implemented seams (WatchBackend, Resolver) — a fake costs ~45 lines."
+    rule: "Declare interfaces in the consumer, keep them dependency-free, implement in the host."
+    bites: [all nine contracts; 03-architecture §5]
+  - id: L-36
+    success: "The smallest slice that produces something checkable (file traversal -> JSON -> the existing webview) proved the host-to-webview pipeline end to end before anything else."
+    rule: "First slice = the thinnest end-to-end path through every process boundary, with output a human can judge."
+    bites: [U2]
+  - id: L-37
+    success: "REAL / PASSTHROUGH / SEAT: the whole shape landed compiling with each body labelled by how real it is."
+    rule: "Stub the shape out, labelled, before building any piece for real; 'architecture agreed' and 'feature works' become separate claims."
+    bites: [every unit's first PR; FalkorStore is a SEAT until U5]
+  - id: L-38
+    success: "Symbol identity kept in its own channel (fqn-keyed SYMBOL nodes, no file property), so a per-file replace can never sweep another file's edges."
+    rule: "Separate file-owned nodes from identity nodes at the schema level; the replace path deletes only file-owned nodes."
+    bites: [04-schema ownership classes; C-EXTRACT symbols channel]
+  - id: L-39
+    success: "Outside evidence gathered against named decision ids with a citation standard, BEFORE building more; it confirmed rather than challenged, which is a meaningful result."
+    rule: "Run the outside-evidence pass while the decision is cheap to reverse."
+    bites: [M-RESEARCH-competitors; the ND-n review flags]
+  - id: L-40
+    success: "Reverting the Bun/oxlint build without re-litigating the tools: the failure was process (no gates), not tooling."
+    rule: "Name the failure precisely enough that the revert is scoped to it."
+    bites: [T-1]
+  - id: L-41
+    success: "Seams documented with WHY and with what would break the invariant; enforcement moved into the compiler."
+    rule: "Comments explain reasoning; the compiler and CI enforce."
+    bites: [every contract's may_not lines cite the defect they prevent]
+  - id: L-42
+    success: "Ephemeral parallel Review -> Refactor -> QA agents with the code-review skill explicitly named took a suite from 161 to 355 passing tests and found two data-loss bugs."
+    rule: "Review agents must be told to use the code-review skill; post-refactor QA failures are usually tests asserting old behaviour."
+    bites: [working process; a story template note in 07-milestones]
+  - id: L-43
+    success: "START SIMPLE honoured as a hard scope constraint."
+    rule: "Do not add a generalization before its second concrete caller exists."
+    bites: [no DI container, no plugin registry, ProcessHost stays in @cpg/resolve, no daemon in v1]
+  - id: L-44
+    success: "Two-pass reindex: write all nodes, resolve cross-file edges second."
+    rule: "Cross-file relationships resolve in a pass that runs after every node they could point at exists; make the ordering explicit in the API."
+    bites: [sealExtractedFiles brand; ResolvePassEntry]
+  - id: L-45
+    success: "Soft-delete with a TTL grace window to disambiguate 'real delete' from 'first half of a move'; idempotent resurrection."
+    rule: "When two events are indistinguishable at arrival, buy time instead of guessing."
+    bites: [C-WATCH content-hash rename pairing within the batch window; directory-move relocation deferred with this as the known prior art]
+  - id: L-46
+    success: "Competitive finding: 4 of 5 tools hit the global load-time relink trap; the 5th built the fix and never wired it in."
+    rule: "Never key stable identity off a byte offset or the file a symbol lives in; never ship a relink mechanism that is not invoked — test that it is CALLED."
+    bites: [VD-05; U6c's gate asserts every IMPORTS target has DEFINES or a recorded status]
+  - id: L-47
+    success: "Competitive finding: nobody is incremental at the graph-write level; nobody parses with a language server; MCP surfaces of 7–28 tools show no correlation with sophistication."
+    rule: "Per-file incremental update is the differentiator to defend; <=12 tools is generous; count REGISTERED tools in a test."
+    bites: [PR2; AM-3; U10 gate]
+  - id: L-48
+    success: "Competitive finding: an untyped node model is a false economy (consumers re-derive type from a label string; same-named functions merge)."
+    rule: "Keep node schemas explicitly typed even under pressure to support many languages cheaply. Sparse is about cardinality, not vocabulary."
+    bites: [14 typed labels; C-MODEL may-not re-derive kind from name]
+
+cross_seam_defects_summary:
+  note: "Found while specifying the nine seams — every defect was AT a seam, none inside a stage. Full text, fixes and landing units in 05-contracts.yaml → cross_seam_defects."
+  items:
+  - { id: CS-1,  one_line: "path form declared three incompatible ways; every save doubled a file's node count while four checks stayed green", fixed_by: DQ-02, lands: U1 }
+  - { id: CS-2,  one_line: "the projector had no contract: 13 responsibilities were 'somebody else's'", fixed_by: DQ-03, lands: U1 }
+  - { id: CS-3,  one_line: "a delta could not construct a WriteOp; the atomic write had no producer", fixed_by: "toWriteOp in C-STORE", lands: U5 }
+  - { id: CS-4,  one_line: "six counters named seq/revision; the visual tier had no measurement point", fixed_by: "F-1 seq + revision_id; renderedSeq", lands: U1/U4 }
+  - { id: CS-5,  one_line: "a resolver crash reached no screen: 59.3% of edges absent, exit 0", fixed_by: "resolution-health check", lands: U6c }
+  - { id: CS-6,  one_line: "the purity proof passed against a violating implementation", fixed_by: "runtime trap under plain node with anti-vacuity check", lands: U2c }
+  - { id: CS-7,  one_line: "the budget was 9.2x optimistic on the resolver term", fixed_by: "measured inputs; the harness (DQ-04)", lands: U6c }
+  - { id: CS-8,  one_line: "elementDigest dropped at every seam; C4 checks compared bytes to bytes", fixed_by: "revision_id on every node (P-B)", lands: U1 }
+  - { id: CS-9,  one_line: "cpg verify could not exit 0 and was scheduled nowhere", fixed_by: "check split; ND-8; U2a deliverable", lands: U2a }
+  - { id: CS-10, one_line: "two merge tables contradicted; a deleted file stayed in the store forever", fixed_by: "one table; deletes absorb", lands: U4 }
+  - { id: CS-11, one_line: "rename relink had no owner; identity check passed on a stale resolution", fixed_by: "rename = deleted+created; identity-invariants checks target existence", lands: U2a/U4 }
+  - { id: CS-12, one_line: "no test compared two contracts' declarations", fixed_by: "contracts-agree.test.ts", lands: U1 }
+
+premises_at_risk_closed:
+  note: "The 2026-09-16 audit found 18 decisions whose stated rationale referenced something that no longer existed. Each is closed by a decision in this outline."
+  items:
+  - { id: LA3-01, premise: "sigma + ELK renderer chosen; cosmos.gl shipped instead and the choice was never reopened", closed_by: ND-3 }
+  - { id: LA3-02, premise: "the cpg-design errata certified a D3.js visualization chapter as current", closed_by: "archived; ND-3 is the renderer decision" }
+  - { id: LA3-03, premise: "cpg-design used CONTAINS for the filesystem edge the schema renamed HAS_ENTRY and reserved for the opposite meaning", closed_by: "04-schema reserved_names; cpg-design archived" }
+  - { id: LA3-04, premise: "50-schema.md was generated from code that existed only on an archive tag; its 'one source, never drift' guarantee was vacuous", closed_by: "U1 ports the registry; 04-schema.yaml is hand-maintained until then and says so; drift check from U1" }
+  - { id: LA3-05, premise: "the MCP pillar attached N shims to a daemon no plan created", closed_by: ND-1 }
+  - { id: LA3-06, premise: "engine status/event surfaces specified as cross-process IPC; replaced in-process without restating", closed_by: "ND-1; EventSink/SinkTelemetry in-process (C-SINK Q4)" }
+  - { id: LA3-07, premise: "AM-4's SCIP role assumed an in-daemon compiler API and a rejected LSP branch; both flipped", closed_by: "AM-4 restated: oracle role stands; live path = headless LSP subprocess (U8) / tsserver (U9)" }
+  - { id: LA3-08, premise: "every 'gated in CI' requirement was unexecutable: CI had been reverted", closed_by: "U0.1 commits the CI; DL-3" }
+  - { id: LA3-09, premise: "the plan told you to recover discovery code 'in place' from a working tree that had been reset", closed_by: "archive-coordinate convention; 11-salvage.yaml" }
+  - { id: LA3-10, premise: "two incompatible target package layouts were both 'the target'", closed_by: DQ-08 }
+  - { id: LA3-11, premise: "D33 named a daemon's watcher; the only watcher ever shipped was the VS Code one it demoted", closed_by: "P-A: the producer uses @parcel/watcher; the host supplies no producer input" }
+  - { id: LA3-12, premise: "D32 scoped wasm 'for daemon and VSIX'; the stopgap grammar package became the only source", closed_by: "C-PARSE Q5: vendor @vscode/tree-sitter-wasm@0.3.1; provenance recorded" }
+  - { id: LA3-13, premise: "'we already have the fixture corpus' pointed at files only on an archive tag", closed_by: "DL-1 restated; U6a restores goldens from the tags" }
+  - { id: LA3-14, premise: "the competitive study's parent pointer and baseline referenced trees on no branch", closed_by: "transcribed into M-RESEARCH-competitors; archived" }
+  - { id: LA3-15, premise: "D7's reversal was recorded at the D-row but the pillar files still said MCP-before-visualization", closed_by: "VD-07 reversed; U2 picture, U10 MCP" }
+  - { id: LA3-16, premise: "tie-ast-to-parent-file.md instructed execution on a branch reset past its code", closed_by: "archived; its one live idea (SOURCE_FILE edge, per-path promise chain) is in the schema and C-WATCH" }
+  - { id: LA3-17, premise: "STATUS said npm while bun.lock was still tracked", closed_by: "U0.1 deletes bun.lock (already deleted in the working tree)" }
+  - { id: LA3-18, premise: "AM-6's 'no host ships a modern MCP client' is a time-stamped market claim", closed_by: "SU-13: re-verify before U10" }

@@ -1,0 +1,451 @@
+# 02 — Decisions in force
+#
+# One entry per decision. Ids are namespaced because two earlier series both used "D1..Dn":
+#   DQ-nn  the 2026-09-16/17 decision queue, answered by the owner (binding, verbatim dispositions kept)
+#   F-n    follow-up questions created by those answers
+#   P-x    the three principles the answers established
+#   HO-x   the two human overrides that outrank the older corpus
+#   VD-nn  the 2026-09-11 vision-session decisions (status reconciled against everything since)
+#   AM-n   research amendments from the 2026-09-11 spikes
+#   DL-nn  delivery decisions from the first implementation ladder (kept where the principle survives)
+#   T-n    tooling decisions
+#   ND-n   NEW decisions this outline takes, with recommended defaults; `review: true` means the owner
+#          has not yet explicitly ratified them (silence at the outline review ratifies).
+#
+# Status vocabulary: in-force | amended | superseded | reversed | deferred | rejected
+# Every entry carries `reopen_when`: the observation that would justify reopening it. Reopening without
+# such an observation is re-litigation and is refused (P-C).
+
+principles:
+  - id: P-A
+    title: The producer always runs; every consumer is optional and configurable
+    from: [DQ-09]
+    statement: >
+      There is exactly one graph producer and it always runs. The browser picture, the FalkorDB store,
+      the MCP server and the VS Code panel are consumers you switch on. A terminal user who wants raw
+      throughput runs the producer alone. The VS Code extension is the producer launched with a
+      particular consumer set enabled.
+    consequences:
+      - the freshness budget is per enabled consumer set and is always reported with that set
+      - a verify check that needs a renderer reports `unavailable` when no renderer is enabled; that is a correct answer
+      - FalkorDB is a consumer like any other
+      - the host may supply consumers and configuration; it may never supply input to the producer (no editor events as truth, no dirty buffers, no workspace-folder authority)
+    owner_words: "some users don't use their IDE at all and have moved to a fully terminal-based experience … The graph producer should always run, but the consumers should be configurable and optional."
+    reopen_when: never; this is the product definition
+
+  - id: P-B
+    title: Revision reconciliation is the correctness spine
+    from: [DQ-06, DQ-01]
+    statement: >
+      Every :CPG node carries the revision_id (sha256 of bytes) of the file it was derived from; the FILE
+      node carries the same hash. A node whose revision_id differs from its file's is stale, provably, by
+      one indexed query. Every file on disk admitted by the walker has a FILE node. Edges carry no revision;
+      a node whose revision changed has, by construction, edges that are up for re-evaluation.
+    consequences:
+      - "`cpg verify` is thin: it runs the reconciliation and reports"
+      - staleness, dropped subtrees and duplicated files are caught by one mechanism
+      - the freshness promise has something to measure against
+      - a resolver that dies mid-save is NOT caught by this (the graph reconciles perfectly while missing edges); hence the separate `resolution-health` check
+    owner_words: "Code decides. Every token and call and element of the AST and CPG related to a file carries the revision_id and that revision_id reconciles to the file node's revision id (content hash)."
+    reopen_when: a defect class is found that reconciliation cannot see and no cheaper check exists
+
+  - id: P-C
+    title: The schema is versioned and evolvable, not frozen
+    from: [DQ-01, F-3]
+    statement: >
+      The 14 node labels and 15 edge types are settled and protected from re-litigation. Properties on them
+      are expected to grow continuously through implementation. Additive change is free; adding a type needs
+      one paragraph; renaming, removing or changing meaning needs the reopening test.
+    owner_words: "The nodes and edges are not the schema I am calling into question. The actual properties/attributes attached to those nodes for intelligence and analytics is. … the bones are good and I don't have a reason to throw it out."
+    reopen_when: node or edge types are being added often (signal the ontology was wrong)
+
+human_overrides:
+  - id: HO-a
+    date: 2026-09-16
+    title: CLI purity is a hard invariant
+    statement: Core packages run under plain node with zero `vscode` import, enforced by a build gate and a runtime proof.
+    effect: puts the 2026-09-15 "executeDefinitionProvider is the primary resolver" decision OUT OF FORCE; restores VD-26 (adapter-native first) as primary; a VS Code-only resolver may be an optional chained link registered by the host, never primary.
+  - id: HO-b
+    date: 2026-09-16
+    title: Constraint rank (lexicographic)
+    statement: "1 CLI-first · 2 visual validation · 3 visual cache AND FalkorDB fresh < 2 s on a delta · 4 VS Code dependency hygiene · 5 sparse AST (prunable later)."
+    effect: rank 3 puts the store inside the freshness budget, which reopened WHEN FalkorDB enters (answered by DQ-10/F-2), not WHETHER it can keep up (benchmarked, accepted).
+
+decision_queue:
+  - id: DQ-01
+    title: What a change to the graph means (model semantics)
+    status: in-force
+    decided_on: 2026-09-16
+    options_considered: [(a) shipped semantics — concatenate on re-add, no revision, (b) full proposal — revision/baseRevision, Read<T>, validatePayload, composeDeltas, edgeId, removedEdgeIds, (c) narrowed proposal with owner-discriminated merge]
+    decision: (c) narrowed, with two amendments
+    owner_words: "I want revision id for freshness fingerprints, not tracking revisions over time. Validation is important in the models and needs to evolve as discovery uncovers needs in data or structure of relationships in the graph. Approve on option C with narrowed version. Also want to leave the door open for schema evolution as we build/design the graph ontology."
+    amendments:
+      - revision is a FINGERPRINT (one value per file, overwritten each save, no history), not a version log; combined with DQ-06 it is the file's content hash
+      - schema evolution stays open (P-C)
+    consequences:
+      - "@cpg/model keeps validation, gains revision_id on nodes; drops composeDeltas, edgeId, removedEdgeIds (no consumer among the nine contracts)"
+      - "re-adding a node id is neither concat nor whole-node replace: it is a MERGE discriminated by producer/tier (filesystem tier vs code tier), so two producers describing one file cannot destroy each other's data (L-01)"
+      - "the shipped characterization test that asserts duplicate-append is inverted in the same commit that lands the merge"
+      - "5 of the 8 failing adversarial probes disappear because the machinery they test is not built"
+    evidence: [M-LEGIBILITY-C3 (699 payload nodes render as 658 with duplicate ids), L-01]
+    unit: U1
+    reopen_when: a consumer needs delta composition or edge identity (then add it, additively)
+
+  - id: DQ-02
+    title: Path form
+    status: in-force
+    decided_on: 2026-09-16
+    decision: relative wins
+    owner_words: "Relative paths - FOR SURE."
+    statement: >
+      WorkspacePath (workspace-relative, POSIX separators, no leading ./) is the graph's identity form.
+      AbsolutePath exists for exactly two adapters: FilesystemProbe (touches the disk) and SourceOpener
+      (opens a file in an editor). The node id scheme is confirmed: path:kind:qualifiedScopePath[:ordinal|:bodyHash],
+      no file content hash ever.
+    consequences:
+      - graphs are portable and diffable across machines and checkouts; goldens are possible
+      - the store's scope-delete and every node's `file` property agree, closing CS-1 (every save silently doubled a file's node count while four checks stayed green)
+      - the content hash lives on the node as revision_id and never in the id (same hash, opposite requirements)
+    evidence: [CS-1, AM-1]
+    unit: U1
+    reopen_when: never after the first persisted write; changing path form invalidates every id in every graph anyone has built
+
+  - id: DQ-03
+    title: The missing contracts (the unowned middle)
+    status: in-force
+    decided_on: 2026-09-16
+    options_considered: [(a) write C-PROJECT, C-FS, C-VERIFY as contracts 10–12, (b) fold responsibilities into existing contracts with named owners]
+    decision: (b) fold, written properly as its own task; each stage owns its data explicitly
+    owner_words: "We should write the contracts and assign a home. Go with option B. … I should have a clear vision of what data is captured and how the model is enriched as it moves through this engine. Each stage should have clear ownership boundaries of data. For example - the filewatcher clearly should own file-related data - that might include the path and filesize and sha hash for revision id?"
+    consequences:
+      - the stage-ownership table in 03-architecture.md §4 is the deliverable of this decision
+      - toWriteOp(file) is required in C-STORE; applyResolutions is required in C-RESOLVE (rules 17/18 become invariants); the filesystem tier belongs to the engine/CLI; revision_id is minted by WATCH ("yes, and it should be the watcher's job")
+      - "C-SCHEMA is written regardless: it is the U1 registry port"
+      - each fold is a required function signature in a specific contract, not a sentence
+    evidence: [CS-2, CS-3, L-27, L-28]
+    unit: U1 (table), U2–U6 (implementations)
+    reopen_when: a folded responsibility grows past ~300 LOC in its host contract (then split it out, which is cheap)
+
+  - id: DQ-04
+    title: Measure the resolver before committing the plan
+    status: in-force, materially upgraded
+    decided_on: 2026-09-16
+    decision: yes, and far more than a half-day spike — a standing verification harness that lands early and grows with the resolver
+    owner_words: "We should FOR SURE spend time testing every aspect of the parsing logic, measuring and proving it. This literally is the most critical element of the entire engine. If we can't parse and resolve across files, the CPG fails altogether. Half a day is probably not even close to enough time for the amount of rigor and care I hope we can apply to this layer of the application."
+    consequences:
+      - "epic E-VERIFY: golden corpus with known-correct answers per language; precision and recall against a language-server oracle; per-language ceilings; latency as a distribution per file size and ref-site count; degradation as a first-class reported number"
+      - the freshness promise stops being derived from an estimate; we may learn 2 s wall-to-wall is not keepable at the current design, and learn it from the harness rather than a user
+      - "the measured inputs replace derived ones everywhere: 0.5585 sites/LOC and 2.4788 ms/site, not 0.2 and best-case"
+    evidence: [CS-7, M-RESOLVE-*]
+    unit: U6c (v1), U8, U9
+    reopen_when: never; this is a standing capability
+
+  - id: DQ-05
+    title: What "under 2 seconds" promises
+    status: in-force
+    decided_on: 2026-09-16
+    decision: the human clock, end to end, covering both consumers
+    owner_words: "From file save to resolved graph in falkordb and visual. Wall to wall save->interface layer."
+    statement: >
+      T0 = filesystem event (the human's clock, not the pipeline's; the debounce has a declared maxWaitMs
+      so a burst cannot delay indefinitely). T3 = the change is visible in every enabled consumer, including
+      the FalkorDB read-back and the rendered picture. One seq allocator; renderedSeq and confirmedSeq make
+      both tiers measurable. The number is always stated with the enabled consumer set.
+    consequences:
+      - the assembled budget for a 1,068-LOC Python save is ~1,674 ms p50 against 2,000, with the resolver at 88%; it fits at the median and fails at any tail (06-measurements budget)
+      - the real limit is ~725 ref sites ≈ ~1,300 changed Python LOC per save (3–5 files), not "~11 files"
+      - "cross-file staleness: F-4 disposition applies"
+      - "P-A softens this for terminal users: a headless run does not pay the render leg"
+    evidence: [M-LATENCY-*, M-BUDGET]
+    unit: U4 (file tier), U7 (code tier proven)
+    reopen_when: the harness shows the budget is not keepable; then the promise is restated per measured budget, never silently relaxed
+
+  - id: DQ-06
+    title: The verify command
+    status: in-force, elevated to P-B
+    decided_on: 2026-09-16
+    decision: code decides, via revision_id reconciliation from every node up to its file's content hash
+    owner_words: see P-B
+    consequences:
+      - "`cpg verify` has six checks (filesystem-reconciliation, identity-invariants, id-uniqueness, render-reconciliation, revision-reconciliation, resolution-health) and four states (pass, fail, stale, unavailable): one shared enum replacing C-CLI's four and C-EXT's four (08-verification.md); `render-reconciliation` is `unavailable` without a renderer consumer; `--strict` fails on `unavailable`"
+      - "`cpg verify` is a named deliverable of U2a, not an afterthought (CS-9: the word verify appeared zero times in the spine)"
+      - a fifth check `resolution-health` fed from ResolveReport, because reconciliation cannot see a resolver that died (CS-5)
+      - when both surfaces exist the VS Code view outranks the browser for daily use; neither is the gate
+    evidence: [CS-5, CS-9, M-LEGIBILITY-*]
+    unit: U2a
+    reopen_when: never
+
+  - id: DQ-07
+    title: Fate of the old documentation
+    status: amended by ND-7 (2026-09-17)
+    decided_on: 2026-09-16
+    decision: neither delete nor keep — neutralize
+    owner_words: "I want a `superseded` or `archived` folder with an AGENTS.md that instructs agents to ignore all content within those folders. Similarly, each file should be updated so it includes a disclaimer and agent instructions at the beginning of it which instructs agents to ignore the file's contents and that the file exists PURELY for history."
+    amendment_2026_09_17: the archived folder lives on a `docs/archive` BRANCH, not in the develop/master working tree, so greps in the working tree can never surface it (ND-7)
+    consequences:
+      - the success criterion changes from "docs/ is deletable" to "docs/ is inert and this outline is self-contained"
+      - "three mechanical reinforcements: the citation gate refuses retired paths in live docs; the archive is read-only except for adding headers; every archived file begins with the exact header block (checked)"
+      - the R2 cross-seam defects are transcribed into 05-contracts.yaml before archiving (done here)
+    unit: follow-up task after this outline is reviewed (12-retirement.md)
+    reopen_when: never
+
+  - id: DQ-08
+    title: Where the extension lives, and what packages/ is for
+    status: in-force
+    decided_on: 2026-09-17
+    options_considered: [(a) src/ stays, (b) packages/extension with a gate exemption, (c) exemption declared in the package manifest, (d) separate layer from location — packages/ core, apps/ front doors]
+    decision: (d)
+    owner_words: "Yes. this is now making sense. Given our monorepo structure, your proposal to move the consumers into the apps/ layer makes complete sense. Let's go with your proposed option D"
+    statement: >
+      packages/** is core: host-free, portable, runs under plain node, no composition roots. apps/* are front
+      doors: each owns a composition root and may import its own host SDK and only its own. The gate rule
+      has no per-package exceptions.
+    consequences:
+      - src/extension.ts moves to apps/vscode/ now, while src/ holds one file (ND-4)
+      - the CLI is classified honestly as apps/cli (it has a composition root); the browser inspector is apps/inspector; MCP later apps/mcp
+      - U3's "zero new engine code" becomes a build failure when violated
+      - packages/ is the producer; apps/ are the consumers — P-A visible in `ls`
+      - "three small items settled with it: the plan states 10 units / 16 PRs in one row; cpg.config.yaml is adopted with its loader shipping with `cpg index` at U2; MCP stays at U10 with scope unchanged"
+    evidence: [L-26, L-28, L-27]
+    unit: U0.2
+    reopen_when: never; an invariant with an exemption list is how the invariant dies
+
+  - id: DQ-09
+    title: Host-only edges (withhold receiver-type calls until the resolver is headless?)
+    status: in-force, promoted to P-A
+    decided_on: 2026-09-16
+    decision: exactly one producer makes the graph and it runs under plain node; the extension does not write edges the CLI cannot
+    owner_words: see P-A
+    consequences:
+      - EVAL_TYPE reserved by name and shape in the schema with producer none-yet; admitted at U8 gated on a re-run of S3 at >= 95% of ceiling; no schema change at admission
+      - resolvedBy and confidence flip to golden exclude so one golden set is possible
+      - TypeScript symmetrically held until U9's spike reports
+      - the parser does NOT read unsaved editor buffers in v1 (a graph from dirty buffers is not reproducible by cpg index)
+      - the VS Code host may register executeDefinitionProvider as an optional chain link behind the same seam, as an oracle or an extra link, never as the primary producer and never writing a second population under CALLS (L-01)
+    evidence: [M-RESOLVE-ceiling 31.0%/32.6%, M-RESOLVE-receiver 59.3%, M-RESOLVE-precision 0/305]
+    unit: U1 (reserve), U8 (admit)
+    reopen_when: a measured TypeScript arm below ~80% of ceiling with no headless path found inside a timebox (then per-language producer tiers with a distinct edge label per tier, still never a host-variant CALLS)
+
+  - id: DQ-10
+    title: When FalkorDB enters, and what CI asserts
+    status: in-force
+    decided_on: 2026-09-16
+    decision: FalkorStore is a SEAT until a live delta stream exists, promoted at U5; the CI gate asserts the write was exactly one statement, plus a runner-tolerant absolute ceiling; the latency band is a local benchmark
+    owner_words: "I agree with your recommendation here. Wall clock is not a hard CI gate. Falkor enters ONLY AFTER we have the graph generation engine with streamed deltas functioning for incremental atomic updates."
+    consequences:
+      - CI asserts receipt.statementCount === 1 (free, deterministic, catches the 51x many-small regression) and a ~200 ms absolute ceiling
+      - a torn-batch test lands with U5 (a round trip that dies halfway commits some files and not others)
+      - p95 16 ms measured on Apple Silicon over loopback is NOT a CI gate; it would flake and a disabled gate is not a gate
+    evidence: [M-FALKOR-atomic, M-FALKOR-51x]
+    unit: U5
+    reopen_when: a measurement above ~500k nodes shows the atomic replace degrading superlinearly (then U5 acquires a sharding decision)
+
+follow_ups:
+  - id: F-1
+    title: Keep a transport sequence number alongside the revision fingerprint?
+    status: in-force
+    decision: keep both, named `revision_id` (content hash, on every node) and `seq` (monotonic per workspace, on the delta envelope only, never on a node)
+    owner_words: "Keep both. Call them `revision_id` for the content hash and `seq` for the sequence id."
+    rationale: revision_id detects staleness and is not ordered; seq detects lost or reordered deliveries and says nothing about currency. Six counters once shared these names across five granularities (CS-4); now there are exactly two with one allocator each (SINK owns seq; WATCH mints revision_id).
+    unit: U1, U4
+
+  - id: F-2
+    title: Does FalkorDB move from U5 to after U6?
+    status: in-force
+    decision: NO — stays at U5
+    owner_words: "Let's keep it on the file write and NOT move to U6. I like having falkor as a first-class consumer that lets us immediately start inspecting the output of our file-watcher. We can continue to evolve our interrogation of the graph as the graph itself evolves. We can also have agents interact with the FalkorDB via cypher early to check our processing logic with simple traces through the graph to ensure the graph is being built in such a way to answer REAL questions as it is being built."
+    consequences: [U5 gates on a synthetic 450-node/449-edge replace so the write shape is proven at volume before U6 supplies real volume; agents may query the file-tier graph via Cypher from U5]
+    unit: U5
+
+  - id: F-3
+    title: How does the schema stay evolvable without losing its protection?
+    status: in-force (see P-C and 04-schema.yaml evolution_policy)
+    decision: additive evolution is free; breaking changes need the reopening test; the schema carries a version and conformance tests are generated from it
+    unit: U1
+
+  - id: F-4
+    title: Which revision does a cross-file edge belong to?
+    status: in-force
+    decision: edges carry NO revision_id; only nodes do
+    owner_words: "Edges don't have revision_ids. Only Nodes. If a node is impacted by a file revision, the edges associated with that node, are, out of necessity, up for re-evaluation and likely invalid. Importantly, the revision is not an attribute of the edge and never should be. The language server will need to help determine how deep we go for establishing the changes' blast radius, not an attribute on the edge."
+    consequences:
+      - a cross-file edge A->B is re-evaluated when either endpoint's node is re-derived; blast radius is computed by the resolver/cascade (reverse-dependency invalidation, ND-9), not stored on edges
+      - until U7 lands cascade, the freshness claim explicitly excludes cross-file staleness caused by a change to the TARGET file (stated in writing, per DQ-05)
+    unit: U7
+
+new_decisions:
+  - id: ND-1
+    review: true
+    title: MCP reads through the store; no cpg daemon in v1
+    statement: The MCP consumer (U10) reads the graph through GraphStore (FalkorDB when enabled, memory otherwise, in-process). No detached daemon, no .cpg/engine.json discovery, no shim-to-engine IPC in v1.
+    rationale: Roughly fifteen must-priority requirements in the old corpus described attaching N shims to one engine process that no plan creates (LA3-05/06). Under P-A the store is already the shared, queryable surface. The daemon design (VD-36, X13, R5's attach algorithm) is preserved, not cancelled.
+    reopen_when: a second process needs the PRODUCER live (for example, an MCP client that must observe deltas as they happen rather than query the store)
+    supersedes_in_part: [VD-36]
+
+  - id: ND-2
+    review: true
+    title: FalkorDB modes in v1 are remote and docker; spawned is deferred
+    statement: The store connects to an existing instance (remote, default 127.0.0.1:6382 for dev) or runs the pinned image via docker. The spawned mode (download the module, run redis-server --loadmodule) is not built.
+    rationale: FalkorDB publishes no standalone server binary; spawned mode cost ~1,100 LOC plus a hand-maintained checksum manifest to work around that and still required the user to install Redis. Docker is the fallback every remedy pointed at anyway. The archived acquire/checksum/cache code is kept in 11-salvage.yaml as ADAPT if this reverses.
+    reopen_when: a zero-dependency local start becomes a stated distribution requirement (VD-24 marketplace story)
+    supersedes_in_part: [VD-24, VD-36]
+
+  - id: ND-3
+    review: true
+    title: The inspector picture uses the archived cosmos.gl renderer; layered layout is deferred
+    statement: apps/inspector and the VS Code panel render with the discovery lineage's graph-visualizer (cosmos.gl, GPU force layout, radial seed) with a seed threaded through layoutPayload for determinism. The 2026-09-11 choice of sigma + ELK (layered layout for impact/path views) is deferred to the view that needs direction.
+    rationale: The picture is a liveness check, not a correctness check (M-LEGIBILITY); it is one renderer serving both hosts; the code is 9 PORT / 7 ADAPT and already measured. LA3-01 recorded that the renderer decision was silently substituted; this makes it explicit.
+    reopen_when: an impact or path view ships and needs a DAG layout (then ELK for that view only)
+    supersedes: [VD-30 in part (rendering stack)]
+
+  - id: ND-4
+    review: true
+    title: The apps/ split happens now (U0.2), while src/ holds one file
+    statement: Move src/extension.ts to apps/vscode/src/extension.ts; extend check-deps with the two-tier rule; prove it fails both ways.
+    rationale: DQ-08 said "in the unit that next touches it — U3 — or now, while it is one file." Every later unit makes the move more expensive; U2 creates apps/cli and apps/inspector and needs the tier rule in place.
+
+  - id: ND-5
+    review: true
+    title: Schema version 2 -> 3 for the required revision_id property
+    statement: Adding revision_id (cardinality one) to every :CPG label and to FILE is a required-property change and bumps meta.version to 3 at U1. META_DATA.schema_version mismatch triggers rebuild, which is the correct behaviour for a graph that is a cache.
+
+  - id: ND-6
+    review: true
+    title: Python before TypeScript within U6
+    statement: U6a lands the Python adapter and goldens; U6b lands TypeScript. Both ship in U6.
+    rationale: VD-09 as amended 2026-09-15 (Python first). All resolution measurements are Python-only; TypeScript structural extraction was measured (S2) but TS resolution was not.
+
+  - id: ND-7
+    title: Retirement to a docs/archive branch
+    decided_on: 2026-09-17
+    decided_by: owner
+    statement: >
+      The retired documentation (everything formerly under the docs directory except this outline, plus
+      the deliberation corpus that was never committed) is committed and pushed on a branch named
+      `docs/archive` under one top-level folder with an AGENTS.md and per-file disclaimers, so it is
+      recoverable but never present in the master or develop working trees.
+    owner_words: "Commit and push a branch called `docs/archive` so the archived docs are recoverable if necessary, but also not in the `master` or `develop` working tree where it can and will pollute the agents' context when it inevitably greps the content."
+    amends: DQ-07
+    unit: follow-up task (12-retirement.md)
+
+  - id: ND-8
+    review: true
+    title: render-reconciliation is `unavailable` without a renderer consumer
+    statement: The verify check that compares rendered node count to payload node count reports `unavailable` (not `fail`, not `skipped`) whenever no renderer consumer is enabled; `--strict` treats `unavailable` as failure. This resolves CS-9 (the CLI could not compute its own mandatory check set) without weakening the check.
+
+  - id: ND-9
+    review: true
+    title: Cascade is bounded by interface-hash gating, designed into extraction at U6 and enforced at U7
+    statement: >
+      EXTRACT emits FILE.interface_hash (normalized exported-declaration surface: names, kinds, signatures,
+      re-exports). On save, if interface_hash is unchanged the cascade is zero files. If changed, dependents
+      are the files with IMPORTS/CALLS/INHERITS_FROM edges into the changed SYMBOLs, not the whole importing
+      file set. When the remaining cascade exceeds the per-save budget, the saved file is `ready`, dependents
+      are marked `stale` with `stale_reason`, and the background drains them. Readers are never blocked.
+    rationale: X12/VD-17/RK9 (severity high, "must be designed in from day one"); TypeScript's BuilderState does exactly this. Nothing in the nine contracts bounded cascade (CS-7 note).
+    unit: U6 (emit), U7 (enforce)
+
+  - id: ND-10
+    review: true
+    title: Statement-level identity non-foreclosure test
+    statement: U1's identity tests mint and round-trip a synthetic statement-level id using the `:ordinal` slot of the id rule. If the test cannot be written, the CFG tier is genuinely foreclosed and the deferral (VD-23, VD-10) must be re-argued immediately.
+    rationale: Reserved names alone are theatre; an executable test is not (motion M3).
+
+vision_decisions:
+  # 2026-09-11 session; status reconciled 2026-09-16 (LA1) and against DQ/F/ND above.
+  - { id: VD-01, text: "Cypher is a hard requirement.", status: in-force, note: "Scope was narrowed to the FalkorDB tier; HO-b rank 3 restores its reach at U5." }
+  - { id: VD-02, text: "FalkorDB primary store; LadybugDB fallback with a defined trigger (replace p95 <=150 ms @1e6, reader p95 <=150 ms under writes, no unbounded memory).", status: in-force, note: "Trigger never hit in benchmarks. Entry timing settled by DQ-10/F-2 at U5." }
+  - { id: VD-03, text: "macOS + Linux now, Windows eventually.", status: in-force }
+  - { id: VD-04, text: "Structural tier by default, expression tier opt-in.", status: in-force, note: "HO-b ranks sparseness 5th but measurement (S2) settled that the expression tier is never collected by default; 'collect now, prune later' is rejected." }
+  - { id: VD-05, text: "SYMBOL indirection so per-file replace never breaks cross-file edges.", status: in-force, note: "Reaffirmed by the competitive study (4 of 5 tools hit the global-relink trap) and by L-38." }
+  - { id: VD-06, text: "Analytics run on projections (call/import/type graphs), not the raw CPG.", status: in-force, note: "Unexercised until U10." }
+  - { id: VD-07, text: "Agent-first; MCP is the v1 wedge; visualization ships after.", status: reversed, note: "HO-b rank 2 makes the picture the first human surface (U2) and MCP last (U10). The agent-first GOAL survives as goal 2 in the charter; only the sequencing reversed." }
+  - { id: VD-08, text: "Headless engine as a standalone process/CLI; VS Code extension is a thin host.", status: amended, note: "CLI-purity half re-hardened by HO-a/DQ-08. Daemon half deferred (ND-1)." }
+  - { id: VD-09, text: "v1 languages: TypeScript and Python.", status: amended, note: "Python first, TypeScript second (2026-09-15, ND-6)." }
+  - { id: VD-10, text: "Taint / interprocedural data flow is north star, not v1.", status: in-force }
+  - { id: VD-11, text: "Save-to-ready <= 2 s hard ceiling.", status: superseded, by: [VD-17, DQ-05] }
+  - { id: VD-12, text: "Layers inferred by community detection, labeled by agents via MCP.", status: superseded, by: [VD-15, VD-16] }
+  - { id: VD-13, text: "v1 acceptance: quality graph of dogfood repo + save-to-ready < 2 s + agent finds/mitigates seeded bugs > 95% via MCP.", status: in-force, note: "Fixture relocated in-repo (DL-1); the seeded-bug eval is deferred until a hand-audited golden exists (VD-27)." }
+  - { id: VD-14, text: "One graph per workspace.", status: in-force }
+  - { id: VD-15, text: "v1 analytics expose clusters and members; no persisted labels; MCP read-only.", status: in-force }
+  - { id: VD-16, text: "Layer labeling, allowed-edge rules, import-violation detection are north star.", status: in-force }
+  - { id: VD-17, text: "Save-to-ready covers saved file + cascade: target 2 s, ceiling 5 s.", status: amended, by: [DQ-05], note: "Clock is now the human clock T0->T3 per enabled consumer set; the 5 s ceiling remains the hard bound on file + cascade." }
+  - { id: VD-18, text: "The correctness fixture stays hand-auditable; perf uses a separate scale fixture.", status: in-force, note: "Both fixtures live in-repo (DL-1)." }
+  - { id: VD-19, text: "No host-specific agent targets; stdio transport first.", status: in-force, note: "U10." }
+  - { id: VD-20, text: "First launch <= 10 min (~100k LOC assumed).", status: in-force }
+  - { id: VD-21, text: "Readers never blocked; over-budget cascades mark dependents STALE; explicit status property on every node.", status: in-force, note: "Mechanism is ND-9." }
+  - { id: VD-22, text: "MCP serves a partial graph with coverage status during first launch.", status: in-force, note: "Inert until U10." }
+  - { id: VD-23, text: "v1 layers: filesystem, symbols, types, imports, calls, sparse REACHING_DEF; CFG/PDG and expression tier deferred.", status: amended, note: "EVAL_TYPE reserved for U8 (DQ-09)." }
+  - { id: VD-24, text: "Engine bundled in VSIX + npm; FalkorDB downloaded on first run, pinned + checksummed.", status: amended, by: [ND-2], note: "npm + VSIX distribution stands; the first-run download (spawned mode) is deferred." }
+  - { id: VD-25, text: "Privacy and local compute are design principles (PR7).", status: in-force }
+  - { id: VD-26, text: "Adapter-native resolution first; unresolved rate tracked; resolver seam designed now.", status: in-force, note: "Restored to primary by HO-a." }
+  - { id: VD-27, text: "Seeded-bug catalogue deferred until a clean, hand-audited golden graph exists.", status: in-force }
+  - { id: VD-28, text: "TS adapter covers .ts/.tsx/.js/.jsx/.mts/.cts/.mjs/.cjs; SFCs deferred.", status: in-force, note: "javascript grammar maps to NO adapter on purpose (aliasing to TS would silently drop every JS class field); JS coverage is a U6b/U9 question." }
+  - { id: VD-29, text: "Query History (optional, off by default).", status: in-force, note: "Post-U10." }
+  - { id: VD-30, text: "Visualization as separate relocatable VS Code views + editor tab.", status: amended, by: [AM-2, ND-3] }
+  - { id: VD-31, text: "Node ids path:kind:qualifiedScopePath[:ordinal|:bodyHash]; no file content hash in ids.", status: in-force, note: "Confirmed by DQ-02." }
+  - { id: VD-32, text: "web-tree-sitter (wasm); trees cached for open docs + LRU(100).", status: in-force, note: "Native rejected on a measured segfault; 1.6x native speed buys nothing against the budget." }
+  - { id: VD-33, text: "@parcel/watcher is the watcher; VS Code events are hints only.", status: in-force, note: "Under P-A the host never supplies producer input; the VS Code watcher backend is not used by the producer." }
+  - { id: VD-34, text: "SYMBOL.fqn uses SCIP descriptor grammar; SCIP indexers are the golden oracle; TS compiler API is the live precise upgrade path.", status: amended, note: "Oracle role stands (AM-4); the live path is now the headless language-server subprocess (U8) and tsserver (U9)." }
+  - { id: VD-35, text: "MCP shim is dual-era (SDK v2 serveStdio), explicit --workspace, <= 12 tools.", status: in-force, note: "Re-verify 'no host ships a modern client' before building (AM-6 is time-sensitive)." }
+  - { id: VD-36, text: "Detached CLI-owned daemon; extension attaches or spawns, never kills.", status: deferred, by: [ND-1] }
+  - { id: VD-37, text: "Schema alignment option (b): Joern names where they overlap; sparse/SCIP divergences documented.", status: in-force }
+
+proposals_from_the_vision_session:
+  # X-ids kept for traceability; status only.
+  - { id: X1,  text: "Headless core, VS Code as one host.", status: became VD-08; intent restored by HO-a }
+  - { id: X2,  text: "Git awareness as a first-class event source; commit-to-commit graph diff.", status: deferred (north star); bulk mode for git operations kept in U4 }
+  - { id: X3,  text: "tree-sitter is not enough; SCIP or LSP as pluggable resolver.", status: amended (AM-4); LSP branch closed by HO-a in favour of a headless LSP subprocess }
+  - { id: X4,  text: "High-level MCP tools over raw Cypher.", status: in-force (U10) }
+  - { id: X5,  text: "Impact analysis is the killer agent tool.", status: in-force (U10) }
+  - { id: X6,  text: "Architecture rules declared then verified.", status: superseded (north star) }
+  - { id: X7,  text: "Visualization is always query-scoped.", status: in-force (every view is focus + hops + filters) }
+  - { id: X8,  text: "MCP over streamable HTTP.", status: reversed for v1 (stdio) }
+  - { id: X9,  text: "Durable agent-writable annotation layer.", status: deferred (north star) }
+  - { id: X10, text: "Reference app + eval harness.", status: revised — two fixtures with different jobs (correctness golden; scale) }
+  - { id: X11, text: "Workspace-root cpg.config.yaml; manifests for discovery only.", status: adopted by DQ-08 (loader ships with cpg index at U2) }
+  - { id: X12, text: "Interface-hash gating keeps the cascade bounded.", status: in-force, load-bearing (ND-9) }
+  - { id: X13, text: "stdio MCP shim in front of a shared headless engine.", status: deferred (ND-1) }
+  - { id: X14, text: "Download the native server on first activation.", status: deferred (ND-2) }
+
+research_amendments:
+  - { id: AM-1, text: "Node id drops the file content hash: ${path}:${kind}:${qualifiedScopePath}[:ordinal|:bodyHash]. Measured: move/insert-above/reformat -> 0 id changes; rename -> 1 delete + 1 create.", status: in-force (discharged by the archived identity tests; re-created at U1/U6) }
+  - { id: AM-2, text: "Webview views relocate between primary sidebar, panel and secondary sidebar only; an editor-area surface needs a separate WebviewPanel with a serializer; viewsWelcome does not render in webviews.", status: in-force (platform limit) }
+  - { id: AM-3, text: "MCP tool ceiling <= 12 (Cursor silently drops past ~40 across all servers; OpenAI advises < 20; VS Code caps 128/request; 7 tools sufficed in a real competitor).", status: in-force; which 2–3 analytics tools make the 12 is still open (U10) }
+  - { id: AM-4, text: "SCIP indexers are whole-project only and never single-file incremental: golden oracle and CI pass, not a live resolver. Live precise path: headless language server (Python: basedpyright over LSP; TS: tsserver or compiler API with Program reuse).", status: in-force as the PRIMARY path under HO-a }
+  - { id: AM-5, text: "SYMBOL.fqn = SCIP descriptor only; scheme/manager/package/version as separate properties; no `local N` symbols in the graph.", status: in-force; plus the m0 divergence that EXTERNAL symbols carry scheme:package inside the fqn for UNIQUE safety }
+  - { id: AM-6, text: "MCP spec 2026-07-28 removed initialize/sessions; shim must be dual-era; only the transport writes stdout; never process.exit on engine errors.", status: in-force, TIME-SENSITIVE (re-verify host survey before U10) }
+  - { id: AM-7, text: "Cache tree-sitter trees only for open documents + LRU(100); tree.delete() on eviction; getChangedRanges is a hint not a bound; guard tree.edit with a periodic S-expression equality check.", status: in-force (U6) }
+
+delivery_decisions_carried:
+  - { id: DL-1,  text: "The correctness fixture lives in-repo under test/fixtures, not an external repo.", status: in-force (restore from archive/master-20260916 and archive/m0-calls-symbols-20260916 goldens at U6a) }
+  - { id: DL-2,  text: "Near units sliced PR-by-PR; far units named with exit criteria and sliced later.", status: "in-force (07-milestones — U0–U6 have stories; U7–U10 have features and exit criteria)" }
+  - { id: DL-3,  text: "CI stood up in the first unit so every later unit has somewhere to be gated.", status: in-force (U0.1) }
+  - { id: DL-4,  text: "packages/engine + cli + vscode layout.", status: superseded by DQ-08 (packages/ + apps/) }
+  - { id: DL-5,  text: "oxlint + oxfmt + lefthook.", status: reverted (T-1); expected back once the redo can absorb them }
+  - { id: DL-6,  text: "INHERITS_FROM{relation} merges EXTENDS/IMPLEMENTS.", status: in-force }
+  - { id: DL-7,  text: "Write mechanism split by node class: file-owned DELETE+CREATE; SYMBOL MERGE-on-fqn.", status: in-force }
+  - { id: DL-8,  text: "TARGETS/DEPENDS_ON rebuilt periodically + computed_at + manual refresh; never on every save.", status: in-force }
+  - { id: DL-9,  text: "REJECT CONFIG_FILE, CLOSURE_BINDING, DEPENDENCY, TEMPLATE_DOM.", status: in-force }
+  - { id: DL-10, text: "TYPE_PARAMETER/TYPE_ARGUMENT/BINDS/EVAL_TYPE -> v2; generics folded into type_text.", status: amended (EVAL_TYPE reserved for U8 by DQ-09) }
+  - { id: DL-11, text: "Unified needs_triage TAG for FILE{error}, UNKNOWN, unresolved CALLS/IMPORTS.", status: in-force }
+  - { id: DL-12, text: "Schema alignment option (b); INHERITS_FROM points at SYMBOL.", status: in-force }
+  - { id: DL-13, text: "Sparse REACHING_DEF in v1; schema version 2.", status: in-force }
+  - { id: DL-14, text: "Shortest honest route to real data in the graph; watcher/cascade and daemon/MCP are not on the near-term path.", status: in-force in spirit (U2 puts real data on screen at unit two) }
+
+tooling:
+  - { id: T-1, text: "Tooling is npm + tsc + vitest, not Bun/oxlint/oxfmt/lefthook.", status: in-force, note: "The revert was about process (no verification gates that round), not the tools; they may return once gates exist. bun.lock is deleted in U0.1." }
+  - { id: T-2, text: "Every unit's gate names a visually observable artifact in at least one host, AND at least one machine assertion; the gate is the exit code.", status: in-force (replaces GR7's 'inspector-visible artifact' wording per motion M2) }
+
+settled_by_measurement_not_reopenable:
+  # These are not decisions; they are facts with boundaries. Re-arguing them without a new measurement is refused.
+  - single-file save latency does not threaten 2 s (one file, zero cascade, <= ~500k nodes)
+  - the DB write dominates the save budget (66–82% at p50) and the write SHAPE is the lever (~6x available from one atomic statement), not the database
+  - tree-sitter is not a cost; parser choice may not be argued on latency
+  - structural sparsity is met with 3.5–4x headroom; the expression tier is 5.55–5.88x and "collect now, prune later" is rejected
+  - the picture cannot verify correctness (self-noise 17.9%, best signal 1.35x)
+  - CLI-only resolution reaches ~31–33% of achievable edges and the gap is one capability (receiver type inference, 59.3%); a language-server subprocess is legal under rank 1 and reaches the full host answer set
+  - the headless resolver is never wrong where it answers (0/305 disagreements)
+  - FalkorDB v4.20.4 semantics as tabulated in 06-measurements (RO_QUERY set, TIMEOUT syntax and 30000/60000 defaults, full rollback with ~1.7x overshoot, no settling window)
+  - the unit ORDER U0..U10 (endorsed by every reviewer; real data at U2, cross-file edges at U6)
+  - the 14 node labels and 15 edge types (P-C protects them)

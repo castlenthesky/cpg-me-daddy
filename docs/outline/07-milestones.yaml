@@ -1,0 +1,803 @@
+# 07 — Milestones, epics, features, stories
+#
+# Hierarchy (owner decision, 2026-09-17):
+#   milestone = one delivery unit U0..U10 (order endorsed by every reviewer; not reopenable without a new measurement)
+#   epic      = a cross-cutting workstream that spans milestones (E-*)
+#   feature   = one PR-sized deliverable inside a milestone (Un.m); the original spine named 16 PRs across 10 units,
+#               sliced here into 24 features so no PR exceeds ~500 reviewable lines (GR3)
+#   story     = a 0.5–2 day task with acceptance criteria (Un.m.k); the unit of work a developer picks up
+#
+# Every milestone has a GATE: machine assertions that must be green AND a human-visible artifact the owner
+# looks at. The gate is `cpg verify` exiting 0 plus the named tests; the artifact is a picture or a short
+# table, never the proof. Every milestone names what it LOCKS IN (things that get expensive to change after)
+# and what it ROLLS BACK TO (each unit reverts to the previous unit's green state).
+#
+# Sizes: S <= 2 days · M 3–5 days · L 6–10 days (one developer). Stories reference: decisions (02),
+# schema (04), contracts (05), measurements (06), lessons (10), salvage coordinates (11).
+#
+# Working rules that apply to every story (00-charter §11): gate ships with the code; 200–500 reviewable
+# lines per PR; run the gate locally before pushing; REAL/PASSTHROUGH/SEAT labels on every stub; START SIMPLE.
+# Review agents must be explicitly told to use the code-review skill (L-42).
+
+summary:
+  units: 10          # U1..U10 (U0 is done-but-uncommitted foundation)
+  prs_in_original_spine: 16
+  features: 24      # PR-sized; the 16-PR spine sliced finer, order unchanged
+  stories: 53
+  order_locked: true
+  first_human_artifact: U2 (the developer's own repository rendered, unit two)
+  first_cross_file_edge: U6 (IMPORTS)
+  freshness_proven: U7
+  headless_calls: U8
+
+epics:
+  - id: E-GATE
+    name: CI gates and dependency rules
+    spans: [U0, U1, U2, U3, U5, U6, U10]
+    goal: "Every invariant that can be checked mechanically is checked in CI and has been SEEN TO FAIL on a planted violation. A rule nobody has seen fail is not a gate (L-31)."
+    delivers: [check-deps two-tier rule + host-surface allowlist + NUL rule, runtime purity proof with anti-vacuity, statementCount === 1, sparsity <= 1.5, schema drift check, archive-coordinate resolver, retired-path citation refusal, registered-tool count]
+  - id: E-LAYOUT
+    name: packages/ vs apps/ and composition roots
+    spans: [U0, U2, U3, U10]
+    goal: "packages/** is host-free and has no composition roots; each apps/* owns one root and one host SDK (DQ-08)."
+  - id: E-SCHEMA
+    name: schema as code, evolving
+    spans: [U1, U6, U8, U10]
+    goal: "The 14 labels / 15 edge types live as data under CI; properties grow additively; the outline's schema region regenerates from code (P-C, F-3)."
+  - id: E-FRESH
+    name: the freshness clock and revision reconciliation
+    spans: [U1, U4, U5, U7]
+    goal: "seq and revision_id are the only two counters; T0->T3 is measured per enabled consumer set; every node reconciles to its file (P-B, DQ-05, F-1)."
+  - id: E-VERIFY
+    name: cpg verify and the resolver verification harness
+    spans: [U2, U6, U8, U9]
+    goal: "Code decides. Six checks, four states. The parse-and-resolve layer is the most heavily instrumented part of the system: golden corpus, precision/recall vs an oracle, per-language ceilings, latency distributions, degradation as a first-class number (DQ-04, DQ-06)."
+  - id: E-STORE
+    name: the FalkorDB consumer
+    spans: [U5, U7, U10]
+    goal: "One atomic statement per file from the first line; the store is a consumer like any other; agents can query it with Cypher from U5 (DQ-10, F-2)."
+  - id: E-RESOLVE
+    name: headless resolution
+    spans: [U6, U8, U9]
+    goal: "Exactly one resolver chain runs under plain node; a language server is a subprocess, never an import; precision 0 disagreements; recall reported against a measured ceiling (DQ-09)."
+  - id: E-HOST
+    name: the VS Code consumer
+    spans: [U0, U3]
+    goal: "The extension is the producer launched with the panel consumer enabled, plus three adapters; zero new engine code, enforced (P-A, C-EXT)."
+  - id: E-RETIRE
+    name: retiring the old documentation
+    spans: [post-outline follow-up, then every milestone boundary]
+    goal: "The retired documentation and the deliberation corpus live only on the docs/archive branch; this outline is self-contained (12-retirement.md); the 21-question battery re-runs at each milestone boundary."
+
+milestones:
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U0
+    name: Foundation
+    status: built, UNCOMMITTED (develop working tree, 2026-09-17)
+    goal: "The vocabulary package, the test runner, the dependency gate, CI, the archive tags, and the packages/ vs apps/ split — all committed and green."
+    why_here: "A gate with no runner is a suggestion (L-31); a vocabulary inside the wrong package is how 13 deep imports happen (L-26). Everything else is gated on this."
+    delivers: ["@cpg/model (13 exports, 17 tests, zero deps)", "tools/check-deps.mjs (4 rules)", ".github/workflows/ci.yml (verify on ubuntu+macos; gate-fails-when-violated job)", "vitest, tsconfig.base.json, project references", "5 archive tags", "apps/vscode with the one extension file", "two-tier layer rule"]
+    gate:
+      machine: ["npm run verify green on both CI runners", "gate-fails-when-violated job proves check-deps rejects a planted vscode import in packages/**", "a planted `import 'vscode'` in apps/cli and a planted `@cpg/model/dist/x` deep import in apps/vscode are BOTH rejected (tier rule proven both ways)", "no NUL byte in any source file"]
+      human: "CI is green on GitHub for the first time; `ls packages apps` shows the layout P-A describes"
+    locks_in: [the vocabulary package name @cpg/model, npm + tsc + vitest, the packages/ vs apps/ rule]
+    rollback_to: "the bare scaffold at 8cd478f"
+    size: S
+    features:
+      - id: U0.1
+        name: Commit W0 as-is
+        stories:
+          - id: U0.1.1
+            title: Commit the working tree as the U0 foundation
+            epic: E-GATE
+            acceptance:
+              - "packages/model, tools/check-deps.mjs, .github/workflows/ci.yml, vitest.config.ts, tsconfig.base.json, package-lock.json are tracked; bun.lock is deleted"
+              - ".gitignore keeps the deliberation-corpus directory ignored until the docs/archive branch exists (12-retirement.md)"
+              - "CI runs on push and both jobs pass"
+            notes: "Commit message references DL-3 (CI in the first unit) and L-31."
+          - id: U0.1.2
+            title: Remove the stale dist probe and the ast-generator stub
+            epic: E-GATE
+            acceptance:
+              - "packages/model/dist/__probe_types.* deleted (it imports vscode and escapes the gate because dist is skipped)"
+              - "packages/ast-generator/ deleted (manifest-less, not compiled, not a workspace member)"
+              - "check-deps also scans packages/*/dist for the vscode token OR the build cleans dist before compile (pick the cheaper; state which)"
+      - id: U0.2
+        name: The apps/ split and the two-tier rule
+        stories:
+          - id: U0.2.1
+            title: Move src/extension.ts to apps/vscode and wire project references
+            epic: E-LAYOUT
+            acceptance:
+              - "apps/vscode/package.json exists (private, name @cpg/vscode-host or the extension id), apps/vscode/src/extension.ts is the old file unchanged, tsconfig references it, `npm run compile` is clean, F5 still shows the hello-world command"
+              - "root package.json workspaces: [packages/*, apps/*]; the VSIX main points at the new output path"
+            port_from: "the working tree's src/extension.ts"
+            decisions: [DQ-08, ND-4]
+          - id: U0.2.2
+            title: Extend check-deps with the two-tier rule and prove it fails both ways
+            epic: E-GATE
+            acceptance:
+              - "rule cli-purity generalizes to: nothing under packages/** imports a host SDK (vscode, @modelcontextprotocol/*, a DOM global list); each apps/<name> may import only node builtins, @cpg/* front doors, and ITS OWN host SDK (a per-app allowlist in the script, not in the app's manifest — DQ-08 rejected option c)"
+              - "the CI proof job plants three violations (vscode in packages/model; @modelcontextprotocol in apps/vscode; a deep import in apps/cli) and asserts non-zero exit for each, then removes them"
+              - "the composition-root rule: a file under packages/** that imports from two or more sibling @cpg/* packages other than @cpg/model fails, except packages/engine (the one package allowed to know more than one sibling)"
+            lessons: [L-26, L-28, L-31]
+          - id: U0.2.3
+            title: Root README, CLAUDE.md pointer, and memory hygiene
+            epic: E-RETIRE
+            acceptance:
+              - "README.md says npm (not bun), states the honest scope line from 01-vision §4, and points at docs/outline/README.md"
+              - "a root CLAUDE.md of <= 20 lines: read docs/outline/README.md first; never read the docs/archive branch; START SIMPLE; gate ships with the code"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U1
+    name: Vocabulary and seams as data
+    goal: "The schema registry lives in @cpg/model as data under CI; the model carries revision_id and the seq envelope with an owner-discriminated merge; the resolver and watch seam TYPES exist; contracts agree with each other by compilation."
+    why_here: "Everything downstream speaks this vocabulary; the id scheme and path form are the most expensive things to change after the first persisted write (C-WATCH/C-EXTRACT reversal tables). L-22 says order by time-to-first-judgement, and this unit has a human artifact of its own: the regenerated schema table."
+    delivers:
+      - "packages/model/src/schema/{nodes,edges,enums,types,schema,validate}.ts (ported, version 3)"
+      - "revision_id on every :CPG node + FILE; GraphDelta envelope {seq, file, revision_id, producer}"
+      - "owner-discriminated applyGraphDelta; inverted characterization test"
+      - "WorkspacePath/AbsolutePath types"
+      - "resolve.ts seam types (C-RESOLVE §1, amended)"
+      - "C-WATCH layer-A types"
+      - "EVAL_TYPE reserved with producer: none-yet"
+      - "contracts-agree.test.ts"
+      - "schema:doc generator + drift check against 04-schema.yaml"
+      - "statement-level id round-trip test (ND-10)"
+    gate:
+      machine:
+        - "all @cpg/model tests green incl. the ported schema/validate/joern tests (vitest)"
+        - "C-MODEL conformance suite (ported, amended) green against @cpg/model; the old 'DUPLICATES a re-added node id' test is GONE and its inverse passes"
+        - "C-SINK conformance suite green against the reference MemoryStore in the same package"
+        - "`npm run schema:doc --check` exits 0 (04-schema.yaml's generated region matches code byte-for-byte)"
+        - "contracts-agree.test.ts compiles"
+        - "the ND-10 statement-level id test passes"
+        - "check-deps green: @cpg/model still has zero runtime deps"
+      human: "The owner reads the regenerated schema table diff against 04-schema.yaml (expected: byte-identical except the ~450/3000 correction and revision_id rows) and `cpg schema --print` output once U2a exists"
+    locks_in: [the 14 labels / 15 edge types as code, the id scheme, relative paths, seq + revision_id as the only two counters, schema version 3]
+    rollback_to: "U0: @cpg/model keeps its 17 tests; 04-schema.yaml stays hand-maintained"
+    size: M
+    risks: ["porting bun tests to vitest is real work (~900 LOC of schema tests)"]
+    features:
+      - id: U1.1
+        name: Port the schema registry as data
+        stories:
+          - id: U1.1.1
+            title: Port nodes/edges/enums/types/schema/validate into packages/model/src/schema
+            epic: E-SCHEMA
+            acceptance:
+              - "the six files compile under strict; NODE_LABELS has 14 entries, EDGE_TYPES 15 (incl. SOURCE_FILE); CPG_SCHEMA.version === 3"
+              - "every :CPG label and FILE gain { name: revision_id, type: string, cardinality: one, golden: exclude }; DIRECTORY/SYMBOL/TAG/COMMUNITY/META_DATA do not"
+              - "the Joern alignment prose is removed from the code (kept in 04-schema.yaml); ownership/write/key columns are unchanged"
+              - "the ported tests pass under vitest: schema.test.ts (CALLS.status and IMPORTS.status are the SAME array object), validate.test.ts (362 LOC), joern.test.ts (all 68 Joern names accounted for once — keep the vendored JSON as a test fixture only)"
+            port_from:
+              - "archive/m0-calls-symbols-20260916:packages/engine/src/schema/{nodes,edges}.ts"
+              - "archive/master-20260916:packages/engine/src/schema/{enums,types,schema,validate}.ts"
+              - "archive/master-20260916:packages/engine/test/unit/schema/*.test.ts"
+            decisions: [DQ-01, ND-5, P-C]
+          - id: U1.1.2
+            title: The schema generator and the drift check
+            epic: E-SCHEMA
+            acceptance:
+              - "`npm run schema:doc` regenerates the BEGIN/END GENERATED region of docs/outline/04-schema.yaml from CPG_SCHEMA; `--check` exits 1 on drift; CI runs --check"
+              - "the first regeneration produces a diff the owner signs off (the human artifact of U1)"
+            port_from: ["archive/m0-calls-symbols-20260916:tools/schema-doc.ts"]
+          - id: U1.1.3
+            title: Statement-level identity non-foreclosure test
+            epic: E-SCHEMA
+            acceptance:
+              - "a test mints a synthetic statement-level id using the :ordinal slot (e.g. file:x.py:STMT:main:3), round-trips it through makeNodeId/parse, and asserts stability under an unrelated insertion above"
+              - "if the test cannot be written, STOP and raise: VD-10/VD-23's deferral must be re-argued (ND-10)"
+            decisions: [ND-10]
+      - id: U1.2
+        name: The narrowed model
+        stories:
+          - id: U1.2.1
+            title: revision_id on nodes, the seq envelope, and the owner-discriminated merge
+            epic: E-FRESH
+            acceptance:
+              - "GraphDelta is { seq, file, revision_id, producer: 'filesystem' | 'code', addedNodes, addedEdges, removedNodeIds }; GraphPayload carries seq; no composeDeltas, no edgeId, no removedEdgeIds exist"
+              - "applyGraphDelta returns DeltaApplyResult; on a re-added id it MERGES: fields owned by the delta's producer tier are replaced, fields owned by the other tier are preserved (ownership by property name table in the schema module); a same-producer re-add without removal is a malformed defect"
+              - "the characterization test 'DUPLICATES a re-added node id when the producer omits the removal' is deleted and replaced by '[D2] a re-added id MERGES in place — it does not duplicate' in the same commit"
+              - "Read<T> accessors added; validatePayload reports duplicate-node-id, dangling-edge (retained, not dropped), id-contains-separator, non-monotonic-seq"
+              - "the ported C-MODEL suite (amended for the envelope) is green against the package"
+            decisions: [DQ-01, F-1, F-4]
+            lessons: [L-01, L-08]
+          - id: U1.2.2
+            title: WorkspacePath and AbsolutePath types with the two adapters named
+            epic: E-FRESH
+            acceptance:
+              - "branded types exported from @cpg/model; toWorkspacePath(root, absolute) uses startsWith + slice and throws 'path escapes root'; toAbsolutePath exists only for FilesystemProbe and SourceOpener call sites (documented, and check-deps later verifies the import sites)"
+            decisions: [DQ-02]
+            lessons: [L-10]
+      - id: U1.3
+        name: Seam types and the contracts-agree test
+        stories:
+          - id: U1.3.1
+            title: Port the resolver seam types and the watch layer-A types
+            epic: E-RESOLVE
+            acceptance:
+              - "packages/resolve/src/contract.ts is the 218-line resolve.ts with C-RESOLVE's five amendments (ResolveBatch, capabilities, status(), ResolveContext, +5 reasons) — types only, zero imports; packages/watch/src/contract.ts is C-WATCH layer A"
+              - "both packages exist with package.json, tsconfig, empty index exporting only types; check-deps green"
+            port_from: ["archive/discovery-20260916:packages/cpg-generator/src/resolve.ts"]
+          - id: U1.3.2
+            title: contracts-agree.test.ts
+            epic: E-GATE
+            acceptance:
+              - "one compile-time file asserts mutual assignability across shared types: RefSite (extract vs resolve), Resolution/EdgeResolution, GraphDelta (model vs sink), NormalizedChange (watch vs cli), CheckResult (cli vs ext), WorkspacePath everywhere; @ts-expect-error negative cases included"
+            resolves: [CS-12]
+          - id: U1.3.3
+            title: Reserve EVAL_TYPE and set the golden policy
+            epic: E-SCHEMA
+            acceptance:
+              - "reserved_edges in the schema module lists EVAL_TYPE with producer: none-yet, admitted_at: U8; a test asserts no emitter exists; CALLS.resolvedBy and CALLS.confidence are golden: exclude"
+            decisions: [DQ-09]
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U2
+    name: CLI end to end on a real workspace, in memory
+    goal: "`cpg index .` walks the developer's own repository into a graph (FILE/DIRECTORY/HAS_ENTRY), `cpg verify` exits 0, and `cpg inspect` shows the picture in a browser. Config file, consumer switches, and the runtime purity proof land."
+    why_here: "Real data at unit two (L-22, L-36). Rank 1 says the first consumer is the CLI; the picture proves the system is alive, verify proves it is right. A stub cannot fail the way real input fails, so stubbed data never gets a unit (L-06)."
+    delivers: ["apps/cli with run/io/exit codes", "packages/engine createEngine + walker + MemoryStore", "cpg index, cpg verify (six checks), cpg schema", "apps/inspector picture with a seeded layout", "cpg.config.yaml loader with precedence", "consumer switches (--inspect, --store memory)", "runtime purity proof with anti-vacuity", "check-deps hardening"]
+    gate:
+      machine:
+        - "filesystem-reconciliation: files on disk (admitted by the walker) == FILE nodes, per directory"
+        - "id-uniqueness: node ids unique"
+        - "render-reconciliation: layoutResult.ids.length === payload.nodes.length when --inspect; `unavailable` otherwise"
+        - "revision-reconciliation: every FILE's revision_id == sha256 of bytes on disk"
+        - "seeded layout is byte-stable across two runs of the same payload"
+        - "`cpg verify` exits 0 on this repository; exits 3 on a fixture with a planted duplicate id"
+        - "the built bin is executed by CI: `--version` exit 0, `frobnicate` exit 2"
+        - "runtime purity proof under plain node: zero vscode modules loaded by `cpg index --dry-run`; the anti-vacuity run (planted import) fails"
+        - "usage text set-equals the flag table for every verb"
+      human: "The owner runs `cpg index . --inspect` on this repository and sees it in a browser"
+    locks_in:
+      - "the renderer payload shape"
+      - "the CLI exit-code contract and stdout/stderr discipline"
+      - "that the engine is driven headless first"
+      - "the document envelope {v, kind, tool, producedAt}"
+      - "config precedence"
+    rollback_to: "U1: contracts remain; no CLI, no picture"
+    size: L
+    features:
+      - id: U2a
+        name: CLI skeleton, walker, memory store, verify
+        stories:
+          - id: U2a.1
+            title: apps/cli skeleton — run(argv, io), Io, exit codes, derived usage, the built bin executed
+            epic: E-LAYOUT
+            acceptance:
+              - "main.ts is a shebang wrapper assigning process.exitCode; no process.exit anywhere; run(argv, io, {engine, signal}) returns EXIT codes 0/1/2/3/130"
+              - "CommandSpec per verb is the single flag table; renderUsage is the only usage producer; a test asserts set equality of flags vs --tokens in usage for every verb"
+              - "captureIo drives every command in-process; a malformed --port exits 2 with zero engine.connect calls; unknown verb exits 2; reserved verbs mcp/status exit 2 'not built yet'"
+              - "tools/check-cli-bin.mjs in CI before vitest: build, spawn dist/main.js --version (exit 0, banner from the manifest), frobnicate (exit 2)"
+              - "--format is never inferred: same argv yields byte-identical stdout with isTty true and false"
+            port_from:
+              - "archive/master-20260916:packages/cli/src/{main,run,io}.ts"
+              - "archive/master-20260916:packages/cli/test/unit/run.test.ts"
+            contracts: [C-CLI]
+            lessons: [L-28, L-31]
+          - id: U2a.2
+            title: packages/engine — createEngine, the walker, MemoryStore, the filesystem tier
+            epic: E-LAYOUT
+            acceptance:
+              - "createEngine(config, { sinks, resolvers?, processHost? }) is the ONE composition root, called from apps/cli; nothing under packages/** calls it"
+              - "walker ported: prunes excluded dirs before descending, sorted entries, symlinks skipped, size cap, emits every non-ignored file with language or null; hashes the raw Buffer as revision_id (WATCH stage owns minting; the cold walk IS the watch stage's first batch)"
+              - "MemoryStore implements GraphStore and GraphSink (durable); the filesystem tier is written FIRST as one merge-filesystem op (DIRECTORY/FILE/HAS_ENTRY), then per-file deltas — never a giant batch at the end"
+              - "NullGraphStore lives in the engine (not the CLI) and backs --dry-run; `cpg index --dry-run` over a tmp workspace with a.ts and b.py reports filesIndexed 2 with no store"
+              - "IndexReport: walk accounting sums (I-20); files sorted by path; every file carries revision_id; `consumers` lists the enabled set"
+            port_from:
+              - "archive/master-20260916:packages/engine/src/workspace/{walker,glob,hash,paths,defaults}.ts + tests"
+              - "archive/m0-calls-symbols-20260916:packages/engine/src/indexer/index-workspace.ts (ADAPT)"
+              - "archive/master-20260916:packages/engine/test/support/tmp-workspace.ts"
+            lessons: [L-24, L-27]
+          - id: U2a.3
+            title: cpg verify — six checks, four states, exit 3
+            epic: E-VERIFY
+            acceptance:
+              - "VerifyReport carries all six check ids once in enum order; state is worst-of (fail > stale > unavailable > pass); exit 3 on fail (never 1); --strict promotes unavailable to fail"
+              - "filesystem-reconciliation compares the walker's admitted file set to FILE nodes per directory and localises offenders to directories; id-uniqueness via store.nodeKeys; revision-reconciliation via store.staleNodes() (FILE.revision_id vs sha256 on disk at U2; :CPG nodes vs FILE from U6); identity-invariants and resolution-health report `unavailable` until U6c; render-reconciliation `unavailable` without a renderer consumer"
+              - "a fixture with a planted duplicate id fails id-uniqueness; a fixture with a file edited after index fails revision-reconciliation; both localise the offender"
+              - "`cpg verify --format=json` emits one cpg.verify.report document"
+            decisions: [DQ-06, ND-8, P-B]
+            resolves: [CS-9, CS-11]
+          - id: U2a.4
+            title: cpg schema --print and --check
+            epic: E-SCHEMA
+            acceptance: ["prints CPG_SCHEMA as a cpg.schema document; --check runs the drift check against docs/outline/04-schema.yaml"]
+      - id: U2b
+        name: The inspector picture
+        stories:
+          - id: U2b.1
+            title: apps/inspector — the archived renderer with a seeded layout, as a WebviewTransport
+            epic: E-HOST
+            acceptance:
+              - "layout.ts ported with a `seed` parameter threaded through both Math.random() sites; two renders of the same payload with the same seed produce identical Float32Array buffers (the golden-image precondition, not a gate)"
+              - "visualizer.ts split into buffer store / edge store / legend / tooltip / camera controllers; the edge-only early return at :290 is removed and a test delivers an edge-only delta; NUL bytes stripped; unit tests on the pure stores"
+              - "apps/inspector serves the shell + bundle over a local static server and implements WebviewTransport over a WebSocket so the SAME GraphHost protocol drives the browser and (at U3) the panel; the webview posts render-report so render-reconciliation can be computed"
+              - "`cpg inspect <payload.json|->` renders a saved payload; `cpg index --inspect` opens the picture live and prints the URL on stderr"
+              - "the picture is labelled a liveness check in the UI (#cpg-verification banner shows the verify report beside the graph)"
+            port_from:
+              - "archive/discovery-20260916:packages/graph-visualizer/src/{layout,nodeTypes,relationshipTypes,legend,shell,styles}.ts (PORT)"
+              - "archive/discovery-20260916:packages/graph-visualizer/src/visualizer.ts (ADAPT)"
+              - "archive/discovery-20260916:src/webview/graphApp.ts"
+              - "archive/discovery-20260916:esbuild.js"
+            decisions: [ND-3]
+            measurements: [M-LEGIBILITY-noise, M-LEGIBILITY-golden-image]
+            lessons: [L-05, L-23]
+      - id: U2c
+        name: Config, consumer switches, and the purity proof
+        stories:
+          - id: U2c.1
+            title: cpg.config.yaml loader with precedence and provenance
+            epic: E-LAYOUT
+            acceptance:
+              - "resolveConfig(layers) is pure; layers flag > env (CPG_*) > file > manifest (slot reserved, empty) > default; every key carries {value, layer, source}; `cpg config --format=json` prints it"
+              - "the file is found at --config, else the nearest ancestor of the root containing cpg.config.yaml, stopping at .git; finding it never relocates the root"
+              - "the loader produces one CpgConfigInput handed to the engine; the engine reads no env itself"
+              - "the sketch in 03-architecture §9 parses and round-trips"
+            port_from: ["archive/master-20260916:packages/engine/src/config/workspace-config.ts (the seam)"]
+            decisions: [DQ-08 (H4), X11]
+          - id: U2c.2
+            title: Consumer switches
+            epic: E-FRESH
+            acceptance:
+              - "consumers.inspect / consumers.store (memory | falkor SEAT) / consumers.vscode are read from config and flags; the engine constructs only the enabled sinks; IndexReport.consumers and VerifyReport.consumers list them; a headless run has no renderer and render-reconciliation says unavailable"
+            decisions: [P-A]
+          - id: U2c.3
+            title: The runtime purity proof with an anti-vacuity check
+            epic: E-GATE
+            acceptance:
+              - "tools/purity-proof.mjs runs under plain node (NOT vitest): installs a Module._load trap BEFORE importing the engine, runs `cpg index --dry-run` over a fixture, asserts zero requests matching /^vscode(\\/|$)/ and zero DOM/MCP SDK loads; prints the module list"
+              - "the same script, given --plant, writes a temporary file importing vscode into packages/engine and asserts the trap FIRES; CI runs both modes; a trap that cannot install (ESM) fails loudly"
+              - "check-deps hardened: import specifiers found via ts.preProcessFile (not a regex); packages/** and apps/** both scanned; NUL rule stays"
+            resolves: [CS-6]
+            measurements: [M-RESOLVE-headless-cost]
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U3
+    name: VS Code as a second consumer
+    goal: "The extension launches the same engine with the panel consumer enabled, renders the same picture, and adds click-to-source. Zero new engine code, and the gate proves it."
+    why_here: "Rank 2. It proves the engine does not need the editor, and it is the cheapest rollback in the plan (delete apps/vscode, nothing else changes)."
+    delivers:
+      - "apps/vscode: GraphHost (plain node), WebviewTransport, SourceOpener, FilesystemProbe adapters"
+      - "WebviewPanel with serializer"
+      - "status bar + DiagnosticCollection + banner for verify"
+      - "@vscode/test-cli host tests"
+      - "SPIKE-3 (visual-cache leg) and the postMessage-size spike"
+    gate:
+      machine:
+        - "the same U2 assertions run inside the extension host via @vscode/test-cli"
+        - "check-deps green; the diff under packages/** is EMPTY for this unit (a CI check on the PR)"
+        - "C-EXT conformance suite (39) green against GraphHost"
+        - "E4: identical counts/ids/edges with one stale revision fails ONLY revision-reconciliation"
+      human: "The owner presses F5, opens the CPG panel, sees the same graph as the browser, clicks a node and lands on the file"
+    locks_in: [the host protocol v1 with epoch/seq, that the panel is a WebviewPanel]
+    rollback_to: "U2: the CLI keeps the picture; the extension is a scaffold"
+    size: S
+    features:
+      - id: U3.1
+        name: apps/vscode rewired over the engine
+        stories:
+          - id: U3.1.1
+            title: GraphHost + three adapters + WebviewPanel
+            epic: E-HOST
+            acceptance:
+              - "GraphHost (from the C-EXT reference, zero vscode) merges deltas with the shared applyGraphDelta, answers ready with one snapshot, posts only deltas, bumps epoch on initial, records ProtocolFaults; SourceOpener/FilesystemProbe/WebviewTransport are the only files importing vscode"
+              - "the graph is a WebviewPanel with a serializer; retainContextWhenHidden only on it; CSP default-src 'none' + connect-src 'none' + nonce; no literal colours"
+              - "reveal(nodeId) returns RevealOutcome; nameRange wins over range; FILE nodes open whole"
+              - "verify runs debounced 500 ms after the last delta and on the `cpg.verify` command; results reach the status bar, a DiagnosticCollection('cpg') on offending files, and the banner"
+            port_from: ["archive/discovery-20260916:src/views/graphViewProvider.ts"]
+            contracts: [C-EXT]
+            decisions: [AM-2, P-A]
+          - id: U3.1.2
+            title: Host tests and the two spikes
+            epic: E-VERIFY
+            acceptance:
+              - "@vscode/test-cli runs the U2 assertions in the host; documented in 08-verification (the retirement battery's Q21)"
+              - "SPIKE-3: renderedSeq measured T0->T3 for the panel on the fixture; recorded in 06-measurements as M-LATENCY-render-leg"
+              - "SU-9: postMessage cost of 10k/100k/500k-node payloads measured; a snapshot-vs-delta threshold recorded or 'not needed' stated"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U4
+    name: Live file-tier watcher
+    goal: "Create, delete, rename flow through the watcher into deltas for every enabled consumer within 2 s on the human clock; a create is never dropped; revision_id is minted live."
+    why_here: "Freshness becomes testable. FalkorDB (U5) wants a live delta stream to persist (DQ-10)."
+    delivers:
+      - "packages/watch: parcel backend, coalesce (20-cell table), flushBatch order, WatchSession with SerialQueue + withRetry, seq allocation, maxWaitMs"
+      - "revision_id minted live"
+      - "renderedSeq / confirmedSeq measurement"
+      - "bulk-mode thresholds"
+      - "cpg watch with NDJSON"
+    gate:
+      machine:
+        - "C-WATCH suites green: backend (12, against parcel over real fs writes and the fake), coalesce (26), order (4), session (14)"
+        - "revision-reconciliation: per-file revision_id set matches disk after quiescence"
+        - "a create-then-change burst delivers ONE created; a create is never dropped (triple-create collapse test)"
+        - "created x deleted -> deleted (deletes absorb)"
+        - "T0->T3 p95 < 2 s for a single file save with consumers {memory, inspect} on the fixture (local benchmark; CI asserts the pipeline leg T2->T3 only)"
+        - "the three intervals t0_t1 / t1_t2 / t2_t3 appear on every WatchEvent batch"
+        - "known state advances only after confirmed delivery (retry-does-not-advance test)"
+      human: "The owner runs `cpg watch . --inspect`, touches a file, and watches it appear; renames a file and watches it move"
+    locks_in: [the merge table semantics, seq monotonicity, the clock definition T0..T3]
+    rollback_to: "U3: one-shot cpg index; no liveness claim; the freshness SLA withdrawn in writing"
+    size: M
+    features:
+      - id: U4.1
+        name: packages/watch
+        stories:
+          - id: U4.1.1
+            title: Port the 667 lines of watch tests first, then the code they cover
+            epic: E-FRESH
+            acceptance:
+              - "debounce/normalize/watch-workspace tests ported to vitest and red; then debounce (drop the dead `now`), normalize (rename pairing by content hash, re-filter with the walker's matcher), parcel-backend (dynamic import), sink, queue (SerialQueue + withRetry, NEW tests) ported and green"
+            port_from: ["archive/research-sweep-20260916:packages/engine/test/unit/watch/*.test.ts", "archive/research-sweep-20260916:packages/engine/src/watch/*.ts"]
+            lessons: [L-30, L-14]
+          - id: U4.1.2
+            title: coalesce, flushBatch, and the session
+            epic: E-FRESH
+            acceptance:
+              - "coalesce is a pure exported function implementing the 20-cell table (05-contracts C-WATCH.merge_table) with one test per cell; flushBatch orders moved < deleted < changed < created, children-first deletes, parents-first creates, total under permutation"
+              - "WatchSession: trailingMs 100 / ceilingMs 500 defaults, injectable timers (zero real sleeps), seq from 0 no gaps, at most one batch in flight, onDegraded with paths, clock.firstEventAt/settledAt on every batch, revision_id hashed once per created/changed file through the injected FilesystemProbe"
+              - "the discovery ancestor-rescan idea (WorkspaceGraphIndex.applyChange) is used for directory events when directoryEvents is 'none'"
+            resolves: [CS-10, CS-4]
+            lessons: [L-14, L-15, L-16]
+          - id: U4.1.3
+            title: Bulk mode and the two spikes
+            epic: E-FRESH
+            acceptance:
+              - "bulk entry: >=200 paths OR >=50 dirs OR .git/index.lock OR HEAD changed <2 s ago OR >=500 events/s; exit on 750 ms quiet AND lock gone, cap 10 s; bulk batches carry cause 'bulk' and are explicitly OUTSIDE the freshness budget in v1"
+              - "SU-10 spikes: does parcel signal overflow? (if not, a periodic reconcile walk story is created); case-insensitive volume key folding on macOS"
+            measurements: [M-RESEARCH-watcher]
+      - id: U4.2
+        name: cpg watch and the live picture
+        stories:
+          - id: U4.2.1
+            title: cpg watch with NDJSON events and the three-interval latency
+            epic: E-VERIFY
+            acceptance:
+              - "WatchEvent stream: ready, batch {changes, write, latencyMs: {t0_t1, t1_t2, t2_t3, total}}, warning, error, closed; seq dense from 0; closed always last; shutdown by injected AbortSignal or SIGINT"
+              - "SinkDelivery reports confirmedSeq and renderedSeq; the inspector's render-report stamps renderedSeq"
+              - "a local benchmark script records T0->T3 p50/p95 over 50 saves with the enabled set printed beside the numbers"
+            port_from: ["archive/research-sweep-20260916:packages/cli/src/commands/watch-cmd.ts (ADAPT; the 202-line version, not master's 180)"]
+            decisions: [DQ-05, F-1]
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U5
+    name: FalkorDB consumer, atomic from line one
+    goal: "FalkorStore behind the same GraphStore/GraphSink seams; one Cypher statement per file; RO_QUERY reads; agents and humans can query the file-tier graph with Cypher immediately."
+    why_here: "After a live delta stream exists and before node volume multiplies (DQ-10); the owner wants Falkor as a first-class consumer early so the graph can be interrogated as it is built (F-2)."
+    delivers:
+      - "packages/store: planner (ported cypher.ts), bootstrap, FalkorStore, open, falkordb.config"
+      - "falkordb-service (remote + docker modes)"
+      - "compose files cpg-test 6381 / cpg-dev 6382 with the provenance handshake"
+      - "cpg query"
+      - "torn-batch test"
+      - "cpg doctor basics"
+    gate:
+      machine:
+        - "C-STORE suites green: verifyGraphStoreContract against MemoryStore AND FalkorStore (integration, 6381 harness), verifyWritePlannerContract against CypherPlanner"
+        - "receipt.statementCount === 1 for every replace-file (CI, deterministic)"
+        - "absolute ceiling ~200 ms per replace on the CI runner (runner-tolerant)"
+        - "read-back after commit visible with no settling loop"
+        - "torn-batch test: a fault injected mid-statement leaves the prior subgraph intact and applied:false"
+        - "synthetic 450-node/449-edge replace benchmarked LOCALLY against the p50 3–8 / p95 <=16 ms band (not a CI gate)"
+        - "`cpg verify` reconciliation runs against Falkor, not memory, when the falkor consumer is enabled"
+        - "no statement contains DETACH DELETE; every DELETE comes from planScopeDelete"
+        - "adversarial values never reach cypher text"
+      human: "The owner runs `cpg watch . --store falkor`, opens the FalkorDB browser, and runs `MATCH (f:FILE) RETURN count(f)` while saving files; an agent runs `cpg query` traces"
+    locks_in: [the write shape (the single hardest thing to change later), the two compose projects and ports]
+    rollback_to: "U4: in-memory store behind the same seam; FalkorStore reverts to a SEAT"
+    size: M
+    features:
+      - id: U5.1
+        name: packages/store — planner, bootstrap, FalkorStore
+        stories:
+          - id: U5.1.1
+            title: Port the Cypher planner and bootstrap; adapt them to WorkspacePath and the seq/revision_id op
+            epic: E-STORE
+            acceptance:
+              - "planDelta -> plan(op) groups nodes by write mechanism (CREATE for delete-create; MERGE with null-pruned props for merge-on-key), edges by resolved endpoint shape with a `WITH s, row` barrier; scope delete is MATCH (n:CPG {file:$file}) DELETE n; a replace-file plan has EXACTLY one statement; filesystem ops may chunk at 5000 rows; overlay is planOverlay only"
+              - "DeleteScope is a closed union; planScopeDelete is the only DELETE emitter; the suite greps every emitted statement for the token DELETE"
+              - "bootstrap: creates only missing indexes; UNIQUE SYMBOL.fqn via GRAPH.CONSTRAINT with PENDING polling; SYMBOL(fqn) index first; META_DATA.schema_version read-compare -> rebuild on mismatch (drop/recreate the graph key)"
+              - "TIMEOUT <ms> as a trailing argument on every statement; write socket timeout >= 2x; 'Query timed out' string-matched ONCE in the store adapter -> StoreError TIMEOUT"
+            port_from:
+              - "archive/master-20260916:packages/engine/src/store/{cypher,bootstrap,store}.ts + tests"
+            contracts: [C-STORE]
+            measurements: [M-FALKOR-atomic, M-FALKOR-51x, M-FALKOR-timeout, M-FALKOR-planner-traps, M-FALKOR-mechanics]
+            lessons: [L-02, L-03, L-09]
+          - id: U5.1.2
+            title: FalkorStore, open, config, falkordb-service (remote + docker)
+            epic: E-STORE
+            acceptance:
+              - "FalkorStore executes plan().statements as ONE round trip for replace-file (WRITE_SHAPE_VIOLATION if the plan has more); implements GraphSink (durable) and GraphStore; staleNodes() is one indexed query; FILE.version is a real read-modify-write bump"
+              - "openCpgStore refuses port 6381 and cpg_test_ keys; RETURN 1 materializes the key before bootstrap; remote (default 127.0.0.1:6382) and docker modes; spawned mode absent with a remedy string pointing at docker"
+              - "falkordb-service ported minus the spawned pipeline: Timed<T> on every query; RO_QUERY for reads; explain params as a CYPHER k=v prefix"
+            port_from:
+              - "archive/master-20260916:packages/engine/src/store/{falkordb-store,open,falkordb.config}.ts"
+              - "archive/master-20260916:packages/falkordb-service/**"
+            decisions: [ND-2, DQ-10]
+          - id: U5.1.3
+            title: Compose files, provenance handshake, integration harness, torn-batch test
+            epic: E-STORE
+            acceptance:
+              - "docker/falkordb.yml (cpg-test, 6381, in-memory, TIMEOUT_DEFAULT 30000) and docker/falkordb.dev.yml (cpg-dev, 6382, AOF+RDB, noeviction) ported; `npm run db:test:up` / `db:dev:up` with the nonce handshake; test/support/falkordb.ts refuses a foreign instance three ways"
+              - "the torn-batch test injects a fault (timeout via TIMEOUT 1 on a slowed statement) and asserts the prior subgraph is intact and the receipt is applied:false"
+              - "schema-conformance.ts and invariants.ts ported (fix the cross-package relative import); they run at the end of every integration test"
+            port_from:
+              - "archive/master-20260916:docker/*.yml"
+              - "archive/master-20260916:tools/lib/compose-instance.ts"
+              - "archive/master-20260916:packages/engine/test/support/{falkordb,schema-conformance,invariants}.ts"
+      - id: U5.2
+        name: cpg query and cpg doctor
+        stories:
+          - id: U5.2.1
+            title: cpg query (RO_QUERY) and cpg doctor
+            epic: E-STORE
+            acceptance:
+              - "`cpg query \"<cypher>\"` uses RO_QUERY; rows on stdout (formatTable with alignment asserted via indexOf) or --format=json; `-- N row(s) in X ms` on stderr; a write clause is refused server-side and surfaces as engine-rejected exit 1; a missing graph key errors, never created"
+              - "`cpg doctor` checks: node version, docker present, dev instance reachable, graph key exists, schema_version matches, grammar dir resolvable; every failing check has a remedy an INSTALLED user can act on (never 'run bun run x')"
+            port_from: ["archive/master-20260916:packages/cli/src/commands/query-cmd.ts (ADAPT)"]
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U6
+    name: Parse on save — structural tier and the first cross-file edges (IMPORTS)
+    goal: "Saving a Python or TypeScript file produces MODULE/TYPE_DECL/METHOD/PARAM/MEMBER/CALL/IMPORT nodes with revision_id, SYMBOLs in their own channel, intra-file edges, IMPORTS resolved cross-file through SYMBOL, and the resolver verification harness v1. It becomes a code graph here."
+    why_here: "Import resolution is already at 100% of ceiling with CLI-only resolution (M-RESOLVE-import-ceiling), so the graph becomes a graph three units before the hard resolver (L-20, L-25). Python first (ND-6)."
+    delivers:
+      - "packages/parse (wasm backend, registry, abi, locator)"
+      - "packages/extract (adapters, two-pass walker, DeltaBuilder, ids, CoverageManifest, interface_hash)"
+      - "Python then TypeScript adapters with goldens"
+      - "packages/resolve: NullResolver, PythonPathResolver, TS import resolver, ChainResolver, applyResolutions"
+      - "SYMBOL identity channel + SOURCE_FILE edge"
+      - "resolution-health and identity-invariants checks live"
+      - "sparsity CI gate"
+      - "resolver harness v1"
+    gate:
+      machine:
+        - "C-PARSE (30) and C-EXTRACT (~30) suites green against real implementations; C-RESOLVE (44) green against the chain"
+        - "nodes/LOC <= 1.5 asserted in CI over the fixture corpus (per-file warning above it)"
+        - "every IMPORTS target has a DEFINES edge or a recorded non-resolved status (identity-invariants)"
+        - "every :CPG node's revision_id == its FILE's (revision-reconciliation, now covering the code tier)"
+        - "resolution-health passes: degradedBatches 0; unresolvedRate per kind reported"
+        - "goldens: hello-world Python + TS CPG snapshots checked in; the 'two identical calls + insert above' case: 0 id changes"
+        - "CoverageManifest honest both ways against the fixtures (I14); IMPORT is emitted"
+        - "p95 single-save T2->T3 stated in 06-measurements for the fixture with the enabled set"
+      human: "The owner saves a Python file that imports another and sees the IMPORTS edge appear in the picture; `cpg verify` shows the resolution-health line with the unresolved rate"
+    locks_in: [sparse-by-construction (expression nodes are opt-in, never default), the resolver's five-value status enum on edges, the per-file delta shape into the store]
+    rollback_to: "U5: file-tier graph only; a real product, just not a code graph"
+    size: L
+    risks: ["the resolver term is 88% of the save budget; the harness will tell us if 2 s is keepable (DQ-04)", "decorated Python functions are INVISIBLE to the m0 adapter (a documented gap) — a story fixes it"]
+    features:
+      - id: U6a
+        name: Parse + extract, Python, goldens, the harness skeleton
+        stories:
+          - id: U6a.1
+            title: packages/parse — ported backend, registry, ABI gate, wasm locator
+            epic: E-RESOLVE
+            acceptance:
+              - "ParseService per C-PARSE: registry frozen by the composition root; typescript/tsx/javascript/python registered (javascript has NO adapter — parseable, not extractable); GrammarSource injected; locator explicit > CPG_GRAMMAR_DIR > package anchor; provenance with bytesSha256; handles released explicitly; cache only for retained keys, LRU 100"
+              - "C-PARSE suite green with the real wasm backend; DEFECT-TRUNCATION (200-char literal round-trips), DEFECT-TSX-ROUTING, DEFECT-ABI-VACUOUS, DEFECT-POISONED-INIT all covered"
+            port_from: ["archive/master-20260916:packages/engine/src/parser/*.ts + tests", "archive/master-20260916:packages/engine/src/extract/syntax.ts"]
+            measurements: [M-RESEARCH-tree-sitter]
+          - id: U6a.2
+            title: packages/extract — two-pass walker, Python adapter, DeltaBuilder, ids, CoverageManifest, interface_hash
+            epic: E-SCHEMA
+            acceptance:
+              - "walk.ts ported and SPLIT: scope stack + ids (node-id/symbol-id from U1), SYMBOL minting into the separate channel, Pass A declarations, Pass B CALL nodes with parent-scope-relative ordinals + IN_SCOPE + REACHING_DEF (last match wins); resolveCallee REMOVED — the walker emits RefSites (one per bound name; receiver sites emitted and declined receiver-unknown)"
+              - "Python adapter ported; decorated_definition handled (a decorated function gets a METHOD and a CALL{kind:decorator}); documented gaps recorded as declared-not-emitted with tracking ids"
+              - "CoverageManifest total over 14/15; a test asserts the manifest against the fixtures both ways; an unsupported grammar FAILS"
+              - "ExtractedFile.interfaceHash = sha256 of the normalized exported surface (exported names, kinds, signatures, re-exports) — gates cascade at U7 (ND-9)"
+              - "SOURCE_FILE (MODULE -> FILE) attached by the engine's indexer, not by extract"
+              - "hello-world goldens restored from the tags and extended with the two-identical-calls-plus-insert-above case; extract is deterministic (double-run byte-equal)"
+            port_from:
+              - "archive/m0-calls-symbols-20260916:packages/engine/src/extract/{walk,adapter,python,delta,index}.ts + builtins/"
+              - "archive/master-20260916:packages/engine/src/extract/registry.ts"
+              - "archive/m0-calls-symbols-20260916:packages/engine/src/indexer/source-file.ts"
+              - "archive/m0-calls-symbols-20260916:test/fixtures/golden/simple/**"
+            contracts: [C-EXTRACT]
+            lessons: [L-20, L-44, L-48]
+          - id: U6a.3
+            title: Wire parse -> extract into the engine per save; the code tier's deltas; sparsity gate
+            epic: E-FRESH
+            acceptance:
+              - "on a created/changed file with a registered grammar and adapter, the engine reads bytes once, parses, extracts, emits a producer:'code' delta with every node carrying the batch's revision_id; on delete/move the file-owned subgraph is scope-deleted; the filesystem tier's producer:'filesystem' FILE node and the code tier merge by ownership (DQ-01)"
+              - "CI asserts structural nodes/LOC <= 1.5 over the fixture corpus"
+              - "revision-reconciliation now covers :CPG nodes vs FILE"
+            measurements: [M-SPARSITY-structural]
+      - id: U6b
+        name: TypeScript adapter
+        stories:
+          - id: U6b.1
+            title: TS/TSX adapter with documented gaps and a layered TS fixture
+            epic: E-SCHEMA
+            acceptance:
+              - "typescript.ts ported (kinds, signature text, exported detection, ts/tsx routing); gaps recorded as declared-not-emitted (interface/type_alias/enum, export default, multi-declarator const, decorators, docstrings via previousSibling — C-PARSE Q4 decides)"
+              - "a small layered TypeScript fixture (router -> service -> repository) with a checked-in golden; the TS import extractor works because text is never truncated"
+              - "ND-6: Python landed first; TS resolution beyond imports is NOT claimed (U9)"
+            port_from: ["archive/m0-calls-symbols-20260916:packages/engine/src/extract/typescript.ts + tests", "archive/discovery-20260916:packages/cpg-generator/src/imports.ts (the TS SEAT, now unblocked)"]
+      - id: U6c
+        name: IMPORTS resolution, SYMBOL channel, the chain, and the harness v1
+        stories:
+          - id: U6c.1
+            title: packages/resolve — NullResolver, PythonPathResolver, TS import resolver, ChainResolver, applyResolutions
+            epic: E-RESOLVE
+            acceptance:
+              - "chain(python-path > null) for .py and chain(ts-import > null) for TS resolve IMPORT sites cross-file through SYMBOL fqns via DefinitionLookup (the engine's symbol index built from all files' symbols channels AFTER the sealed set exists); CALL sites are answered same-file by the walker's local table or declined; receiver sites declined receiver-unknown"
+              - "ChainResolver enforces INV-9/10 and capability parity (INV-4); applyResolutions writes CALLS/IMPORTS edges with status/reason/resolvedBy/confidence and produces ResolveReport; an answered-but-no-SYMBOL is droppedNoSymbol"
+              - "C-RESOLVE suite (44) green; INV-10c and INV-4 shown to fail against a deliberately broken chain"
+              - "FixtureResolver is a test double in packages/resolve/test"
+            port_from:
+              - "archive/discovery-20260916:packages/cpg-generator/src/{chain,nullResolver,pythonPath}.ts"
+              - "archive/discovery-20260916:src/dev/fakeResolver.ts"
+              - "archive/discovery-20260916:packages/file-watcher/src/resolvePass.ts (ADAPT)"
+            decisions: [DQ-03, DQ-09]
+            lessons: [L-13, L-46]
+          - id: U6c.2
+            title: identity-invariants and resolution-health go live; the first cross-file edge in the picture
+            epic: E-VERIFY
+            acceptance:
+              - "identity-invariants: every CALLS/IMPORTS target SYMBOL has a DEFINES edge from some file OR the edge status is non-resolved; no VIRTUAL_ROOT id; targets EXIST (not merely 'a resolution is recorded')"
+              - "resolution-health: fed from ResolveReport — fail if degradedBatches > 0 or any backend degraded; stale if the report's seq lags; reports unresolvedRate per kind with SEPARATE denominators"
+              - "saving a.py that imports b.py shows an IMPORTS edge; deleting b.py flips the edge's target to a dangling SYMBOL reported by identity-invariants"
+            resolves: [CS-5, CS-11]
+          - id: U6c.3
+            title: Resolver verification harness v1
+            epic: E-VERIFY
+            acceptance:
+              - "test/harness/resolver: (1) a golden corpus per language with hand-verified cross-file references (start: the two fixtures; grow to the S3 corpora); (2) precision/recall against a language-server oracle (basedpyright over stdio, run out-of-band, NOT in the engine yet) — precision MUST be 0 disagreements; recall reported per RefKind against the oracle's ceiling; (3) per-language ceiling table (Python now; TS 'unmeasured' until U9); (4) latency distribution: ms per ref site and per file, by file size and site count, over a pipelined per-save loop against a warm document (SU-4); (5) degradation visibility: degradedBatches, timedOutSites, backend restarts as first-class report rows"
+              - "the harness runs as `npm run harness:resolve` (local; nightly CI job) and writes a report the owner reads; its first run re-cuts perFileMs and records M-RESOLVE-per-save in 06-measurements"
+              - "the report states in writing whether the 2 s promise fits at p95 for the fixture; if not, DQ-05's promise is restated per measured budget, never silently relaxed"
+            decisions: [DQ-04, DQ-05]
+            measurements: [M-RESOLVE-precision, M-RESOLVE-throughput, M-BUDGET-assembled]
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U7
+    name: Cascade and the freshness promise proven
+    goal: "Multi-file saves and interface-change cascades stay within the budget or are honestly marked stale; the 2 s promise is measured wall-to-wall on the rewritten path with the resolver present."
+    why_here: "Rank 3 becomes true rather than extrapolated; U5 gave the atomic write and U6 the resolver, so the counterfactual cascade number can finally be replaced (SU-1)."
+    delivers: ["interface-hash gating", "bounded cascade with stale/stale_reason", "batch coalescing across files, one atomic statement per file in one round trip", "k=1/10/25 batch benchmarks", "scale fixture", "the freshness statement per consumer set"]
+    gate:
+      machine:
+        - "body-only edit -> 0 cascade files (interface_hash unchanged) asserted"
+        - "export-signature edit -> exactly the dependents with IMPORTS/CALLS/INHERITS_FROM into the changed SYMBOLs re-resolved, an asserted SET not a superset (a superset silently reintroduces the stampede)"
+        - "over-budget cascade: the saved file is ready, dependents carry status stale + stale_reason, readers never blocked, the background drains them"
+        - "k=1/10/25 file batches: revision-reconciliation passes after each; p95 declared in CI as a RELATIVE regression guard (absolute p95 is a local benchmark)"
+        - "first launch on the scale fixture (~100k LOC) <= 10 min locally"
+        - "cascade delta has its own seq with cause:cascade and the originating files"
+      human: "The owner saves a refactor touching 12 files and watches the picture settle; `cpg watch --format=json` shows latencyMs per batch beside the enabled consumer set"
+    locks_in: [the batching policy, the cascade bound]
+    rollback_to: "U6: single-file saves only, with a DOCUMENTED cliff rather than a hidden one"
+    size: M
+    features:
+      - id: U7.1
+        name: Interface-hash gating and bounded cascade
+        stories:
+          - id: U7.1.1
+            title: Cascade computation and the stale marking
+            epic: E-FRESH
+            acceptance: ["dependents = files with IMPORTS/CALLS/INHERITS_FROM edges into SYMBOLs whose defining file's interface_hash changed; re-resolved in a cascade batch; when the per-save budget is exceeded, dependents are marked stale with stale_reason <file id> and drained by a background job; a test asserts the exact dependent set over the layered fixtures"]
+            decisions: [ND-9, F-4, VD-21]
+            measurements: [M-BUDGET-break-points]
+          - id: U7.1.2
+            title: Multi-file batches and the re-measured cascade
+            epic: E-STORE
+            acceptance: ["N files in one WatchSession batch -> N replace-file statements pipelined in one round trip (still one statement per file); the S1 counterfactual (~46 ms/file) is re-measured and recorded as M-LATENCY-cascade-measured; SU-1 closed"]
+      - id: U7.2
+        name: Scale fixture and the freshness statement
+        stories:
+          - id: U7.2.1
+            title: Scale fixture, first-launch budget, memory at scale
+            epic: E-VERIFY
+            acceptance: ["a generator clones the layered fixtures to ~100k LOC; first launch <= 10 min measured locally (VD-20); MemoryStore RSS at ~500k nodes recorded (SU-12); behaviour above 500k nodes sampled (SU-2) — if the atomic replace degrades superlinearly, DQ-10's reopen trigger fires"]
+          - id: U7.2.2
+            title: The freshness statement
+            epic: E-FRESH
+            acceptance:
+              - "06-measurements gains M-FRESH-statement: for each consumer set {memory}, {memory, inspect}, {memory, falkor}, {memory, falkor, inspect}, {…, vscode}: T0->T3 p50/p95 on the fixture, single file and k=10; 01-vision §1 and the README quote it; if any set misses 2 s at p95, the promise is restated per set (DQ-05), never silently relaxed"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U8
+    name: Headless Python resolver
+    goal: "basedpyright-langserver as a subprocess over stdio resolves receiver-typed calls under plain node; EVAL_TYPE is admitted; precision stays at zero disagreements; recall is reported against the ceiling; the resolver has a latency gate."
+    why_here: "Receiver type inference is 59.3% of achievable call edges (M-RESOLVE-receiver-gap); the driver is ~313 lines (M-RESOLVE-headless-cost); it is the funded step DQ-09 named."
+    delivers: ["BasedpyrightResolver (LSP over stdio via ProcessHost, the nine host-independent behaviors)", "EVAL_TYPE admission", "per-save ref-site budget gate", "optional VS Code accelerator link", "purity proof re-run"]
+    gate:
+      machine:
+        - "runtime purity proof: zero vscode modules with the LSP resolver in the chain"
+        - "precision invariant: 0 disagreements vs the oracle on the harness corpus"
+        - "recall >= 95% of the ceiling for receiver-type sites on the S3 corpus (the EVAL_TYPE admission gate; below it EVAL_TYPE stays reserved)"
+        - "per-save ref-site budget: perFileMs (re-cut by the harness) honoured; overruns are timedOutSites + degraded, never a silent slow save"
+        - "INV-23: kill the subprocess 3 times -> permanently degraded, every site backend-unavailable, verify's resolution-health fails"
+        - "C-RESOLVE suite green against the real resolver"
+      human: "The owner saves a Python file with `obj.method()` calls and sees method-call edges appear; the harness report shows recall against ceiling"
+    locks_in: [the subprocess-not-import reading of rank 1]
+    rollback_to: "U7: imports-only edges; status records unresolved honestly (L-08)"
+    size: L
+    features:
+      - id: U8.1
+        name: The LSP driver
+        stories:
+          - id: U8.1.1
+            title: BasedpyrightResolver over stdio through ProcessHost
+            epic: E-RESOLVE
+            acceptance: ["spawns basedpyright-langserver via the injected ProcessHost; waits on initialized + progress tokens (4 s budget); concurrency cap 12 (re-measured); LocationLink targetSelectionRange preferred; self-edge suppression; indexed-only filtering with unresolved-not-external; dedupe -> ambiguous 0.5; path canonicalization to the walker's literal form; never throws; fileChanged forwards didChange; restart budget 3 then degraded; every failure a Resolution with a reason"]
+            port_from: ["archive/discovery-20260916:src/resolve/vscodeDefinitionResolver.ts (the nine behaviors)"]
+            contracts: [C-RESOLVE]
+          - id: U8.1.2
+            title: EVAL_TYPE admission and the receiver-type edge
+            epic: E-SCHEMA
+            acceptance:
+              - "receiver-type resolutions become EVAL_TYPE (CALL -> SYMBOL {relation: receiver-type}) only when the admission gate passes; the schema's reserved_edges entry moves to edges (version bump per F-3); a receiver resolution whose definition is cross-file is DISCARDED for RECEIVER and answered via EVAL_TYPE (C-RESOLVE rule 18)"
+            decisions: [DQ-09]
+      - id: U8.2
+        name: Gates, accelerator, harness growth
+        stories:
+          - id: U8.2.1
+            title: The per-save latency gate and the harness v2
+            epic: E-VERIFY
+            acceptance: ["the harness measures the pipelined per-save loop with the LSP resolver; perFileMs re-cut; M-BUDGET-assembled updated with measured legs; CS-7 closed"]
+          - id: U8.2.2
+            title: Optional VS Code accelerator link
+            epic: E-HOST
+            acceptance: ["apps/vscode may register a ~40-line VsCodeDefinitionResolver behind the same seam as the FIRST link in chain(vscode > basedpyright > python-path > null); the chain refuses to construct without parity; goldens are unchanged (resolvedBy/confidence excluded); the host writes no second population under CALLS"]
+            decisions: [DQ-09]
+            lessons: [L-01]
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U9
+    name: TypeScript receiver typing
+    goal: "A tsserver-based resolver behind the same seam, admitted only after a spike measures the TS ceiling and the resolver clears the same precision invariant."
+    why_here: "TypeScript resolution is entirely unmeasured (M-RESOLVE-typescript); nothing may be inherited from Python."
+    delivers: ["one-day spike with a pre-declared threshold", "TsServerResolver", "TS arm of the harness"]
+    gate:
+      machine:
+        - "the spike report exists BEFORE any resolver code: TS ceiling table over the layered TS fixture with the same denominators as S3; threshold pre-declared (>=80% of ceiling to proceed; below it, per-language producer tiers are re-argued per DQ-09's reopen trigger)"
+        - "precision 0 disagreements; recall reported; purity proof green; C-RESOLVE suite green"
+      human: "The owner sees TS method-call edges and the harness's TS row"
+    rollback_to: "U8: Python-only resolution; TS structural-only, stated"
+    size: M
+    features:
+      - id: U9.1
+        name: Spike then resolver
+        stories:
+          - { id: U9.1.1, title: "TS resolution spike (one day, pre-declared threshold)", epic: E-RESOLVE, acceptance: ["report in 06-measurements as M-RESOLVE-ts-ceiling; go/no-go recorded as a decision entry"] }
+          - { id: U9.1.2, title: "TsServerResolver behind the seam", epic: E-RESOLVE, acceptance: ["tsserver via ProcessHost; Program reuse; same nine behaviors; parity-checked chain; EVAL_TYPE for TS admitted at >=95% of ceiling"] }
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  - id: U10
+    name: Refinement — MCP, overlays, reserved tiers
+    goal: "Agents get <=12 read-only tools over stdio; the analytics overlay (TARGETS, DEPENDS_ON, COMMUNITY) runs off the hot path; the expression tier exists behind a flag; the deferred CFG/PDG names are asserted absent."
+    why_here: "Goal 2 of the charter; last because everything it reads must exist and be verified first."
+    delivers: ["apps/mcp (dual-era stdio shim, reads the store, <=12 tools, cpg://schema resource)", "overlay job with computed_at + manual refresh", "expression tier behind tiers.expression", "reserved-name absence test", "cpg status", "serialize.ts for cpg://schema"]
+    gate:
+      machine: ["a test counts REGISTERED tools and asserts <= 12", "tools/list answered from a static manifest before the store attaches (Codex 10 s timeout); only the transport writes stdout; exit 0 within 500 ms of stdin EOF; never process.exit on engine errors", "every tool result carries status/partial/stale_nodes and a token budget (~8k default) with truncated + cursor", "raw Cypher tool is RO_QUERY + static write-clause rejection + TIMEOUT", "overlay writes never occur inside a per-file replace (OWNERSHIP_VIOLATION test); TARGETS is a pure projection of CALLS.status === resolved through ALIAS_OF*", "a test asserts none of the reserved CFG/PDG/expression names is ever emitted by default; tiers.expression=true emits expression nodes and the sparsity gate is skipped for that run only", "works under >= 2 MCP hosts in CI (stdio hygiene)"]
+      human: "The owner connects Claude Code to `cpg mcp` and asks 'who calls X'; a community list with cohesion scores renders in the inspector"
+    rollback_to: U9
+    size: M
+    features:
+      - id: U10.1
+        name: apps/mcp
+        stories:
+          - { id: U10.1.1, title: "Dual-era stdio shim reading the store", epic: E-LAYOUT, acceptance: ["@modelcontextprotocol/server v2 serveStdio; AM-6 re-verified first (SU-13) and the result recorded; --workspace explicit; discovers the store via config (no daemon, ND-1)"], decisions: [ND-1, VD-35, AM-6] }
+          - { id: U10.1.2, title: "The <=12 tools and cpg://schema", epic: E-RESOLVE, acceptance: ["find_symbol, symbol_details, file_outline, list_files, callers_of, callees_of, imports, impact_of_change, path_between, graph_status, wait_for_ready, query_cypher (listed last) + cpg://schema (from serialize.ts); which 2–3 analytics tools make the 12 decided and recorded (AM-3 open item)"], port_from: ["archive/master-20260916:packages/engine/src/schema/serialize.ts"] }
+      - id: U10.2
+        name: Overlay job and reserved tiers
+        stories:
+          - { id: U10.2.1, title: "Overlay job: TARGETS, DEPENDS_ON, COMMUNITY", epic: E-STORE, acceptance: ["one job, three materializations; periodic tick + computed_at/run_id + `cpg refresh-overlay` / an MCP tool; COMMUNITY carries cohesion and a deterministic label_hint; communities via graphology over a projection (no in-engine Louvain)"], decisions: [DL-8, VD-15] }
+          - { id: U10.2.2, title: "Expression tier behind a flag; reserved-name absence test; cpg status", epic: E-SCHEMA, acceptance: ["tiers.expression opt-in emits IDENTIFIER/LITERAL/LOCAL etc. with tier:'expression' and is never default; a test asserts every reserved_names entry is absent from a default run; `cpg status` prints engine, consumers, coverage, verify state"], decisions: [VD-04, VD-23] }
+      - id: U10.3
+        name: Retirement battery re-run and outline refresh
+        stories:
+          - { id: U10.3.1, title: "Re-run the 21-question battery; refresh 06/07 with measured numbers", epic: E-RETIRE, acceptance: ["an agent given only docs/outline answers >= 18/20; every 'measured at Un' placeholder in 06-measurements is filled or marked still unmeasured"] }
+
+story_template:
+  fields: [id, title, epic, acceptance (2–6 checkable bullets), port_from (archive coordinates), decisions (ids), contracts (ids), measurements (ids), lessons (ids), notes]
+  definition_of_done:
+    - the acceptance bullets are green locally, then in CI
+    - the gate the story contributes to is named in the PR description
+    - any number the story changes is updated in 06-measurements.yaml in the same PR
+    - any decision the story reverses is a new ND-n entry with reopen evidence, never an edit
+    - stubs are labelled REAL / PASSTHROUGH / SEAT in code comments
+    - if the story ports archived code, the NUL-byte and bun-test hazards in 11-salvage.yaml were checked

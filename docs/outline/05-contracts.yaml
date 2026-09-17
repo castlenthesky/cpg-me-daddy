@@ -1,0 +1,824 @@
+# 05 — The nine seams, as data
+#
+# Every boundary in the pipeline is a contract: types, invariants, what an implementation may not do,
+# and an executable conformance suite that every implementation runs unchanged. The suites exist today
+# in the deliberation corpus (retired to the docs/archive branch; ~874 assertions across nine files
+# named C-<NAME>.conformance.test.ts) and are ported into the tree by the milestone that creates each package.
+#
+# This file transcribes the contracts AS AMENDED by the decisions in 02-decisions.yaml. Where a decision
+# changed a contract, the `amended_by` block says what changed and why; the archived spec is history.
+# TypeScript blocks are the normative shapes. `invariants` carry the archived numbering so the ported
+# suites' test names still line up.
+#
+# Enforcement classes: C = compile-time (types or tools/check-deps.mjs) · T = conformance test ·
+# R = runtime assert in the shipped build.
+
+shared_vocabulary:
+  resolution_status: [resolved, ambiguous, external, unresolved, dynamic]   # PROTECTED; reaches the database
+  status_rank: { unresolved: 0, dynamic: 1, external: 2, ambiguous: 3, resolved: 4 }   # rank <= 1 is OPEN (chain continues); >= 2 is an ANSWER (chain stops)
+  resolution_reason:   # closed enum; the dimension the unresolved-rate metric groups by; additive
+    - no-definition
+    - receiver-unknown
+    - name-not-exported
+    - module-not-found
+    - reexport-depth
+    - module-binding
+    - wildcard
+    - truncated-subgraph
+    - provider-error
+    - builtin
+    - self
+    - not-warm
+    - no-resolver
+    - timeout
+    - cancelled
+    - backend-unavailable
+    - unsupported-language
+    - unsupported-kind
+  ref_kind: [call, import, receiver, receiver-type]
+  verify_check_ids:    # ONE shared enum (DQ-06 unified C-CLI's and C-EXT's two sets)
+    - "filesystem-reconciliation     # S4/C1: |files on disk| == |FILE nodes|, per directory, offenders named"
+    - "identity-invariants           # S4/C2: every CALLS/IMPORTS target has a DEFINES edge or a recorded non-resolved status; no VIRTUAL_ROOT id"
+    - "id-uniqueness                 # S4/C3a: node ids unique in the payload/store"
+    - "render-reconciliation         # S4/C3b: renderedNodeCount === payload.nodes.length; `unavailable` when no renderer consumer is enabled (ND-8)"
+    - "revision-reconciliation       # S4/C4 via P-B: every :CPG node's revision_id == its FILE's revision_id"
+    - "resolution-health             # CS-5: ResolveReport.degradedBatches == 0, backend not degraded, unresolvedRate per kind within threshold"
+  verify_check_states: [pass, fail, stale, unavailable]   # worst-of ordering: fail > stale > unavailable > pass; --strict treats unavailable as fail
+  paths:
+    WorkspacePath: "workspace-relative, POSIX separators, no leading ./ — the ONLY path form inside the graph, ids, deltas, store (DQ-02)"
+    AbsolutePath: "native separators; exists only inside FilesystemProbe and SourceOpener; converted at the boundary with startsWith + slice, never String.replace (L-10)"
+
+contracts:
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-MODEL
+    name: the graph vocabulary (transport)
+    package: "@cpg/model"
+    status: partly real on develop (13 exports, 17 tests); amended by DQ-01/F-1 at U1
+    purpose: >
+      The zero-dependency thin waist every producer and consumer agrees on. It transports; it does not
+      validate against the schema (that is packages/model/src/schema, U1), does not render, and declares
+      zero label constants: node.type and edge.type are free strings so adding a label never recompiles
+      a consumer. Consumers derive-and-fallback on an unknown type, never switch exhaustively.
+    types: |
+      export interface SourceRange { readonly startRow: number; readonly startColumn: number; readonly endRow: number; readonly endColumn: number; }  // 0-based rows, UTF-16 columns (= vscode.Position)
+      export interface NodeLocation { readonly filePath: WorkspacePath; readonly range: SourceRange; readonly nameRange?: SourceRange; }
+      export interface GraphNode { readonly id: string; readonly type: string; readonly name?: string; readonly data?: Readonly<Record<string, unknown>>; }
+      export interface GraphEdge { readonly source: string; readonly target: string; readonly type?: string; readonly data?: Readonly<Record<string, unknown>>; }
+      export interface EdgeResolution { readonly status: string; readonly resolvedBy: string; readonly confidence?: number; readonly reason?: string; }
+      export interface GraphPayload { readonly seq: number; readonly nodes: readonly GraphNode[]; readonly edges: readonly GraphEdge[]; }
+      /** The delta ENVELOPE (F-1). seq is per-workspace, allocated by SINK. revision_id is the owning file's content hash and is ALSO on every node in addedNodes. */
+      export interface GraphDelta {
+        readonly seq: number;
+        readonly file: WorkspacePath;
+        readonly revision_id: string;
+        readonly producer: 'filesystem' | 'code';          // the owner tier, for the discriminated merge
+        readonly addedNodes: readonly GraphNode[];
+        readonly addedEdges: readonly GraphEdge[];
+        readonly removedNodeIds: readonly string[];         // removing a node removes every incident edge; edges are never enumerated for removal
+      }
+      export type Read<T> = { state: 'present'; value: T } | { state: 'absent' } | { state: 'malformed'; defect: ModelDefect };
+      export function readNodeLocation(node: GraphNode): Read<NodeLocation>;
+      export function readNodeResolution(node: GraphNode): Read<EdgeResolution>;
+      export function readEdgeResolution(edge: GraphEdge): Read<EdgeResolution>;
+      export type ModelDefectCode = 'empty-id' | 'id-contains-separator' | 'duplicate-node-id' | 'dangling-edge' | 'malformed-location' | 'malformed-resolution' | 'non-monotonic-seq';
+      export function validatePayload(payload: GraphPayload): readonly ModelDefect[];
+      export type DeltaApplyResult = { outcome: 'applied'; payload: GraphPayload } | { outcome: 'already-applied'; payload: GraphPayload } | { outcome: 'gap'; expected: number; got: number };
+      /** Owner-discriminated MERGE (DQ-01c): a re-added id is merged by producer tier — the filesystem tier's fields and the code tier's fields on one node never destroy each other; it is neither concat nor whole-node replace. */
+      export function applyGraphDelta(payload: GraphPayload, delta: GraphDelta): DeltaApplyResult;
+      export type HostToWebview = { type: 'graph'; payload: GraphPayload } | { type: 'graph-delta'; delta: GraphDelta };
+      export type WebviewToHost = { type: 'ready' } | { type: 'reveal'; nodeId: string } | { type: 'resync'; haveSeq: number };
+    amended_by:
+      - decision: DQ-01
+        was: "C-MODEL proposal: GraphPayload.revision/GraphDelta.baseRevision+revision (a range), edgeId(), removedEdgeIds, composeDeltas() with a composition law, whole-node replace on re-add"
+        now: "no revision algebra, no edgeId, no removedEdgeIds, no composeDeltas (none has a consumer among the nine); GraphDelta carries seq + file + revision_id + producer; merge is owner-discriminated"
+        why: "7 of 8 failing adversarial probes were against the machinery removed; the one that matters (two producers, one id — L-01) is fixed by ownership, not by a merge policy. Coalescing of bursts happens in WATCH's merge table over CHANGES, not over deltas."
+      - decision: F-1
+        was: "one monotone `revision` counter doing two jobs"
+        now: "`seq` (order/gap detection, envelope only) and `revision_id` (staleness, on nodes)"
+      - decision: DQ-02
+        was: "NodeLocation.filePath: absolute path"
+        now: "WorkspacePath"
+    invariants:
+      - { id: I-1,  class: C, text: "@cpg/model imports nothing at runtime; no file under packages/** imports vscode (check-deps)" }
+      - { id: I-3,  class: R, text: "no id contains U+0000" }
+      - { id: I-4,  class: T+R, text: "node ids unique within a payload (S4/C3 required check)" }
+      - { id: I-5,  class: T, text: "the merge is an upsert discriminated by producer; removals apply before additions" }
+      - { id: I-7,  class: T, text: "output order deterministic: survivors keep relative order, updated nodes keep their index, new nodes append in delta order" }
+      - { id: I-8,  class: T, text: "removing a node removes every incident edge without the producer enumerating them" }
+      - { id: I-9,  class: T, text: "a dangling edge is RETAINED as data, reported by validatePayload, skipped at draw time, live again when its node arrives (pass-one output of the two-pass design)" }
+      - { id: I-10, class: T+R, text: "applyGraphDelta applies iff delta.seq === payload.seq + 1; already-applied iff delta.seq <= payload.seq; gap otherwise; a gap receiver logs both numbers and requests a full snapshot" }
+      - { id: I-11, class: C+T, text: "every function is pure: readonly everywhere, no Math.random, no Date.now, no I/O" }
+      - { id: I-13, class: C+T, text: "an unknown type string round-trips with zero defects; zero label constants declared here" }
+      - { id: I-14, class: T, text: "absent and malformed are distinguishable at every accessor (Read<T>)" }
+      - { id: I-15, class: X, text: "a per-file delta's removedNodeIds contains only that file's file-owned ids, never a SYMBOL (enforced by the schema's ownership class in packages/model/src/schema and by the store)" }
+    may_not:
+      - switch exhaustively on node.type or edge.type; derive-and-fallback (an unknown label renders grey)
+      - re-derive a node's kind from its name or id (L-48, L-01)
+      - "concatenate on merge (the shipped hazard: 699 payload nodes render as 658)"
+      - return early on an empty or edge-only delta (every cross-file edge arrives edge-only)
+      - call Math.random or Date.now; mutate an argument
+      - put a content hash in a node id
+      - store presentation (colour, size, position, hidden) in data
+      - add a schema-aware helper here (isCallNode, a label union) — that is the schema module
+      - add a dependency
+    conformance_suite: "verifyModelContract(name, impl) — 70 tests on the archive; the shipped characterization test 'DUPLICATES a re-added node id' is INVERTED in the same commit that lands the merge (U1)"
+    resolves: [CS-4 (six counters -> two), CS-1 (path form), L-01, L-26]
+    open_questions_closed:
+      - "OQ-1 one seq scalar or a vector? -> one scalar, one allocator (SINK); producers serialise (ND-1 keeps one process)"
+      - "OQ-2 deltas or full payload to the renderer? -> deltas; postMessage cost of large payloads is a U3 spike"
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-WATCH
+    name: the input seam (WatchBackend + session)
+    package: "@cpg/watch"
+    status: specified; 56-test suite green on the archive against the reference coalesce/flushBatch/session
+    purpose: >
+      Two files and one rule. Layer A (contract.ts, zero imports) is the backend seam that parcel, the
+      fake, and a host implement. Layer B (coalesce, session) is written once and is backend-agnostic: the
+      merge table, the debounce and the ordering live in B, never in a backend. B mints revision_id
+      (DQ-03: "it should be the watcher's job") and emits ChangeBatch with workspace-relative paths.
+    types: |
+      export type ChangeKind = 'created' | 'changed' | 'deleted' | 'moved';
+      export type EntryKind = 'file' | 'directory' | 'unknown';
+      export interface RawWatchEvent { readonly kind: ChangeKind; readonly path: string /* ABSOLUTE, under root */; readonly entry: EntryKind; readonly fromPath?: string; readonly observedAt: number /* T1 */; }
+      export interface WatchCapabilities { readonly id: string; readonly directoryEvents: 'all' | 'delete-only' | 'none'; readonly moveEvents: 'native' | 'host-only' | 'none'; readonly reportsErrors: boolean; readonly reportsOverflow: boolean; readonly honoursIgnore: 'advisory' | 'none'; readonly pathCase: 'sensitive' | 'insensitive'; }
+      export type WatchErrorCode = 'root-missing' | 'permission' | 'overflow' | 'watch-limit' | 'backend-crashed' | 'unsupported';
+      export interface WatchError { readonly code: WatchErrorCode; readonly message: string; readonly fatal: boolean; readonly rescanRequired: boolean; readonly path?: string; readonly cause?: unknown; }
+      export interface WatchBackend { readonly capabilities: WatchCapabilities; subscribe(root: string, onEvents: (events: readonly RawWatchEvent[]) => void, options?: { ignore?: readonly string[]; onError?: (e: WatchError) => void }): Promise<WatchSubscription>; }
+      export interface WatchSubscription { readonly capabilities: WatchCapabilities; close(): Promise<void>; }
+      export interface NormalizedChange { readonly kind: ChangeKind; readonly entry: EntryKind; readonly path: WorkspacePath; readonly fromPath?: WorkspacePath; readonly observedAt: number; readonly revision_id?: string /* sha256 of bytes; present for file created/changed */; readonly sizeBytes?: number; }
+      export type BatchCause = 'initial' | 'live' | 'rescan';
+      export interface ChangeBatch { readonly seq: number /* per session, from 0, no gaps */; readonly cause: BatchCause; readonly changes: readonly NormalizedChange[]; readonly clock: { firstEventAt: number /* T1 */; settledAt: number /* T2 */ }; }
+      export interface WatchSink { onBatch(batch: ChangeBatch): Promise<void>; }   // awaited; rejection means NOT delivered
+      export interface WatchSessionOptions { readonly root: string; readonly backend: WatchBackend; readonly sink: WatchSink; readonly trailingMs?: number /* 100 */; readonly ceilingMs?: number /* 500 */; readonly timers?: TimerApi; readonly onDegraded?: (paths: readonly string[], error: WatchError) => void; }
+      export function coalesce(pending: ReadonlyMap<string, PendingChange>, incoming: NormalizedChange): readonly CoalesceOp[];   // pure; 20 cells
+      export function flushBatch(pending: ReadonlyMap<string, PendingChange>): readonly NormalizedChange[];                      // total order: moved < deleted < changed < created; deletes children-first, creates parents-first
+    merge_table:
+      note: "existing (rows) x incoming (columns) at the destination key. Every cell has one test. Deletes are ABSORBING (R2). created x changed -> created is the D1 fix (kind-blind last-write-wins dropped file creations)."
+      rows:
+        absent:   { created: created, changed: changed, deleted: deleted, moved: moved }
+        created:  { created: created, changed: created, deleted: deleted, moved: created }
+        changed:  { created: changed, changed: changed, deleted: deleted, moved: moved }
+        deleted:  { created: changed, changed: changed, deleted: deleted, moved: changed }
+        moved_P:  { created: "moved{from:P}", changed: "moved{from:P}", deleted: "deleted + set P=deleted", moved: "moved{from:new} + set P=deleted" }
+      source_key_rules: "a moved resolves its source key first: absent->keep; created->drop from, degrade to created at dest; changed->drop from, stays moved; deleted->keep delete, degrade to created; moved{from:O}->compose to moved{from:O}; missing fromPath->degrade to created"
+      supersedes: "C-CLI's duplicate table (created x deleted -> drop) — CS-10 resolved in favour of this table; there is exactly one merge table in the system"
+    budget_boundary:
+      T0_T1: "~74 ms macOS FSEvents (measured twice within 5%); outside our code; may not be benchmarked against"
+      T1_T2: "trailingMs (100) / ceilingMs (500): policy, declared, dialable; the only knob that moves the human clock without touching the pipeline; a declared maxWaitMs cap means a burst cannot delay indefinitely (DQ-05)"
+      T2_T3: "the pipeline clock, handed to SINK/STORE"
+      rule: "all three intervals separately reportable (clock.firstEventAt, clock.settledAt, SINK's T3); a single mixed number is how the 2 s claim becomes unfalsifiable"
+    invariants:
+      - { id: INV-3,  class: C, text: "no file in packages/watch imports vscode, a parser, a store, or node:fs (hashing is B's one read, via the injected FilesystemProbe)" }
+      - { id: INV-4,  class: T+R, text: "every emitted raw path is absolute and strictly under root; toRelativePosix throws 'path escapes root'" }
+      - { id: INV-5,  class: T, text: "a file creation while subscribed is delivered at least once" }
+      - { id: INV-6,  class: T, text: "a backend does not coalesce: create-then-change yields >= 2 raw events" }
+      - { id: INV-9,  class: T, text: "directoryEvents:'all' implies a directory create is actually observable (kills the dead branch of L-07)" }
+      - { id: INV-10, class: T, text: "reportsErrors:true implies an injected error surfaces; false implies onError is never called ('void onError;' is a conformance failure)" }
+      - { id: INV-14, class: T, text: "coalesce is pure" }
+      - { id: INV-15, class: T, text: "the merge table is total: 20 cells, one test each" }
+      - { id: INV-16, class: T, text: "batch order moved < deleted < changed < created; deletes children-first, creates parents-first (master's typeRank, restored)" }
+      - { id: INV-17, class: T, text: "batch order is total: identical output under input permutation" }
+      - { id: INV-19, class: T, text: "changed on an unknown path is an UPSERT for a consumer, not a no-op (second half of the D1 fix)" }
+      - { id: INV-20, class: T, text: "seq starts at 0, monotonic, no gaps" }
+      - { id: INV-21, class: T, text: "at most one batch in flight; delivery strictly seq-ordered (SerialQueue)" }
+      - { id: INV-22, class: T, text: "a rejecting sink calls onDegraded with the affected paths; never a log line alone (L-08)" }
+      - { id: INV-23, class: T+R, text: "paths leaving the seam are workspace-relative POSIX via startsWith + slice (L-10)" }
+      - { id: INV-25, class: T, text: "a WatchError with rescanRequired obliges a full rescan; surfaced, never swallowed" }
+      - { id: INV-26, class: T, text: "NEW (DQ-03): every file created/changed carries revision_id = sha256(bytes), hashed once here; downstream carries it, never recomputes" }
+    guarantees: [at-least-once after subscribe resolves, per-path FIFO, absolute paths under root from backends, silence after close, static honest capabilities, in-memory known state advances ONLY after confirmed delivery]
+    not_guaranteed: [cross-path ordering, exactly-once (duplicates expected; a backend must NOT dedupe), completeness under load (overflow arrives as an error or as nothing), moves (may arrive as deleted+created), directory events, that the path still exists, anything before subscribe resolves]
+    may_not:
+      - "a backend: debounce, batch, coalesce, dedupe, reorder, drop, read contents, hash, lstat, touch a store/parser/renderer, accept and discard onError, claim a capability it lacks, synthesize a moved, emit a path outside root, deliver after close, throw synchronously from subscribe, eagerly import @parcel/watcher (dynamic import only), run alongside the VS Code watcher in the extension host"
+      - "layer B: put domain policy in the generic batcher, be a barrel that is also an implementation, advance known state before confirmed delivery, grow pause()/resume() with no caller"
+    conformance_suite: "verifyWatchBackendContract (12) · verifyCoalesceContract (26) · verifyBatchOrderContract (4) · verifyWatchSessionContract (14); the suite carries the normative reference coalesce/flushBatch/createWatchSession — lift them verbatim into the package"
+    port_from:
+      - "archive/research-sweep-20260916:packages/engine/src/watch/{sink,queue,backend,events,normalize,parcel-backend,debounce}.ts + 667 LOC of tests"
+      - "archive/discovery-20260916:packages/file-watcher/src/changes.ts"
+    resolves: [CS-10, L-14, L-07, L-15, L-31 (D1 kind-blind batching)]
+    open_questions:
+      - { id: OQ-1, kind: spike, text: "VS Code host directory events: 'none' + ancestor rescan, or onDidCreateFiles too?", disposition: "under P-A the host is not a producer input; only the parcel backend matters; ancestor rescan (discovery's WorkspaceGraphIndex.applyChange) is the fallback" }
+      - { id: OQ-2, kind: spike, text: "does @parcel/watcher surface overflow at all?", disposition: "U4 spike; if not, a periodic reconcile walk is a funded story" }
+      - { id: OQ-3, kind: debate, text: "teardown policy: flush, persist, or marker?", disposition: "close() drops; the next session's initial walk is the marker (43 s at 1,802 files is the cost; revisit if it hurts)" }
+      - { id: OQ-5, kind: spike, text: "rename pairing by content hash only misses rename+edit", disposition: "accepted for v1; inode pairing deferred" }
+      - { id: OQ-6, kind: spike, text: "case-insensitive volumes: fold the pending-map key?", disposition: "U4 30-minute spike on macOS" }
+      - { id: OQ-7, kind: human, text: "human clock or pipeline clock?", disposition: "ANSWERED: human clock (DQ-05)" }
+      - { id: OQ-8, kind: human, text: "directory move in scope?", disposition: "v1: arrives as N deletes + N creates (ids under the subtree churn); directory-move relocation deferred with a trigger" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-PARSE
+    name: parser / language registry
+    package: "@cpg/parse"
+    status: specified; suite exports verifyParseContract (30) + verifyGrammarDirResolution; runs when a harness exists (U6a)
+    purpose: >
+      Grammar acquisition and provenance, the parse call, tree lifetime, language registration. Text in,
+      live tree out. Never opens a path, never names a graph label, never writes to disk by default.
+      Latency is not a design input here (tree-sitter is 1.45–9.48 ms p50); tree LIFETIME is a
+      memory-safety contract (~1.6 MB per cached 1000-line tree; the wasm heap never shrinks).
+    types: |
+      export interface SyntaxPoint { readonly row: number; readonly column: number; }   // 0-based row, UTF-16 column
+      export interface SyntaxNode { readonly type: string; readonly startPosition: SyntaxPoint; readonly endPosition: SyntaxPoint; readonly startIndex: number; readonly endIndex: number; readonly namedChildren: readonly SyntaxNode[]; childForFieldName(name: string): SyntaxNode | null; readonly text: string /* NEVER truncated */; }
+      export type LanguageId = string;  export type DocumentKey = WorkspacePath;
+      export interface GrammarRef { readonly wasmFile: string; readonly packageName: string; }
+      export interface LanguageRegistration { readonly id: LanguageId; readonly grammar: GrammarRef; readonly rootNodeType: string; readonly extensions: readonly string[]; }
+      export interface LanguageRegistry { register(r: LanguageRegistration): RegisterOutcome; freeze(): void; readonly frozen: boolean; get(id): LanguageRegistration | undefined; languageForExtension(ext): LanguageId | undefined; languageForPath(path): LanguageId | undefined; ids(): readonly LanguageId[]; }
+      export interface GrammarSource { load(ref: GrammarRef): Promise<GrammarBytesOutcome>; describe(): string; }   // the ONLY byte channel; never throws
+      export type GrammarDirResolver = (req: { packageName: string; explicit?: string; env?: Record<string, string | undefined>; resolvePackageJson(pkg: string): string }) => GrammarDirOutcome;  // explicit > CPG_GRAMMAR_DIR > package anchor
+      export interface GrammarProvenance { readonly language: LanguageId; readonly packageName: string; readonly packageVersion?: string; readonly wasmFile: string; readonly origin: string; readonly bytesSha256: string; readonly abiVersion: number; readonly abiSupported: { minCompatible: number; languageVersion: number }; }
+      export interface ParseRequest { readonly key: DocumentKey; readonly text: string; readonly language?: LanguageId; }
+      export type ParseError = { code: 'unsupported-language' | 'grammar-unavailable' | 'grammar-rejected' | 'abi-unreadable' | 'abi-out-of-range' | 'runtime-unavailable' | 'no-tree' | 'disposed'; message: string; /* + per-code fields */ };
+      export type ParseOutcome = { ok: true; handle: ParseHandle } | { ok: false; error: ParseError };   // a SYNTAX ERROR is ok:true with hasError:true
+      export interface ParseHandle { readonly key: DocumentKey; readonly language: LanguageId; readonly root: SyntaxNode; readonly rootType: string; readonly hasError: boolean; readonly rootTypeMismatch: boolean; readonly released: boolean; diagnostics(): { errorNodeCount: number; missingNodeCount: number; errorSpanRatio: number }; release(): void; }
+      export interface TreeCachePolicy { readonly maxRetainedTrees: number; }   // finite; unbounded is unrepresentable
+      export interface ParseService { ensureReady(ids: readonly LanguageId[]): Promise<readonly ParseError[]>; parse(req: ParseRequest): Promise<ParseOutcome>; retain(key): void; releaseDocument(key): void; provenance(): readonly GrammarProvenance[]; stats(): ParserStats; dispose(): { leakedHandles: number; cachedTreesReleased: number }; }
+    invariants:
+      - { id: I1,  class: C, text: "no vscode import" }
+      - { id: I2,  class: C+T, text: "imports no graph vocabulary, extractor, resolver, renderer, store; only runtime dep is the parser binding" }
+      - { id: I5,  class: T, text: "routing by extension exactly: .tsx->tsx, .ts/.mts/.cts->typescript, .js/.jsx/.mjs/.cjs->javascript, .py->python; case-insensitive; Makefile->undefined" }
+      - { id: I6,  class: T, text: "no aliasing, no default grammar; unregistered => unsupported-language" }
+      - { id: I10, class: T, text: "grammar discovery consults no __dirname, repo root, or cwd" }
+      - { id: I11, class: T, text: "locator precedence explicit > CPG_GRAMMAR_DIR > package anchor, reported in `via`" }
+      - { id: I13, class: T+R, text: "reading the ABI range before init throws AbiNotReadyError; unreadable is an error, never a skipped check" }
+      - { id: I15, class: T, text: "a failed init/load is not memoised; a fixed cause succeeds next time" }
+      - { id: I16, class: T, text: "a successful load is memoised by promise: N parses => 1 source read; concurrent first use shares one in-flight load" }
+      - { id: I19, class: T, text: "source text never comes from disk: a key with no file on disk parses" }
+      - { id: I20, class: T, text: "stats().debugDumpsWritten === 0 by default" }
+      - { id: I21, class: T, text: "leaf text is never truncated (the 40-char SNIPPET_MAX_LENGTH defect blocked the TS import extractor)" }
+      - { id: I22, class: T, text: "a syntax error is a successful parse: ok, hasError, walkable root" }
+      - { id: I23, class: T, text: "misrouted source is flagged (hasError and/or rootTypeMismatch), never silently accepted (.tsx at the TS grammar yields an ERROR tree, not a warning)" }
+      - { id: I24, class: T+R, text: "handle lifetime: parse +1 live; release -1; double release no-op; root after release throws HandleReleasedError" }
+      - { id: I25, class: T, text: "cachedTrees <= maxRetainedTrees; an evicted tree is released (tree.delete()), not leaked" }
+      - { id: I26, class: T, text: "nothing is cached for a non-retained key" }
+      - { id: I31, class: T, text: "if incremental reparse is ever used, the reparsed tree's S-expression equals a fresh parse (a wrong edit yields a wrong tree with no error)" }
+      - { id: I33, class: T, text: "same (text, language, bytesSha256) => identical tree; deterministic" }
+      - { id: I34, class: T, text: "provenance() has one entry per loaded grammar with a non-empty bytesSha256" }
+    may_not:
+      - "read source from disk or accept a path for text"
+      - "write anything by default"
+      - "compute a path from __dirname/repo root/cwd"
+      - "truncate node text"
+      - "eagerly copy the tree to plain JS"
+      - "alias grammars or fall back to a default"
+      - "sniff shebangs"
+      - "read ABI constants before init"
+      - "memoise a failure"
+      - "cache a non-retained key or hold an unbounded cache"
+      - "throw for an expected condition (two throws exist: HandleReleasedError and AbiNotReadyError, both caller bugs)"
+      - "degrade a failure into an empty/ERROR tree"
+      - "name a graph label/edge/id/symbol/delta/store concept"
+      - "add incremental reparse on latency grounds"
+      - "export a barrel with implementation"
+      - "require the monorepo/bundler/VS Code to run"
+    conformance_suite: "verifyParseContract(harness) 30 tests over I5–I34; verifyGrammarDirResolution(resolve) for I10–I12; defect tags DEFECT-REPO-ROOT, -TSX-ROUTING, -JS-ALIAS, -ABI-VACUOUS, -POISONED-INIT, -TRUNCATION, -DUMP-DEFAULT, -TREE-LEAK, -GOD-PACKAGE, -VOCAB-OWNERSHIP, -SILENT-FALLBACK"
+    port_from:
+      - "archive/master-20260916:packages/engine/src/parser/{backend,grammars,abi,wasm-locator,web-tree-sitter-backend}.ts + tests"
+      - "archive/master-20260916:packages/engine/src/extract/syntax.ts"
+    pinned: { web-tree-sitter: 0.27.0, "@vscode/tree-sitter-wasm": 0.3.1, grammars: [typescript, tsx, javascript, python], abi_range: "13–15" }
+    open_questions:
+      - { id: Q1, kind: spike, text: "VSIX: copy .wasm next to the bundle or point CPG_GRAMMAR_DIR into node_modules?", disposition: "U3 packaging spike (<=1h)" }
+      - { id: Q2, kind: debate, text: ".js: registered-with-no-adapter or its own registration?", disposition: "registered (parseable), no adapter (not extractable) in v1; the 4-vs-3 drift is made visible by C-EXTRACT's CoverageManifest" }
+      - { id: Q4, kind: debate, text: "does TS need previousSibling on SyntaxNode for doc comments?", disposition: "additive; add when U6b needs docstrings" }
+      - { id: Q5, kind: human, text: "which grammar package/version?", disposition: "vendor @vscode/tree-sitter-wasm@0.3.1 (day-one answer; self-building is a CI cost to fund later)" }
+      - { id: Q6, kind: human, text: "maxRetainedTrees a config key or constant?", disposition: "constant 100 in v1 (~<=160 MB), exposed in cpg.config.yaml later if a user needs it" }
+      - { id: Q7, kind: debate, text: "parse unsaved editor buffers?", disposition: "ANSWERED NO for v1 (DQ-09): not reproducible by cpg index" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-EXTRACT
+    name: AST to graph elements, per file
+    package: "@cpg/extract"
+    status: specified; suite exports verifyExtractContract (~30 activate with a harness) + verifySealContract; typechecks clean
+    purpose: >
+      Parse tree in, graph elements out, per file, zero cross-file knowledge. The producer boundary of the
+      two-pass design. Salience (what gets a node) is decided in exactly one place, the LanguageAdapter's
+      classify(node, container), kept as a frozen table per grammar, compiled in, never configuration:
+      sparse-by-design is literal — no node for a thing means the adapter returned undefined for it.
+    types: |
+      export type FileOwnedLabel = Exclude<NodeLabel, 'DIRECTORY' | 'FILE' | 'SYMBOL' | 'COMMUNITY' | 'TAG' | 'META_DATA'>;   // MODULE | TYPE_DECL | METHOD | PARAM | MEMBER | CALL | IMPORT | UNKNOWN — an extractor that names another label does not compile
+      export type Tier = 'structural' | 'expression';
+      export interface ExtractRequest { readonly path: WorkspacePath; readonly grammarId: GrammarId; readonly root: SyntaxNode; readonly revision_id: string /* travels through; NEVER enters an id */; readonly lineCount: number; readonly tiers?: { expression?: boolean /* default FALSE */ }; readonly budget?: { maxNodes?: number; maxDepth?: number /* no hidden default */ }; }
+      export interface NodeElement { readonly label: FileOwnedLabel; readonly id: string; readonly file: WorkspacePath; readonly revision_id: string; readonly tier: Tier; readonly range: SourceRange; readonly nameRange?: SourceRange; readonly properties: Readonly<Record<string, PropertyValue>>; }
+      export interface SymbolElement { readonly fqn: string; readonly origin: 'local' | 'external' | 'builtin'; readonly language: string; readonly properties: Readonly<Record<string, PropertyValue>>; }   // separate channel: a per-file replace never sweeps a symbol another file points at
+      export type EndpointRef = { by: 'id'; label: FileOwnedLabel; key: string } | { by: 'fqn'; label: 'SYMBOL'; key: string };
+      export interface EdgeElement { readonly type: EdgeType; readonly from: EndpointRef; readonly to: EndpointRef; readonly properties: Readonly<Record<string, PropertyValue>>; }
+      export interface RefSite { readonly id: string /* unique per BOUND NAME */; readonly nodeId: string /* several sites may share one CALL/IMPORT */; readonly filePath: WorkspacePath; readonly kind: RefKind; readonly position: { row: number; column: number } /* the EXACT token a definition provider must be asked about */; readonly nameParts: readonly string[]; readonly importBinding?: { module: string; relativeDepth: number; imported?: string; local: string }; readonly declined?: ResolutionReason; }
+      export interface ExtractedFile { readonly path: WorkspacePath; readonly grammarId: GrammarId; readonly revision_id: string; readonly nodes: readonly NodeElement[]; readonly symbols: readonly SymbolElement[]; readonly edges: readonly EdgeElement[]; readonly refSites: readonly RefSite[]; readonly stats: { astNodesVisited: number; structuralNodes: number; expressionNodes: number; lineCount: number }; readonly elementDigest: string /* pure function of the four arrays */; readonly interfaceHash: string /* NEW (ND-9): normalized exported surface */; }
+      export type ExtractOutcome = { kind: 'ok'; file: ExtractedFile } | { kind: 'truncated'; file: ExtractedFile; truncation: { limit: 'maxNodes' | 'maxDepth'; limitValue: number; droppedAtNodeType: string; droppedRange: SourceRange } } | { kind: 'failed'; error: { code: 'root-type-mismatch' | 'grammar-unsupported' | 'tier-disabled' | 'budget-invalid' | 'path-not-relative' | 'adapter-missing' | 'internal'; message: string; path: string } };
+      export type Disposition = { state: 'emits'; fromNodeTypes: readonly string[] } | { state: 'not-mine'; owner: 'filesystem-tier' | 'resolve-pass' | 'analysis-pass' | 'meta' } | { state: 'declared-not-emitted'; reason: string; trackingId: string };
+      export interface CoverageManifest { readonly contractVersion: string; readonly grammarId: GrammarId; readonly nodes: Readonly<Record<NodeLabel, Disposition>> /* TOTAL over 14 */; readonly edges: Readonly<Record<EdgeType, Disposition>> /* TOTAL over 15 */; }
+      export interface Extractor { readonly contractVersion: string; readonly grammars: readonly GrammarId[]; coverage(grammarId): CoverageManifest; extract(req: ExtractRequest): ExtractOutcome; /* SYNCHRONOUS and pure */ }
+      export interface LanguageAdapter { readonly grammarId: GrammarId; readonly language: string; readonly moduleRootType: string; moduleName(path): string; classify(node: SyntaxNode, container: 'MODULE' | 'TYPE_DECL'): DeclarationInfo | undefined; classifyExpression?(node): ExpressionVerdict | undefined; localBindings?(regionRoot): readonly string[] | undefined; coverage(): CoverageManifest; }
+      declare const SEALED: unique symbol;
+      export interface ExtractedFileSet { readonly [SEALED]: true; readonly files: ReadonlyMap<WorkspacePath, ExtractedFile>; readonly refSites: readonly RefSite[] /* (path, siteId) order */; }
+      export function sealExtractedFiles(files: Iterable<ExtractedFile>): { kind: 'ok'; set: ExtractedFileSet } | { kind: 'failed'; duplicatePaths: readonly string[] };
+      export type ResolvePassEntry = (set: ExtractedFileSet) => unknown;   // "resolve while still walking" does not typecheck
+    amended_by:
+      - decision: DQ-02/DQ-06
+        was: "contentDigest"
+        now: "revision_id on the request, on every NodeElement, and on ExtractedFile (P-B)"
+      - decision: ND-9
+        was: "nothing bounded cascade"
+        now: "ExtractedFile.interfaceHash (normalized exported-declaration surface) is emitted here so U7 can gate the cascade"
+      - decision: ND-10 / motion M3
+        note: "the extractor emits a `tier` discriminator so a future expression pass is additive; U1's identity test proves a statement-level ordinal id round-trips"
+    invariants:
+      - { id: I2,  class: T, text: "extract performs no I/O (Module._load trap; a native-ESM runtime must fail LOUDLY if the trap cannot install — Q4)" }
+      - { id: I3,  class: T, text: "deterministic: same request => byte-identical output including array order" }
+      - { id: I4,  class: T, text: "extract never throws; every failure is an ExtractOutcome" }
+      - { id: I5,  class: R+T, text: "every NodeElement.file === request.path" }
+      - { id: I6,  class: R+T, text: "every node id starts `${path}:` and contains no substring of revision_id; ids are stable across edits that do not touch the construct" }
+      - { id: I7,  class: R+T, text: "node ids unique within the file; symbol fqns unique within the file" }
+      - { id: I8,  class: C+T, text: "no SYMBOL/FILE/DIRECTORY/COMMUNITY/TAG/META_DATA in nodes" }
+      - { id: I9,  class: R+T, text: "every edge endpoint resolves within this file's nodes (by id) or symbols (by fqn)" }
+      - { id: I10, class: R+T, text: "no edge endpoint names another file's path; cross-file travels through SYMBOL only (L-03)" }
+      - { id: I11, class: R+T, text: "CALLS/IMPORTS carry status; resolved only for a same-file target; external only from the adapter's builtin table; no bare-name SYMBOL is minted for what was not attributed" }
+      - { id: I12, class: R+T, text: "every ref site that produced no edge carries a ResolutionReason; receiver sites are emitted even though v1 answers none (declined receiver-unknown) so the 59.3% gap is COUNTED" }
+      - { id: I13, class: C+T, text: "CoverageManifest is total over 14 labels and 15 edge types; silence is unrepresentable (the IMPORT-declared-never-emitted defect: 118 statements uncounted)" }
+      - { id: I14, class: T, text: "coverage is honest both ways against the fixture corpus" }
+      - { id: I15, class: T, text: "structural density <= 1.5 nodes/LOC (measured 0.361/0.429; per-file vs corpus-level is Q6)" }
+      - { id: I16, class: T, text: "expression tier OFF by default; requesting it either fails tier-disabled or actually emits it — accepted-and-silently-does-nothing is forbidden" }
+      - { id: I17, class: T, text: "a budget hit yields kind:'truncated' with a report, never a short 'ok'; no hidden default cap" }
+      - { id: I18, class: T, text: "elementDigest is a pure function of the four arrays; does NOT change when only revision_id does" }
+      - { id: I19, class: R+T, text: "no emitted string contains U+0000" }
+      - { id: I20, class: T, text: "ref position is the LAST name segment of a callee chain and the IMPORTED name (not the alias) for an import" }
+      - { id: I21, class: T, text: "intra-file attribution is order-independent: Pass A completes the file before Pass B" }
+      - { id: I23, class: T, text: "rows 0-based; columns UTF-16 code units (emoji fixture)" }
+      - { id: I25, class: T, text: "an unsupported grammar FAILS; never an empty result" }
+    may_not: [import vscode, do any I/O, resolve anything cross-file, match a name across the workspace (the stem-map and findSymbolInWorkspace patterns are banned by name), swallow a failure, truncate silently, return empty for an unknown grammar, be non-deterministic, put a content hash in an id, key salience on a wasm filename or a flat nodeType->label map, expose salience as configuration, mint a SYMBOL in the nodes channel or one nothing targets, ask a definition provider at the receiver token, emit a raw NUL byte, turn the expression tier on by default, deep-import another package's dist, be verified only by a hand-run script, rely on the picture]
+    conformance_suite: "verifyExtractContract(harness{name, createExtractor, parse, digest}) — runs identically against hand-built fake SyntaxNodes (no wasm) and the real backend; verifySealContract; fixtures src/main.py + src/main.ts with named hazards (alias import, relative import, dotted call, forward reference, emoji column)"
+    port_from:
+      - "archive/m0-calls-symbols-20260916:packages/engine/src/extract/{walk,adapter,python,typescript,delta,index,registry}.ts + builtins/"
+      - "archive/m0-calls-symbols-20260916:packages/engine/src/identity/{node-id,symbol-id}.ts + tests + id-diff support"
+      - "archive/discovery-20260916:packages/cpg-generator/src/{refSites,imports,subgraph}.ts (ADAPT: refRange/receiverRange rules; separate symbols channel)"
+    resolves: [CS-8 (elementDigest dropped at every seam — now revision_id is the staleness anchor and elementDigest stays the content anchor), L-20, L-44, L-26]
+    open_questions:
+      - { id: Q1, kind: debate, text: "may the extractor mint UNKNOWN for an unclassifiable construct?", disposition: "yes, sparingly, tagged needs_triage; it keeps counts reconcilable (DL-11)" }
+      - { id: Q3, kind: debate, text: "which of IN_SCOPE/REACHING_DEF/INHERITS_FROM/MEMBER_OF are per-file-emittable?", disposition: "IN_SCOPE and REACHING_DEF per-file (m0 walker emits them); INHERITS_FROM per-file with a SYMBOL endpoint; MEMBER_OF is overlay (not-mine)" }
+      - { id: Q5, kind: spike, text: "TS ref positions/import shapes same as Python?", disposition: "U6b assumes yes; U9's spike measures resolution" }
+      - { id: Q6, kind: human, text: "1.5 n/LOC per file or corpus-level?", disposition: "corpus-level assert + per-file WARNING (a generated file must not train people to disable the test)" }
+      - { id: Q7, kind: debate, text: "does elementDigest cover refSites?", disposition: "yes (purity over all four arrays), because a decline-reason change is a resolver-visible change" }
+      - { id: Q8, kind: debate, text: "where is SOURCE_FILE (MODULE->FILE) minted?", disposition: "by the engine's indexer alongside the filesystem tier, as the archived source-file.ts does; not by extract (FILE is not a FileOwnedLabel)" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-RESOLVE
+    name: the resolver seam
+    package: "@cpg/resolve"
+    status: specified; suite 44 tests green against the reference, 2 proven to fail against a broken chain; runs with real resolvers from U6c
+    purpose: >
+      Turns unanswered RefSites into Resolutions, batch per file, location-not-symbol, through a chain of
+      links that can only raise an answer's rank, never lower it. Emits ResolveReport, which is the
+      resolver's staleness assertion. Owns applyResolutions(set, batches) -> edges (DQ-03 fold).
+    types: |
+      export interface RefPosition { readonly row: number; readonly column: number; }
+      export interface DefinitionSite { readonly filePath: WorkspacePath; readonly position: RefPosition; }
+      export interface Resolution { readonly refId: string; readonly status: ResolutionStatus; readonly definition?: DefinitionSite /* iff resolved|ambiguous; NEVER for external */; readonly target?: { fqn: string; filePath?: WorkspacePath } /* an fqn READ from DefinitionLookup; target wins over definition */; readonly resolvedBy: string; readonly confidence: number /* [0,1]; 0 when rank <= 1 */; readonly reason?: ResolutionReason; }
+      export function unresolved(ref: RefSite, resolvedBy: string, reason: ResolutionReason): Resolution;
+      export interface DefinitionLookup { symbolAt(filePath, row, column): string | undefined; symbolNamed(filePath, name): string | undefined /* caller must ALREADY have picked a file */; hasSymbol(fqn): boolean; isIndexed(filePath): boolean; }
+      export interface ResolverCapabilities { readonly extensions: readonly string[]; readonly kinds: readonly RefKind[]; readonly host: 'headless' | 'host-accelerator'; readonly maxConcurrentFiles: number; }
+      export type BackendState = 'stopped' | 'starting' | 'warming' | 'ready' | 'degraded';
+      export interface ResolveBudget { readonly perSiteMs: number /* 250 */; readonly perFileMs: number /* 500, re-cut by the harness */; readonly warmupMs: number /* 4000 */; }
+      export interface ResolveBatch { readonly resolutions: readonly Resolution[] /* exactly one per input ref, in order */; readonly diagnostics: { resolverId: string; filePath: WorkspacePath; siteCount: number; backend: BackendState; degraded: boolean; elapsedMs: number; timedOutSites: number }; }
+      export interface Resolver { readonly id: string; readonly precision: 'syntactic' | 'checker' | 'index'; readonly capabilities: ResolverCapabilities; open(ws: { rootPath: string; definitions: DefinitionLookup }): Promise<void>; fileChanged(filePath, text: string | null): Promise<void>; resolve(filePath, refs: readonly RefSite[], ctx?: { token?: { isCancellationRequested: boolean }; budget?: ResolveBudget }): Promise<ResolveBatch>; status(): { resolverId: string; state: BackendState; restarts: number; lastError?: ResolverError }; close(): Promise<void>; }
+      export interface ProcessHost { spawn(command: string, args: readonly string[], options?: { cwd?: string }): SubprocessHandle; }   // the injected process seam; a resolver spawns nothing except through it
+      export interface ResolveReport { readonly siteCount: Record<RefKind, number>; readonly statusCount: Record<RefKind, Partial<Record<ResolutionStatus, number>>>; readonly reasonCount: Partial<Record<ResolutionReason, number>>; readonly byResolver: Record<string, number>; readonly unresolvedRate: Partial<Record<RefKind, number>> /* SEPARATE denominators for call/import vs receiver/receiver-type */; readonly degradedBatches: number; readonly backendRestarts: number; readonly edgeCount: number; readonly droppedNoSymbol: number; }
+      /** DQ-03 fold: the resolve stage owns turning answers into edges. */
+      export function applyResolutions(set: ExtractedFileSet, batches: readonly ResolveBatch[]): { edges: readonly EdgeElement[]; report: ResolveReport };
+    invariants:
+      - { id: INV-1,  class: T, text: "resolutions.length === refs.length, same order, same refIds; never short/long/reordered" }
+      - { id: INV-2,  class: T+R, text: "a resolver answers rank >= 2 only for a kind in its declared capabilities.kinds" }
+      - { id: INV-4,  class: T+R, text: "CAPABILITY PARITY: for every host-accelerator link and every kind it answers, some headless link in the SAME chain declares that kind; violation throws capability-parity at construction (the mechanism behind DQ-09)" }
+      - { id: INV-9,  class: T, text: "resolved/ambiguous/external STOP a site; unresolved/dynamic fall through; among equal-rank open answers the LAST wins so an exhausted chain still says why" }
+      - { id: INV-10, class: T, text: "NO DOWNGRADE: a weaker link may upgrade, never lower (incl. dynamic -> unresolved)" }
+      - { id: INV-13, class: T+R, text: "every target.fqn satisfies definitions.hasSymbol at return time; a resolver never invents an fqn" }
+      - { id: INV-14, class: T, text: "a resolver that INSPECTED a site does not answer with a non-inspecting reason (no-resolver means 'I never looked')" }
+      - { id: INV-6,  class: T+R, text: "resolve() before open() rejects workspace-not-open; never an all-unresolved answer" }
+      - { id: INV-8,  class: T, text: "resolve() rejects ONLY for lifecycle misuse; every analysis failure is a Resolution with a reason" }
+      - { id: INV-18, class: C+T, text: "spawns nothing except through ProcessHost" }
+      - { id: INV-19, class: T, text: "perFileMs honoured: overrun sites are unresolved/timeout, timedOutSites > 0, degraded true" }
+      - { id: INV-20, class: T, text: "an already-cancelled token yields a FULL array of cancelled answers; cancellation checked between internal batches" }
+      - { id: INV-22, class: T, text: "run-to-run stable on a warm backend (0/305 disagreements measured)" }
+      - { id: INV-23, class: T+R, text: "exhausted restart budget => permanently degraded, lastError set, every site backend-unavailable, degraded true; never silently healthy again" }
+      - { id: INV-21, class: C+T, text: "call/import and receiver/receiver-type never share a denominator" }
+      - { id: INV-25, class: T, text: "degradedBatches is counted (the freshness SLA's staleness signal for this stage)" }
+      - { id: INV-26, class: T, text: "answered-but-edgeless is droppedNoSymbol, never folded into unresolved" }
+    guarantees: [open() exactly once before resolve(), per-file batches, all intra-file parallelism inside the resolver (measured cap 12 in flight; re-measure per backend), resolution is a THIRD pass after every file is parsed, fileChanged happens-before any resolve that could observe it, input order preserved]
+    not_guaranteed: [ordering between files (maxConcurrentFiles:1 means serialize me), warm-vs-cold equality, cross-file invalidation (that is cascade, ND-9)]
+    may_not: [import vscode when host is headless, spawn/open a socket/read config except through injected seams, do synchronous I/O, resolve by bare name across the workspace, return external for a definition inside an indexed file (external is FINAL and would block a weaker link's builtin classification — the subtlest rule), swallow an error, report no-resolver after inspecting, report a definition equal to the reference position (reason self), report a path in any form other than the walker's literal string (macOS /tmp -> /private/tmp fails SILENTLY), report no-definition while starting/warming (that is not-warm; the headless client waits on the server's initialized notification, 4 s budget still applies), cache positions without honouring fileChanged, let a crash be silent, fall back invisibly, downgrade, emit a new RefKind or ResolutionStatus, mint/rename/renumber a symbol, assume RefSite.id === nodeId, be verified by a hand-run script]
+    caller_obligations_now_invariants:
+      - "only call and import resolutions are written onto the reference node's data.resolution; a receiver resolution never overwrites a call's status (rule 17 -> INV in applyResolutions)"
+      - "a receiver resolution whose definition.filePath !== site.filePath is DISCARDED; EVAL_TYPE (to a SYMBOL) is the cross-file answer for a receiver (rule 18 -> INV in applyResolutions)"
+    default_chains:
+      v1_python_cli: "chain(basedpyright[headless,checker] > python-path[headless,syntactic] > null)   — basedpyright lands at U8; until then chain(python-path > null)"
+      vscode_optional: "chain(vscode-definition[host-accelerator] > basedpyright > python-path > null) — admissible ONLY because basedpyright declares the same kinds (INV-4)"
+      note: "python-path stays behind the checker permanently: a checker resolves `from my_module import x` only if the directory is on its search path; a flat src/ with no config measured 52.4% of ceiling from python-path alone, higher than the configured fixture"
+    the_nine_host_independent_behaviors_a_headless_lsp_driver_replicates:
+      - readiness gate (wait on initialized + progress tokens; 4 s budget still applies)
+      - concurrency cap (12 measured; re-measure)
+      - cancellation between batches
+      - name-token vs declaration-extent selection (LSP Location | Location[] | LocationLink[]; prefer targetSelectionRange)
+      - self-edge suppression, indexed-only filtering, and unresolved-not-external for out-of-index definitions
+      - dedupe + ambiguous with confidence 0.5
+      - path canonicalization to the walker's exact string form
+      - never throw; every failure is a Resolution with a reason
+      - no position cache until fileChanged carries content
+    conformance_suite: "verifyResolverContract(name, make) + verifyChainContract; 44 tests; INV-10c and INV-4 verified to fail against a deliberately broken chain"
+    port_from:
+      - "archive/discovery-20260916:packages/cpg-generator/src/{resolve,chain,nullResolver,pythonPath}.ts (218/80/36/259 LOC)"
+      - "archive/discovery-20260916:src/dev/fakeResolver.ts (FixtureResolver, as a test double)"
+      - "archive/discovery-20260916:src/resolve/vscodeDefinitionResolver.ts (ADAPT: the nine behaviors; host-only optional link)"
+      - "archive/discovery-20260916:packages/file-watcher/src/resolvePass.ts (ADAPT: third-pass ordering, edges-only-never-symbols)"
+    resolves:
+      - "CS-5 (ResolveReport now has a consumer: verify's resolution-health)"
+      - "CS-7 (sizing uses measured 0.5585 sites/LOC and 2.4788 ms/site)"
+      - "motion M1 (position A' capability parity)"
+    open_questions:
+      - { id: Q1, kind: spike, text: "TypeScript is entirely unmeasured", disposition: "U9 opens with the spike; nothing TS-resolution is promised before it" }
+      - { id: Q2, kind: human, text: "capability parity (A') instead of a frozen edge set (A)?", disposition: "ANSWERED: A' via DQ-09 (EVAL_TYPE reserved, admitted with the headless producer at >=95% of ceiling)" }
+      - { id: Q3, kind: spike, text: "perFileMs = 500 is derived, not measured as a designed pipeline", disposition: "the harness (E-VERIFY) measures a pipelined per-save loop at U6c/U8 and re-cuts it" }
+      - { id: Q4, kind: debate, text: "who emits dynamic?", disposition: "keep in the enum (PROTECTED); adapters emit it for eval/getattr/computed access from U6" }
+      - { id: Q6, kind: human, text: "restart budget?", disposition: "3, then permanent degraded" }
+      - { id: Q7, kind: debate, text: "ProcessHost in @cpg/resolve or shared?", disposition: "in @cpg/resolve until a second caller exists (L-43)" }
+      - { id: Q8, kind: debate, text: "the ceiling is capped by the graph model: 17 of 21 remaining LSP misses are parameter/with bindings that mint no node", disposition: "recorded for the schema evolution backlog (P-C): PARAM already exists; `with` bindings are a property or a documented gap" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-SINK
+    name: the output seam (GraphSink + delivery)
+    package: "@cpg/sink"
+    status: specified; 46 tests green on the archive against the reference MemoryStore + createSinkDelivery
+    purpose: >
+      One producer fans numbered envelopes out to N sinks with at-least-once delivery, per-sink
+      serialization, bounded retry, and telemetry. ONE interface with TWO declared durability modes
+      (durable stores vs ephemeral renderers) so the producer never branches per sink. Owns the seq
+      allocator (F-1). Async from day one.
+    types: |
+      export type DeliverableDelta = GraphDelta & ({ addedNodes: readonly [GraphNode, ...GraphNode[]] } | { addedEdges: readonly [GraphEdge, ...GraphEdge[]] } | { removedNodeIds: readonly [string, ...string[]] });   // the all-empty delta is UNREPRESENTABLE; the edge-only arm is first-class
+      export function makeDelta(parts: Partial<GraphDelta>): DeliverableDelta | undefined;   // undefined = nothing changed = never delivered
+      export type SnapshotCause = 'initial' | 'catch-up' | 'resync';  export type DeltaCause = 'live' | 'cascade' | 'bulk';
+      export interface SinkCapabilities { readonly durability: 'durable' | 'ephemeral'; readonly resyncBySnapshot: boolean; readonly deadlineMs: number; readonly maxQueueDepth: number; }
+      export interface SinkState { readonly highWaterSeq: number /* -1 fresh */; readonly nodeCount: number; readonly edgeCount: number; readonly digest: string /* order-independent */; readonly nodeIds?: readonly string[] /* if present, COMPLETE */; }
+      export interface GraphSink { readonly id: string; readonly capabilities: SinkCapabilities; onSnapshot(payload: GraphPayload, meta: { seq: number; cause: SnapshotCause; files?: readonly string[] }): Promise<void>; onDelta(delta: DeliverableDelta, meta: { seq: number; cause: DeltaCause; files?: readonly string[] }): Promise<void>; inspect(): Promise<SinkState>; dispose(): Promise<void>; }
+      export type SinkFailureKind = 'transient' | 'overloaded' | 'out-of-order' | 'malformed' | 'permanent';
+      export type SinkError = Error & { name: 'SinkError'; kind: SinkFailureKind; sinkId: string; seq: number; retryAfterMs?: number; cause?: unknown };
+      export function classifyFailure(v: unknown): SinkFailureKind;   // unrecognised => transient (retrying is safe; dropping is not)
+      export function assertDeltaWellFormed(delta: GraphDelta, priorNodeIds: ReadonlySet<string>, sinkId: string, seq: number): void;   // throws malformed
+      export type Envelope = { kind: 'snapshot'; seq; cause: SnapshotCause; payload: GraphPayload; files? } | { kind: 'delta'; seq; cause: DeltaCause; delta: DeliverableDelta; files? };
+      export interface DeliveryOutcome { readonly sinkId: string; readonly seq: number; readonly attempts: number; readonly durationMs: number; readonly status: 'confirmed' | 'degraded'; readonly failure?: SinkFailureKind; }
+      export interface SinkDelivery { readonly confirmedSeq: number /* min over DURABLE sinks */; readonly renderedSeq: number /* NEW (DQ-05): min over EPHEMERAL sinks, so the picture leg is measurable */; readonly needsResnapshot: readonly string[]; deliver(envelope: Envelope): Promise<{ seq: number; outcomes: readonly DeliveryOutcome[]; confirmedSeq: number; renderedSeq: number }>; dispose(): Promise<void>; }
+      export function createSinkDelivery(sinks: readonly GraphSink[], o?: { maxAttempts?: 5; baseDelayMs?: 200; maxDelayMs?: 5000; sleep?; now?; telemetry?: Partial<{ onDelivered(o: DeliveryOutcome): void; onSlow(o): void; onDegraded(d: { sinkId; seq; files; reason; needsResnapshot }): void }> }): SinkDelivery;
+    amended_by:
+      - decision: DQ-01
+        was: "INV-17: an id in addedNodes that already exists and is not in removedNodeIds => malformed (update = remove + add)"
+        now: "a re-added id is a MERGE discriminated by delta.producer (filesystem vs code tier); malformed only if the SAME producer re-adds without removal"
+      - decision: DQ-05 / F-1
+        was: "confirmedSeq over durable sinks only; the visual leg had no measurement point"
+        now: "renderedSeq added over ephemeral sinks; both reported; one allocator here"
+    invariants:
+      - { id: INV-3,  class: C+R+T, text: "the all-empty delta is unrepresentable" }
+      - { id: INV-4,  class: T+R, text: "an EDGE-ONLY delta is a valid first-class delivery and MUST be applied (the visualizer.ts:290 early-return defect; every cross-file edge has this shape)" }
+      - { id: INV-5,  class: T+R, text: "at-least-once: seq <= highWaterSeq resolves as a no-op; apply is idempotent" }
+      - { id: INV-6,  class: R+T, text: "seq > highWaterSeq + 1 => reject out-of-order; never apply across a gap" }
+      - { id: INV-7,  class: T, text: "removedNodeIds removes every incident edge" }
+      - { id: INV-8,  class: R+T, text: "at most one delivery in flight per sink, in seq order" }
+      - { id: INV-9,  class: T, text: "a sink NEVER throws synchronously (a sync throw bypasses the driver's retry, L-19)" }
+      - { id: INV-10, class: T, text: "all-or-nothing: a rejected delivery leaves state byte-identical" }
+      - { id: INV-11, class: T, text: "a sink never mutates the payload/delta (shared across the fan-out)" }
+      - { id: INV-12, class: T, text: "when onDelta resolves the effect is visible in inspect(); no settling window (FalkorDB measured p50 0.425 ms next round trip, 190/190)" }
+      - { id: INV-13, class: C+T, text: "unrecognised rejection => transient; only permanent/malformed/out-of-order short-circuit retries" }
+      - { id: INV-15, class: T, text: "digest is order-independent over nodes/edges and content-sensitive" }
+      - { id: INV-18, class: R+T, text: "every addedEdge endpoint present post-apply, else malformed" }
+      - { id: INV-19, class: T, text: "known state advances ONLY on confirmed delivery to every durable sink (confirmedSeq)" }
+      - { id: INV-20, class: T, text: "retry is bounded exponential backoff min(base*2^(n-1), max), maxAttempts then degrade; retryAfterMs overrides" }
+      - { id: INV-21, class: T, text: "exhausted retries produce onDegraded naming the affected files, never a bare log line" }
+      - { id: INV-22, class: T, text: "a sink exceeding deadlineMs fires onSlow and does not stall other sinks; fan-out is parallel" }
+      - { id: INV-24, class: T, text: "every delivery emits onDelivered with attempts and durationMs — the instrument the 2 s SLA is measured with" }
+    durability_table:
+      durable:   { permanent_failure: "confirmedSeq does NOT advance; redeliver or go degraded", repair: "replay from confirmedSeq+1", cost_of_a_missed_delta: "permanent divergence from disk", resyncBySnapshot: "false by default (a 43 s cold snapshot is outside any SLA) — Q1" }
+      ephemeral: { permanent_failure: "confirmedSeq advances; renderedSeq does not", repair: "one onSnapshot cause:resync", cost_of_a_missed_delta: "a stale picture until the next snapshot", resyncBySnapshot: "true" }
+    may_not: [return early on an empty-looking delta, silently drop, apply partially, reorder or apply n+1 before n, block the producer (no sync I/O, no unbounded queue, no await on another sink), throw synchronously, mutate or retain the delivered object, treat a same-producer re-add as an update, accept a dangling edge, resolve before the write is visible, invent its own retry loop, call back into the producer, import vscode (a WebviewSink takes an injected postMessage-shaped function), reinterpret cause, truncate nodeIds, be the place the vocabulary lives]
+    producer_may_not: "call onDelta with something makeDelta would return undefined for; nothing-changed is a non-event"
+    conformance_suite: "verifyGraphSinkContract(name, makeSink) + verifySinkDeliveryContract(name, make); 46 tests; injected sleep/now so D2 asserts the backoff sequence exactly"
+    port_from:
+      - "archive/research-sweep-20260916:packages/engine/src/watch/{sink,queue}.ts (the WatchSink/SerialQueue/withRetry ideas)"
+      - "the reference createMemoryGraphSink/createSinkDelivery in the archived suite"
+    resolves: [CS-4 (confirmedSeq/renderedSeq measurement points), the edge-only-delta defect, L-31 (retry-does-not-advance-known-state)]
+    open_questions:
+      - { id: Q1, kind: debate, text: "collapse-to-snapshot for a durable sink?", disposition: "durable sinks default resyncBySnapshot:false and degrade instead" }
+      - { id: Q3, kind: debate, text: "does a cascade delta get its own seq?", disposition: "yes, its own seq with cause:cascade and the originating files listed, so cascade cost is measurable (U7)" }
+      - { id: Q5, kind: spike, text: "named digest algorithm?", disposition: "FNV-1a over a sorted projection, named in the schema module at U1 so two processes can compare" }
+      - { id: Q6, kind: spike, text: "does a WebviewSink satisfy INV-12 without an ack?", disposition: "the host's merged snapshot IS the visual cache (C-EXT §3.2); renderedSeq is stamped from the webview's render-report, measured at U3" }
+      - { id: Q7, kind: human, text: "initial/catch-up/resync — three causes or two?", disposition: "keep three" }
+      - { id: Q8, kind: human, text: "files on the envelope required?", disposition: "required for live and cascade, optional for bulk" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-STORE
+    name: the store thin waist
+    package: "@cpg/store"
+    status: specified; 49 tests green on the archive against reference MemoryStore + CypherPlanner
+    purpose: >
+      One interface, two tiers (MemoryStore always; FalkorStore from U5), both on the hot write path. A
+      replace-file is exactly ONE statement. Every destructive write is scoped by a closed union and
+      emitted by one function. Owns toWriteOp(file) (DQ-03 fold) and the reconciliation reads verify uses.
+    types: |
+      export type OwnershipClass = 'file-owned' | 'identity' | 'overlay' | 'filesystem' | 'graph-singleton';
+      export type WriteMechanism = 'delete-create' | 'merge-on-key' | 'overlay-job' | 'move-rename-only';
+      export interface NodeRow { readonly label: NodeLabel; readonly key: string /* id | fqn | path | name per label */; readonly properties: Properties; }
+      export interface EdgeRow { readonly type: EdgeType; readonly fromLabel: NodeLabel; readonly fromKey: string; readonly toLabel: NodeLabel; readonly toKey: string; readonly properties: Properties; }
+      /** L-02: a delete predicate is not free text. This union is the ONLY scoping vocabulary; planScopeDelete is the ONLY emitter. */
+      export type DeleteScope = { kind: 'file'; file: WorkspacePath } | { kind: 'subtree'; directory: WorkspacePath /* segment-boundary match: /ws/app must not match /ws/application */ } | { kind: 'whole-graph'; confirm: 'I_AM_DROPPING_THE_ENTIRE_GRAPH'; reason: string };
+      export type WriteOp =
+        | { kind: 'replace-file'; file: WorkspacePath; seq: number; revision_id: string; nodes: readonly NodeRow[]; edges: readonly EdgeRow[] }   // ONE atomic statement
+        | { kind: 'delete-file'; file: WorkspacePath; seq: number }
+        | { kind: 'merge-filesystem'; directories: readonly NodeRow[]; files: readonly NodeRow[]; links: readonly EdgeRow[] /* HAS_ENTRY */; moves: readonly { from: WorkspacePath; to: WorkspacePath; kind: 'file' | 'directory' }[]; removals: readonly WorkspacePath[] }
+        | { kind: 'merge-singleton'; metadata: Properties };
+      /** DQ-03 fold: the store builds the write from the extracted file + its resolved edges; a delta cannot construct it (CS-3). */
+      export function toWriteOp(file: ExtractedFile, edges: readonly EdgeElement[], seq: number): WriteOp & { kind: 'replace-file' };
+      export interface OverlayBatch { readonly job: string; readonly nodes: readonly NodeRow[] /* COMMUNITY */; readonly edges: readonly EdgeRow[] /* MEMBER_OF | TARGETS | DEPENDS_ON */; }
+      export interface OverlayWriter { write(batch: OverlayBatch): Promise<WriteReceipt>; close(): Promise<void>; }   // a SEPARATE handle; overlay is unreachable from write()
+      export type NotApplied = { reason: 'stale-seq'; current: number } | { reason: 'revision-unchanged'; revision_id: string };
+      export interface WriteReceipt { readonly applied: boolean; readonly notApplied?: NotApplied; readonly nodesWritten: number /* from the server's reply */; readonly edgesWritten: number; readonly nodesDeleted: number; readonly statementCount: number /* MUST be 1 for replace-file/delete-file */; readonly durationMs: number; readonly degraded?: readonly string[]; }
+      export interface FileState { readonly file: WorkspacePath; readonly seq: number; readonly revision_id: string; readonly nodeCount: number; }
+      export interface GraphStore {
+        open(): Promise<void>; close(): Promise<void>;
+        write(op: WriteOp): Promise<WriteReceipt>;
+        overlayWriter(job: string): OverlayWriter;
+        fileStates(): Promise<readonly FileState[]>;                 // filesystem-reconciliation, revision-reconciliation
+        nodeKeys(label: NodeLabel): Promise<readonly string[]>;      // id-uniqueness
+        stats(): Promise<{ nodeCount: number; edgeCount: number; beyondMeasuredScale: boolean }>;
+        readFile(file: WorkspacePath): Promise<{ nodes: readonly NodeRow[]; edges: readonly EdgeRow[] }>;   // golden diffing
+        staleNodes(): Promise<readonly { id: string; file: WorkspacePath; node_revision: string; file_revision: string }[]>;   // NEW (P-B): the reconciliation query
+        auditLog(): readonly { at: number; scope: DeleteScope; nodesDeleted: number; calledBy: string }[];
+        readonly capabilities: { tier: 'memory' | 'falkordb'; dialect: 'none' | 'cypher'; allowDropGraph: boolean /* default false */; softLimitNodes: number /* 500_000 */; maxRowsPerStatement: number };
+      }
+      export interface CypherStatement { readonly cypher: string; readonly params: Readonly<Record<string, unknown>>; readonly timeoutMs: number /* trailing TIMEOUT <ms>; NEVER CYPHER timeout= */; readonly readOnly: boolean; }
+      export interface WritePlanner { plan(op: WriteOp): { statements: readonly CypherStatement[]; destructive: DeleteScope | undefined }; planOverlay(b: OverlayBatch): WritePlan; planScopeDelete(scope: DeleteScope): CypherStatement; readonly allowedLabels: readonly NodeLabel[]; readonly allowedEdgeTypes: readonly EdgeType[]; }
+      export type StoreErrorCode = 'STORE_NOT_OPEN' | 'SCHEMA_INVALID' | 'OWNERSHIP_VIOLATION' | 'WRITE_SHAPE_VIOLATION' | 'UNSAFE_DELETE_REFUSED' | 'STRUCTURAL_TOKEN_REJECTED' | 'CAPACITY' | 'TIMEOUT' | 'CONNECTION_LOST' | 'BACKEND';
+    amended_by:
+      - decision: DQ-02
+        was: "FilePath: absolute, POSIX, normalised"
+        now: "WorkspacePath (relative). Closes CS-1: the scope delete now matches the rows the nodes carry."
+      - decision: F-1 / CS-4
+        was: "Revision = number, monotone per file, a THIRD counter"
+        now: "WriteOp carries the envelope seq (ordering; stale-seq is a reported no-op) and revision_id (content; revision-unchanged is a reported no-op). FILE.version remains an informational per-file replace counter bumped by the store (read-modify-write, not MERGE+SET which pinned it at 1)."
+      - decision: DQ-03
+        was: "a DeliverableDelta cannot construct a WriteOp (four of six fields underivable — CS-3)"
+        now: "toWriteOp(file, edges, seq) is required here"
+      - decision: DQ-06 / P-B
+        now: "staleNodes() added: the revision reconciliation is an indexed query the store answers"
+    invariants:
+      - { id: INV-3,  class: T+R, text: "replace-file and delete-file are exactly ONE statement (statementCount === 1); CI asserts it (DQ-10)" }
+      - { id: INV-4,  class: T+R, text: "never chunked; above maxRowsPerStatement throw CAPACITY" }
+      - { id: INV-5,  class: T, text: "no statement contains DETACH DELETE (it severs other files' inbound edges)" }
+      - { id: INV-6,  class: T, text: "every DELETE comes from planScopeDelete with a bound scope parameter; no other statement contains the token DELETE (L-02 made executable)" }
+      - { id: INV-7,  class: T+R, text: "whole-graph requires allowDropGraph and the literal confirm token" }
+      - { id: INV-8,  class: T, text: "every destructive write appends one AuditEntry" }
+      - { id: INV-9,  class: T, text: "no row value in cypher text; structural tokens from the allowlist (L-09; adversarial payloads in the suite)" }
+      - { id: INV-10, class: C+R, text: "overlay rows unreachable from write(); rejected if smuggled (OWNERSHIP_VIOLATION)" }
+      - { id: INV-11, class: T, text: "merge-on-key never nulls an existing property: null/undefined pruned before SET (a caller that only CALLS must not blank the definer's SYMBOL)" }
+      - { id: INV-12, class: T, text: "a replace-file for A never mutates a node whose file !== A, except identity nodes which it may only MERGE (L-03)" }
+      - { id: INV-13, class: T+R, text: "seq monotone per file: a write at seq <= current is applied:false stale-seq, never silent" }
+      - { id: INV-14, class: T, text: "revision_id written is the revision_id read back by fileStates()" }
+      - { id: INV-15, class: T, text: "read-your-writes on the same handle with no settling loop" }
+      - { id: INV-17, class: T+R, text: "readOnly statements are GRAPH.RO_QUERY; a read never creates a graph key (GRAPH.QUERY on a missing key silently creates it)" }
+      - { id: INV-18, class: T, text: "every statement carries timeoutMs as trailing TIMEOUT <ms>; CYPHER timeout= appears nowhere (accepted and silently inert)" }
+      - { id: INV-19, class: T, text: "client socket timeout for a write >= 2 * timeoutMs (writes overshoot ~1.7x on rollback)" }
+      - { id: INV-20, class: T, text: "a failed atomic write leaves the prior subgraph exactly as it was (torn-batch test, DQ-10)" }
+      - { id: INV-21, class: T, text: "beyondMeasuredScale flips at 500k nodes with one degradation notice (above 500k is unmeasured)" }
+      - { id: INV-22, class: T, text: "edge endpoint matches use :CPG{id} or the label's declared key, never a bare kind label; every two-MATCH edge statement has a WITH barrier (700 ms -> 1 ms planner trap)" }
+      - { id: INV-24, class: T, text: "MemoryStore and FalkorStore pass the identical suite" }
+    guarantees: [per-file total order, per-op atomicity, read-your-writes, monotone seq per file, audit completeness, identity survives file writes]
+    not_guaranteed: [multi-file transaction (a cascade of N files is N atomic writes — deliberate; the cascade budget is a scheduling problem above this seam), cross-file ordering, retry (a retried CREATE double-applies; replace-file is idempotent by construction), delivery to observers (C-SINK's job), snapshot isolation (a reader sees either side of an atomic replace, never a torn half; rare 50–120 ms commit stalls known), ordering between tiers]
+    may_not: [issue more than one statement for replace/delete, chunk, use DETACH DELETE, emit a DELETE outside planScopeDelete or accept a delete predicate as text, drop the graph without the token, write overlay inside a replace, interpolate values into query text (the archived serializeValue is a Cypher-injection surface), accept an unallowlisted label/type, read config from the host (the old store called vscode.workspace.getConfiguration inside connect()), type the driver as any, expose query(cypher):any or per-entity CRUD, fall back silently, mutate the WriteOp, SET null onto merge-on-key, match endpoints on a bare label or omit the WITH barrier, use CYPHER timeout=, set a write socket timeout below 2x, report applied:true for a write that did not reach the backend, report counts it did not compute, add a plugin registry (two tiers is the second caller; there is no third)]
+    conformance_suite: "verifyGraphStoreContract(makeHarness) + verifyWritePlannerContract(makePlanner); 49 tests; one test per named defect (wildcard delete fixed twice, non-atomic writeDelta, torn write, DETACH DELETE, unpruned MERGE, injection, FILE.version pinned at 1, many-small, overlay-in-replace, GRAPH.QUERY key creation, CYPHER timeout=, unreported mutation, >500k)"
+    port_from:
+      - "archive/master-20260916:packages/engine/src/store/{store,cypher,bootstrap,falkordb-store,open,falkordb.config}.ts + tests (cypher.ts 633 LOC is the highest-value artifact in the salvage)"
+      - "archive/master-20260916:packages/falkordb-service/** (remote+docker; spawned deferred)"
+      - "archive/master-20260916:docker/falkordb{,.dev}.yml"
+      - "archive/master-20260916:packages/engine/test/support/{falkordb,schema-conformance,invariants}.ts"
+    resolves: [CS-1, CS-3, L-02, L-03, L-09, L-18]
+    open_questions:
+      - { id: Q1, kind: spike, text: "MemoryStore whole graph or bounded window? memory at 488k nodes unmeasured", disposition: "whole graph in v1; measure at U7 with the scale fixture" }
+      - { id: Q2, kind: spike, text: "behaviour above ~500k nodes", disposition: "U7 scale fixture; the one place the comfortable verdict could flip (DQ-10 reopen trigger)" }
+      - { id: Q3, kind: debate, text: "composite two-tier store: one GraphStore or two handles?", disposition: "two sinks under SinkDelivery (MemoryStore and FalkorStore are both GraphSinks); no composite store object" }
+      - { id: Q6, kind: human, text: "does whole-graph ship in v1?", disposition: "no; `cpg index --rebuild` drops and recreates the graph KEY (bootstrap path), which is the schema-version-mismatch path anyway" }
+      - { id: Q7, kind: debate, text: "who allocates the per-file ordering?", disposition: "ANSWERED: SINK allocates seq (F-1); the store checks monotonicity per file" }
+      - { id: Q8, kind: debate, text: "are the reconciliation reads part of this contract?", disposition: "yes; a store that cannot answer them makes the SLA unfalsifiable" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-CLI
+    name: the CLI <-> engine thin waist
+    package: "apps/cli (+ the CpgEngine port in @cpg/engine)"
+    status: specified; 50-test suite (verifyCliContract) typechecks; activates when apps/cli exists (U2a)
+    purpose: >
+      Everything between process.argv and the first engine call, and between the last engine return and
+      process.stdout. The CLI sees exactly one port, CpgEngine; it never constructs a store, parser or
+      Cypher. Machine output on stdout as one versioned document (or NDJSON); everything diagnostic on
+      stderr. Format is never inferred from a TTY.
+    types: |
+      export const EXIT = { OK: 0, FAILED: 1, USAGE: 2, VERIFY_FAILED: 3, INTERRUPTED: 130 } as const;   // 3: the tool worked, the graph did not pass (verify/doctor only)
+      export type Verb = 'index' | 'watch' | 'query' | 'verify' | 'inspect' | 'doctor' | 'config' | 'schema';
+      export const RESERVED_VERBS = ['mcp', 'status'];   // exit 2 "not built yet", distinguishable from "unknown command"
+      export interface Io { out(line): void; err(line): void; status(line): void /* in-place progress on stderr; no-op unless isTty.err */; readonly env; readonly stdin: { readText(): Promise<string>; isTty: boolean }; readonly isTty: { out: boolean; err: boolean }; readonly now: () => number; }
+      export type ConfigLayer = 'flag' | 'env' | 'file' | 'manifest' | 'default';   // index in CONFIG_PRECEDENCE is the rank
+      export type CliError = { kind: 'usage'; verb?; message; hint? } | { kind: 'config'; key; layer; message } | { kind: 'workspace'; path; message } | { kind: 'stdin'; expected: 'json-document' | 'ndjson'; message; hint? } | { kind: 'engine-unavailable'; endpoint; message } | { kind: 'engine-timeout'; budgetMs; elapsedMs } | { kind: 'engine-rejected'; message; query? } | { kind: 'concurrent-session'; graph; holder } | { kind: 'verification'; failures: readonly CheckResult[] } | { kind: 'interrupted'; committed; pending };
+      export function exitCodeFor(error: CliError): ExitCode;   // total; the ONLY exit-code decision site
+      export interface CommandSpec { readonly verb: Verb; readonly summary: string; readonly positionals: readonly PositionalSpec[]; readonly flags: readonly FlagSpec[] /* single source of truth */; readonly stdin: 'none' | 'optional-document' | 'required-document'; readonly stdout: 'document' | 'ndjson' | 'none'; }
+      export function renderUsage(spec: CommandSpec): string;   // the ONLY producer of usage text
+      export const RESERVED_TEST_PORT = 6381;  export const DEFAULT_STORE_PORT = 6382;
+      export interface Provenanced<T> { readonly value: T; readonly layer: ConfigLayer; readonly source: string; }
+      export interface ResolvedConfig { root: Provenanced<string>; include; exclude; maxFileSizeBytes; consumers: Provenanced<{ inspect: boolean; store: 'memory' | 'falkor'; vscode: boolean }>; store: { host; port; graph; mode: Provenanced<'remote' | 'docker'> }; queryTimeoutMs; resolve: { perFileMs; perSiteMs }; watch: { trailingMs; ceilingMs; bulkThresholdFiles }; }
+      export function resolveConfig(layers: readonly { layer: ConfigLayer; source: string; values: Record<string, unknown> }[]): ResolvedConfig;   // pure
+      export interface Document<K extends string, B> { readonly v: 1; readonly kind: K; readonly tool: string /* cpg@<semver> from the manifest */; readonly producedAt: string; readonly body: B; }
+      export type CpgDocument = Document<'cpg.index.report', IndexReport> | Document<'cpg.verify.report', VerifyReport> | Document<'cpg.query.result', QueryResult> | Document<'cpg.config.resolved', ResolvedConfig> | Document<'cpg.doctor.report', DoctorReport> | Document<'cpg.graph.payload', GraphPayload> | Document<'cpg.schema', unknown>;
+      export interface IndexReport { root; walk: { filesSeen; filesIndexed; filesExcluded; filesUnsupported; filesTooLarge; filesFailed } /* seen === sum */; files: readonly { path: WorkspacePath; revision_id: string /* sha256:<hex>, REQUIRED */; nodes; edges }[] /* sorted by path */; nodesWritten; edgesWritten; durationMs; dryRun; interrupted; warnings; target: StoreTarget | null; consumers: readonly string[] /* the enabled set, always printed with any timing */; }
+      export interface CheckResult { readonly id: VerifyCheckId; readonly state: 'pass' | 'fail' | 'stale' | 'unavailable'; readonly observed: number; readonly expected: number; readonly localisedTo: readonly string[]; readonly detail?: string; readonly asOfSeq: number; }
+      export interface VerifyReport { readonly state: CheckState /* worst of */; readonly checks: readonly CheckResult[] /* all six, once each, in enum order */; readonly consumers: readonly string[]; readonly durationMs: number; }
+      export type WatchEvent = { kind: 'ready'; seq; at; root; report } | { kind: 'batch'; seq; at; changes: readonly NormalizedChange[]; write: { nodesWritten; edgesWritten; statementCount }; latencyMs: { t0_t1; t1_t2; t2_t3; total } /* the rank-3 clock, three intervals */ } | { kind: 'warning'; seq; at; message } | { kind: 'error'; seq; at; error: CliError } | { kind: 'closed'; seq; at; reason: 'signal' | 'error' | 'eof' };
+      export interface CpgEngine { readonly identity: { name; version; languages }; connect(target: StoreTarget, opts: { readOnly: boolean }): Promise<EngineSession>; index(req: { config; session: EngineSession | null /* null iff --dry-run */; resumeFrom: readonly IndexedFile[] | null }, onProgress, signal: AbortSignal): Promise<IndexReport>; watch(req, onEvent: (e: WatchEvent) => void, signal): Promise<void>; read(session, cypher, timeoutMs): Promise<QueryResult> /* ALWAYS read-only */; verify(session, config, expected: IndexReport | null): Promise<VerifyReport>; inspect(session, config): Promise<GraphPayload>; doctor(config, env): Promise<DoctorReport>; schema(): unknown; }
+      export function run(argv: readonly string[], io: Io, opts?: { signal?: AbortSignal; engine?: CpgEngine }): Promise<ExitCode>;   // main.ts is a shebang wrapper that assigns process.exitCode and nothing else
+    amended_by:
+      - decision: DQ-06
+        was: "REQUIRED_CHECKS: fs-count-reconciliation, identity-invariants, id-uniqueness (ids unique AND rendered === payload), content-digests — the CLI could not compute its own mandatory set (CS-9)"
+        now: "the six shared verify_check_ids above with four states; render-reconciliation is unavailable without a renderer consumer; --strict fails on unavailable"
+      - decision: CS-10
+        was: "a second merge table (created x deleted -> drop)"
+        now: "deleted; C-WATCH's table is the only one"
+      - decision: P-A
+        now: "IndexReport and VerifyReport carry `consumers`, the enabled set, so no timing is ever quoted without the configuration that produced it"
+    invariants:
+      - { id: I-2,  class: C+T, text: "the CLI package never imports a store, parser or Cypher builder; it sees only CpgEngine" }
+      - { id: I-3,  class: T, text: "no source file calls process.exit()" }
+      - { id: I-4,  class: T, text: "process.argv read in exactly one file; process.env in exactly one" }
+      - { id: I-6,  class: T, text: "the declared bin is EXECUTED by the suite: built artifact spawned, --version exits 0 (the archived bin was never once run)" }
+      - { id: I-7,  class: T, text: "usage is derived: flags(verb) and the --tokens in usage(verb) are the same set both ways" }
+      - { id: I-8,  class: T+R, text: "--format=json stdout is exactly one JSON value; ndjson every line parses" }
+      - { id: I-9,  class: T, text: "output shape never depends on isTty" }
+      - { id: I-10, class: T, text: "progress, warnings, timings, row-count line go to stderr" }
+      - { id: I-12, class: T, text: "a malformed flag is exit 2 with NO connection attempted; a failed connect is exit 1" }
+      - { id: I-13, class: T, text: "version banner from the manifest, never a literal" }
+      - { id: I-14, class: T, text: "no flag default or source literal is an absolute path" }
+      - { id: I-16, class: C+T, text: "nothing user-facing defaults to port 6381 (the integration harness)" }
+      - { id: I-17, class: T+R, text: "reads use RO_QUERY; a missing key errors, never created" }
+      - { id: I-18, class: T, text: "the CLI never string-matches a store error (the store adapter behind the port converts 'Query timed out' to engine-timeout)" }
+      - { id: I-19, class: T+R, text: "every disk side effect is off by default" }
+      - { id: I-20, class: R+T, text: "filesSeen === indexed + excluded + unsupported + tooLarge + failed" }
+      - { id: I-21, class: T+R, text: "verify emits all six checks once, state is worst-of, exits 3 on fail (never 1); --strict promotes unavailable to fail" }
+      - { id: I-22, class: T+R, text: "every indexed file carries revision_id" }
+      - { id: I-23, class: T+R, text: "NDJSON seq dense from 0; last line is closed" }
+      - { id: I-25, class: T, text: "config --format=json reports layer and source per key; precedence flag > env > file > manifest > default" }
+      - { id: I-26, class: R+T, text: "two concurrent writers on one (host, port, graph) => concurrent-session, exit 1; readers never refused" }
+      - { id: I-27, class: T, text: "SIGINT: index drains <= 2000 ms, emits a report with interrupted:true, exits 130; never a half-written file scope" }
+      - { id: I-29, class: T, text: "a reserved verb exits 2 'not built yet'" }
+      - { id: I-30, class: T, text: "run is pure w.r.t. ambient state (no Date.now/Math.random outside io.now)" }
+    may_not: [call process.exit, put anything but the document on stdout, infer --format from isTTY, hand-write usage, define a store/engine/parser/null implementation inside the CLI (--dry-run passes session:null; the engine owns the no-op store), read process.env/argv/cwd/Date.now/Math.random outside io.ts/main.ts, ship an absolute-path default, hardcode the version, export a public API barrel, add a second CLI convention anywhere, require a repo-local script to make the tool work (cpg doctor tells an installed user what to run), string-match store errors, send CYPHER timeout=, use the read-write command on a read path, default a disk side effect on, buffer a stream, report exit 0 with zero files indexed and no warning, swallow a failure, claim freshness without latencyMs, treat the picture as a pass]
+    cold_index_ux: "43.1 s baseline for 1,802 files: TTY shows one in-place status line on stderr at <=10 Hz with ETA from observed ms/file (omitted under 50 files); non-TTY a heartbeat every 2000 ms; --format=json progress as NDJSON on stderr, stdout empty until the one document; --quiet nothing. v1 index is not resumable and IS idempotent/restartable; IndexRequest.resumeFrom is typed now and null in v1 (a pure skip filter later, because revision_id is mandatory)"
+    workspace_root: "first match: --workspace, the positional, CPG_WORKSPACE, cwd (read in main.ts). Never discovered by ascending; ascending finds only the config file and finding one does not relocate the root"
+    conformance_suite: "verifyCliContract(makeHarness) 50 tests / 12 groups; CLI-D1 (bin executed) … CLI-D11 (disk side effect default) one per named defect; plus tools/check-cli-bin.mjs in CI before vitest: build, `--version` exit 0, `frobnicate` exit 2"
+    port_from:
+      - "archive/master-20260916:packages/cli/src/{main,run,io}.ts (95 LOC verbatim in shape)"
+      - "commands/{index,query,watch}-cmd.ts (ADAPT: split parse -> config -> run -> render; NullGraphStore moves to the engine)"
+      - "test/unit/{run,index-cmd,query-cmd,watch-cmd}.test.ts"
+      - "archive/master-20260916:tools/lib/compose-instance.ts (provenance handshake behind cpg doctor / store open)"
+    resolves: [CS-9, CS-10, L-28, L-30, L-31, the bin-never-executed and usage-drift defects]
+    open_questions:
+      - { id: Q1, kind: debate, text: "where do the contract types live?", disposition: "in @cpg/engine's public surface (the port) — no separate contract package (L-43)" }
+      - { id: Q2, kind: debate, text: "is cpg inspect a document producer or a local server?", disposition: "both: `cpg inspect -` emits cpg.graph.payload; `cpg inspect --serve` / `--live <root>` starts the local static server (apps/inspector) — stdout mode is 'document' unless --serve" }
+      - { id: Q3, kind: spike, text: "advisory write lock location?", disposition: "a graph record with a TTL (survives a crash; U5)" }
+      - { id: Q6, kind: human, text: "does cpg query stay Cypher-shaped?", disposition: "yes (F-2 keeps FalkorDB at U5); before U5 it runs over MemoryStore's readFile/readAll with a documented subset" }
+      - { id: Q7, kind: human, text: "exit 130?", disposition: "yes; conventional" }
+      - { id: Q9, kind: debate, text: "verify --baseline?", disposition: "optional `expected: IndexReport | null`; the live filesystem suffices for all six checks" }
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────────────
+  - id: C-EXT
+    name: engine <-> VS Code host protocol
+    package: "apps/vscode (GraphHost is plain node; three adapters touch vscode)"
+    status: specified; 39 tests green on the archive against ReferenceGraphHost (zero vscode)
+    purpose: >
+      The extension is a host that supplies implementations; the engine is injected with them and never
+      names VS Code. Exactly three adapters touch the vscode API: SourceOpener, FilesystemProbe,
+      WebviewTransport. GraphHost merges every delta into an authoritative snapshot (the visual cache),
+      posts only the delta, and answers `ready` with a full snapshot. The graph is a WebviewPanel with a
+      serializer (AM-2), never shown without its verification banner beside it.
+    types: |
+      export const CPG_PROTOCOL_VERSION = 1 as const;  export const VIRTUAL_ROOT_ID = '__root__';   // the id a layout must never mint
+      export type Seq = number;  export type Epoch = number;   // seq is engine-assigned; epoch is host-assigned and bumps on every cause:'initial' snapshot
+      export interface GraphSink { onSnapshot(payload: GraphPayload, meta: { seq: Seq; cause: 'initial' | 'catch-up' }): Promise<void>; onDelta(delta: GraphDelta, meta: { seq: Seq; cause: 'live' | 'cascade' | 'bulk' }): Promise<void>; }   // resolves on MERGE, never on paint
+      export interface ThemeSnapshot { kind: 'light' | 'dark' | 'high-contrast-light' | 'high-contrast-dark'; nodeColors: Record<string, string>; defaultNodeColor: string; }
+      export type HostToWebviewMessage = { type: 'theme'; protocol: 1; epoch; theme } | { type: 'graph'; protocol: 1; epoch; seq; payload } | { type: 'graph-delta'; protocol: 1; epoch; seq; delta } | { type: 'verification'; protocol: 1; epoch; seq; report: VerificationReport };
+      export type WebviewToHostMessage = { type: 'ready'; protocol: number } | { type: 'reveal'; nodeId: string } | { type: 'resync'; epoch; seq; reason: 'gap' | 'stale-epoch' | 'render-error' } | { type: 'render-report'; epoch; seq; report: { payloadNodeCount; renderedNodeCount; renderedEdgeCount; droppedNodeIds: string[] /* capped sample */; frameMs } };
+      export interface VerificationReport { epoch; seq; checks: CheckResult[] /* all six, enum order */; state: CheckState; }
+      export type RevealOutcome = { ok: true; filePath; target: 'nameRange' | 'range' | 'whole-file' } | { ok: false; reason: 'unknown-node'; nodeId } | { ok: false; reason: 'no-location'; nodeId } | { ok: false; reason: 'open-failed'; nodeId; filePath; error: SerializedError };
+      export type ProtocolFault = { kind: 'unknown-message'; received } | { kind: 'bad-epoch'; expected; received } | { kind: 'seq-gap'; expected; received } | { kind: 'post-failed'; seq; error };
+      export interface WebviewTransport { post(m: HostToWebviewMessage): void /* LOSSY by contract */; onMessage(h): Disposable; readonly cspSource: string; }
+      export interface SourceOpener { open(r: { filePath: WorkspacePath; selection?: SourceRange; frame?: SourceRange }): Promise<void>; }
+      export interface FilesystemProbe { listFiles(): Promise<WorkspacePath[]>; digest(filePath: WorkspacePath): Promise<string | undefined>; }   // async; vscode.workspace.fs so remote filesystems work (L-11)
+      export interface GraphHost extends GraphSink { attach(t: WebviewTransport): void; detach(): void; snapshot(): GraphPayload; seq(): Seq; epoch(): Epoch; reveal(nodeId): Promise<RevealOutcome>; setTheme(t): void; verify(fs: FilesystemProbe): Promise<VerificationReport>; faults(): readonly ProtocolFault[]; dispose(): void; }
+      export function graphShellHtml(o: { scriptUri; cspSource; nonce; containerId? }): string;   // default-src 'none'; connect-src 'none'; nonce-only scripts; no literal colours; reserves #cpg-verification
+    amended_by:
+      - decision: DQ-06
+        was: "CheckId = fs-count | identity | render-count | digest; CheckState = pass | fail | stale | unavailable"
+        now: "the six shared verify_check_ids; the four states are adopted system-wide (this contract supplied them)"
+      - decision: F-1
+        was: "OQ-1: should C-EXT's seq and C-MODEL's revision be one number?"
+        now: "yes: seq is the one ordering number; revision_id is the content fingerprint; no third counter"
+    invariants:
+      - { id: I-2,  class: T, text: "nothing posted before the webview sends ready" }
+      - { id: I-3,  class: T, text: "ready is answered with exactly one full graph snapshot of merged state, never a delta replay" }
+      - { id: I-4,  class: T, text: "theme precedes the first graph on any connection; a theme change re-posts theme alone" }
+      - { id: I-6,  class: T, text: "an edge-only delta is delivered" }
+      - { id: I-8,  class: T, text: "the host's merged payload is applyGraphDelta(payload, delta) — one shared merge, no private copy" }
+      - { id: I-10, class: R, text: "duplicate ids are a FAILING render-reconciliation, never accepted" }
+      - { id: I-11, class: T, text: "onDelta resolves once the merged payload is updated and never awaits the webview (a pane cannot stall the clock)" }
+      - { id: I-12, class: R, text: "seq strictly increasing per epoch; a gap is a recorded seq-gap fault" }
+      - { id: I-13, class: T, text: "cause:initial replaces the payload and bumps epoch; catch-up does not" }
+      - { id: I-15, class: T, text: "reveal resolves against the host payload; nameRange wins over range; a FILE node opens whole" }
+      - { id: I-16, class: C+T, text: "every reveal returns a discriminated RevealOutcome; none throws or returns void (the old host logged 'cannot reveal unknown node' and returned)" }
+      - { id: I-17, class: T, text: "any location-shaped field on an inbound reveal is ignored; the payload is the single source of truth" }
+      - { id: I-18, class: T, text: "a VerificationReport always carries all six checks stamped asOfSeq/asOfEpoch (snapshotted BEFORE the first await)" }
+      - { id: I-19, class: R, text: "render-reconciliation is unavailable with no render-report and stale when the report's seq lags — never pass" }
+      - { id: I-22, class: T, text: "every completed verify() is pushed to the webview as a verification message" }
+      - { id: I-27, class: T, text: "shell CSP: default-src 'none' + connect-src 'none', nonce-only scripts, no unsafe-eval, no remote origin, everything bundled" }
+      - { id: I-28, class: T, text: "no literal colour in the shell; --vscode-* vars or ThemeSnapshot (the archived CSS hard-coded rgba(30,30,30,0.85))" }
+    three_surfaces_for_verification:
+      - "vscode.StatusBarItem (one glyph, worst state + failing count)"
+      - "vscode.DiagnosticCollection('cpg') (the only surface that localises to a file the human can open)"
+      - "the webview's #cpg-verification banner"
+    guarantees: [total order per epoch host-side, onDelta resolves on merge not paint, at-least-once toward the webview and exactly-once host-side, reconnect is always a full snapshot (no replay buffer), reveal is fire-and-forget from the webview]
+    not_guaranteed: [that a post reaches the webview, that a render-report ever arrives (hence unavailable), any relation between observedAtMs and the engine clock, multiplexing (attach replaces)]
+    may_not: [import vscode from packages/**, drop an edge-only delta, derive a delta by re-reading the store and diffing (O(whole graph) per save in the archived provider), re-send the full payload on a delta, type the webview boundary loosely, trust a webview location, treat no render-report as healthy, report pass at a stale seq, present the graph as verification, call Math.random in the layout while claiming determinism (thread the seed), mint __root__ into the payload, dedupe silently in the renderer, use sync fs, widen localResourceRoots, load anything over the network from the webview, hard-code a colour, use a WebviewViewProvider for the editor area, use a log string as the event channel, deep-import dist, add a second graph surface before the first has a second caller]
+    conformance_suite: "verifyExtHostContract(makeHost) 34 tests in groups A–F + verifyShellContract 5; E4 (identical counts/ids/edges but one stale revision: everything passes except revision-reconciliation) is the load-bearing test"
+    port_from:
+      - "archive/discovery-20260916:src/views/graphViewProvider.ts (PORT: ready handshake, merge-locally-post-delta, id-only reveal)"
+      - "archive/discovery-20260916:src/webview/graphApp.ts + tsconfig"
+      - "archive/discovery-20260916:esbuild.js (30 LOC)"
+      - "archive/discovery-20260916:packages/graph-visualizer/src/{shell,layout,nodeTypes,relationshipTypes,legend}.ts (PORT) + visualizer.ts (ADAPT: split the 756-line class; fix the edge-only early return; strip NUL bytes; thread a seed)"
+    resolves: [CS-6 (the purity proof is now a runtime trap with an anti-vacuity check at U2, not a clause here), the edge-only-delta drop, the 699-render-as-658 dedupe]
+    open_questions:
+      - { id: OQ-2, kind: debate, text: "does the extension own the engine process or attach to a daemon?", disposition: "owns it in-process (ND-1); the seam is message-shaped so a daemon is a later transport change" }
+      - { id: OQ-3, kind: spike, text: "delta size above which to coalesce or snapshot? postMessage cost of a 500k-node payload", disposition: "U3 spike" }
+      - { id: OQ-5, kind: human, text: "how often does verify() run?", disposition: "debounce 500 ms after the last delta + on demand (cpg.verify command) + always before a gate screenshot" }
+      - { id: OQ-6, kind: human, text: "editor cursor -> highlight node?", disposition: "not before a second caller (L-43)" }
+      - { id: OQ-7, kind: debate, text: "is the browser inspector a second WebviewTransport?", disposition: "yes: apps/inspector implements WebviewTransport over a local WebSocket/static server, so it gets the six checks for free (ND-3)" }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# Cross-seam defects found in specification (R2), each with the fix and the milestone that lands it.
+# These existed only in the deliberation corpus; DQ-07 required them transcribed before archiving.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+cross_seam_defects:
+  - id: CS-1
+    defect: "The path form was declared three incompatible ways (store: absolute; extract: relative never absolute; model: absolute-and-identical-to-the-relative-id)."
+    consequence: "The store's scope-delete matched zero rows, reported applied:true, and the CREATE half re-inserted: every save silently doubled a file's node count while all four checks stayed green."
+    fix: "WorkspacePath everywhere inside the graph; AbsolutePath only in FilesystemProbe and SourceOpener (DQ-02)."
+    lands_in: U1
+  - id: CS-2
+    defect: "The graph projector had no contract: thirteen responsibilities named by some contract as somebody else's, including reading the file bytes (WATCH and PARSE each forbid themselves)."
+    consequence: "The 677-line FileWatcher.ts both lineages died of, arranged so nobody drew a boundary around it."
+    fix: "The stage-ownership table (03-architecture §4); toWriteOp in STORE; applyResolutions in RESOLVE; the engine reads bytes once and hands text to PARSE; WATCH mints revision_id (DQ-03)."
+    lands_in: U1 (table), U2–U6 (implementations)
+  - id: CS-3
+    defect: "A DeliverableDelta could not construct a WriteOp{replace-file}: four of six fields underivable."
+    consequence: "The ~6x atomic write had no specified producer."
+    fix: "toWriteOp(file: ExtractedFile, edges, seq) required in C-STORE."
+    lands_in: U5
+  - id: CS-4
+    defect: "Six counters named seq/revision across five granularities; confirmedSeq defined over durable sinks only, so the visual tier was excluded by construction."
+    consequence: "Rank 3's two-tier claim had no measurement point."
+    fix: "Exactly two numbers: seq (envelope, SINK allocates) and revision_id (nodes, WATCH mints); renderedSeq added (F-1, DQ-05)."
+    lands_in: U1, U4
+  - id: CS-5
+    defect: "A resolver degradation reached no screen: ResolveReport had no consumer in any of the nine; C-CLI forbade a fifth check."
+    consequence: "59.3% of edges absent, four checks green, exit 0."
+    fix: "resolution-health is a verify check fed from ResolveReport (DQ-06)."
+    lands_in: U6c
+  - id: CS-6
+    defect: "The behavioural purity proof passed against a violating implementation (vite-node bypasses Module._load; a trap installed inside it(...) observes nothing)."
+    consequence: "Three documents cited it as THE proof grep is not needed."
+    fix: "The runtime purity proof runs under plain node (not vitest), installs the trap before any import, and includes an anti-vacuity check that plants a vscode import and asserts the trap fires (U2c)."
+    lands_in: U2c
+  - id: CS-7
+    defect: "The budget was 9.2x optimistic on its only remaining term: 0.2 sites/LOC and 17 perfect waves, against measured 0.5585 sites/LOC and 2.4788 ms/site."
+    consequence: "A 1,068-LOC Python save costs ~1,674 ms against 2,000, not ~405; the limit is ~725 ref sites, not ~11 files."
+    fix: "Measured inputs replace derived ones everywhere (06-measurements); the resolver harness measures the designed pipeline (DQ-04); perFileMs is re-cut by the harness."
+    lands_in: U6c, U8
+  - id: CS-8
+    defect: "elementDigest existed in one contract and was dropped at every seam; all three mandated C4 checks compared a file's bytes to a file's bytes."
+    consequence: "An ERROR-tree parse, a truncated outcome and a partial resolve all passed with the graph wrong."
+    fix: "revision_id is the staleness anchor on every node (P-B); elementDigest remains the content anchor for goldens; resolution-health catches the partial resolve."
+    lands_in: U1, U6
+  - id: CS-9
+    defect: "cpg verify could not exit 0 (id-uniqueness included a rendered count the CLI cannot compute) and the spine never scheduled it."
+    consequence: "The rank-1 surface could not compute its own mandatory check set."
+    fix: "id-uniqueness split from render-reconciliation; the latter is unavailable without a renderer (ND-8); cpg verify is a named deliverable of U2a."
+    lands_in: U2a
+  - id: CS-10
+    defect: "Two normative merge tables contradicted on the cell one of them argued about (created x deleted: drop vs deleted)."
+    consequence: "A spurious created then a real deleted inside one window annihilated; the deleted file's subgraph stayed in FalkorDB forever."
+    fix: "One merge table (C-WATCH's); deletes are absorbing; C-CLI's copy deleted."
+    lands_in: U4
+  - id: CS-11
+    defect: "The rename relink had no owner, and C-EXT's identity check passed on a stale resolved resolution."
+    fix: "Rename = deleted + created at the change level (ids under the path churn; accepted v1); identity-invariants checks the target EXISTS, not merely that a resolution is recorded."
+    lands_in: U4, U2a
+  - id: CS-12
+    defect: "No test compared two contracts' declarations to one another (the mechanical reason CS-1, CS-4 and an uncompilable import survived review)."
+    fix: "contracts-agree.test.ts: one compile-time file asserting mutual assignability across the shared types (RefSite, Resolution, GraphDelta, NormalizedChange, CheckResult, WorkspacePath)."
+    lands_in: U1

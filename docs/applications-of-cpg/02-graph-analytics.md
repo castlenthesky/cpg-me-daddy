@@ -1,4 +1,3 @@
-Here is the complete transcript of the audio:
 
 **Male:** I want you to imagine, uh, just for a second, that you are staring at a map of a massive, sprawling city.
 

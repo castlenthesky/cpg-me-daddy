@@ -1,0 +1,71 @@
+name: CI
+
+# Exists because six rules and three acceptance criteria in the prior corpus said
+# "CI asserts it" while no CI existed. A gate nobody runs is not a gate.
+#
+# The three checks are deliberately the three that encode a decision:
+#   check:deps  the CLI-purity hard invariant - core must run under plain node
+#               with zero `vscode` import. Enforced here, not in review.
+#   tsc -b      the build, including project references.
+#   vitest run  the test spine, added in the same slice as the seams it tests.
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Ordered cheapest-first so a dependency-direction violation fails in
+      # seconds rather than after a full build.
+      - name: Dependency direction (CLI purity)
+        run: npm run check:deps
+
+      - name: Build
+        run: npm run compile
+
+      - name: Tests
+        run: npm run test
+
+  # Proves the dependency gate can actually fail. A rule nobody has seen fail is
+  # not a gate, so this job introduces a real violation and asserts a non-zero
+  # exit. If check-deps is ever silently neutered, this job goes green-to-red.
+  gate-fails-when-violated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: A vscode import inside packages/** must fail the gate
+        run: |
+          cat > packages/model/src/__ci_probe.ts <<'EOF'
+          import * as vscode from 'vscode';
+          export const probe = vscode;
+          EOF
+          if npm run check:deps --silent; then
+            echo "::error::check-deps PASSED on a deliberate vscode import in packages/** - the CLI-purity gate is not enforcing"
+            exit 1
+          fi
+          echo "check-deps correctly rejected the violation"
+          rm packages/model/src/__ci_probe.ts
