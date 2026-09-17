@@ -5,9 +5,9 @@ Written 2026-09-15. Synthesizes four sources into one plan:
 | Source | What it contributed |
 |---|---|
 | **`main`** (`master` @ `27361a3`, plus `worktree-cpg-research-sweep` @ `e45574f`) | A clean layered engine with a machine-checked schema, an `IGraphStore` seam, a `WatchBackend`/`WatchSink` pipeline, a FalkorDB writer with `EXPLAIN`-gated queries, and ~300 tests. Stalled because nothing was *visible* until unit 12. |
-| **`discovery`** (`24511d4`, current) | A working graph on screen from slice 1; every slice since verified visually. Strong input seams (`WatchBackend`, `Resolver`). Stalled architecturally: the vocabulary lives in the renderer, the watcher is the engine, nothing runs outside VS Code. Full review: `architecture-review.md`. |
-| **Planning corpus** (`.agent/knowledge/planning-sessions/2026-09-11.*`) | Principles PR1–PR8, decisions D1–D37, the approved 14-label/15-edge schema (`50-schema.md`), the M0–M4 ladder, research R1–R6, DB selection with benchmarks. |
-| **Comparative research** (`docs/research/`) + **"Stacking the Sheets"** (artifact series) | Five competitors, four convergent findings; the three-tier storage model; the verdict on what a CPG in a graph store is actually for. |
+| **`discovery`** (`24511d4`, current) | A working graph on screen from slice 1; every slice since verified visually. Strong input seams (`WatchBackend`, `Resolver`). Stalled architecturally: the vocabulary lives in the renderer, the watcher is the engine, nothing runs outside VS Code. Full review: [`docs/architecture/current-target.md`](../architecture/current-target.md). |
+| **Planning corpus** (originally `.agent/knowledge/planning-sessions/2026-09-11.*` on `master`/`discovery`, centralized at [`docs/research/2026-09-11-planning-session/`](../research/2026-09-11-planning-session/)) | Principles PR1–PR8, decisions D1–D37, the approved 14-label/15-edge schema (`50-schema.md`), the M0–M4 ladder, research R1–R6, DB selection with benchmarks. All bare filenames cited below (`50-schema.md`, `60-delivery.yaml`, `40-research.yaml`, `R1`–`R6`, etc.) live under that directory; see its `ERRATA.md` for what it still gets wrong. |
+| **Comparative research** (originally `discovery:docs/research/`, centralized at [`docs/research/competitive-landscape/`](../research/competitive-landscape/)) + **"Stacking the Sheets"** (artifact series) | Five competitors, four convergent findings; the three-tier storage model; the verdict on what a CPG in a graph store is actually for. |
 
 The question this document answers: *what is the architecture that gives us `main`'s decoupling with
 `discovery`'s time-to-validate — a code-inspection system that runs without VS Code, with VS Code as
@@ -59,7 +59,7 @@ assertions; the unit-per-PR-with-its-gate discipline (GR1–GR3).
 
 ### From `discovery`: the architecture failure, precisely
 
-Covered in `architecture-review.md`. The three that matter here: the type vocabulary lives inside
+Covered in [`docs/architecture/current-target.md`](../architecture/current-target.md). The three that matter here: the type vocabulary lives inside
 `graph-visualizer` (DOM/WebGL) and every Node package deep-imports it; `file-watcher` imports all
 four of its downstream consumers; the composition root (`WorkspaceSession`) is trapped in `src/` so
 running headless required a 442-line duplicate. No tests, no output seam, no store seam.
@@ -73,7 +73,7 @@ REAL / PASSTHROUGH / SEAT stubbing convention; and the finding that changed a re
 > **`vscode.executeDefinitionProvider` is the highest-value resolver we have**, and it only exists
 > inside VS Code. (Memory `lsp-resolver-supersedes-headless`, 2026-09-15; reverses X3/D8.)
 
-### From the competitive research (`docs/research/00-index.yaml`)
+### From the competitive research (`docs/research/competitive-landscape/00-index.yaml`)
 
 Five tools studied, spot-checked. The findings with n ≥ 4:
 
@@ -602,8 +602,12 @@ it is re-homed behind seams at step 6.
 | `main` engine, cli, vscode, falkordb-service, tests, schema module, planDelta | `master` @ `27361a3` | `git show master:packages/engine/src/store/cypher.ts` |
 | `WatchSink`, `SerialQueue`, `withRetry`, `filesystem-projector`, `service-boundaries.md` | `worktree-cpg-research-sweep` @ `e45574f` (commit `5c6880a`) | `git show worktree-cpg-research-sweep:packages/engine/src/watch/sink.ts` |
 | current visual pipeline, LSP resolver, symbol registry, viz | `discovery` @ `24511d4` (working tree) | in place |
-| planning corpus, research, schema spec | `.agent/knowledge/planning-sessions/2026-09-11.*` | in place on both branches |
-| competitive research | `docs/research/*.yaml` | in place |
+| architectural review of `discovery` (seam placement, migration plan) | was `discovery:docs/plans/architecture-review.md` | now `docs/architecture/current-target.md` |
+| planning corpus, research, schema spec | was `.agent/knowledge/planning-sessions/2026-09-11.*` on `master`/`discovery` | now `docs/research/2026-09-11-planning-session/` (+ `ERRATA.md`) |
+| database selection (benchmarks, decision) | was `.agent/knowledge/planning-sessions/2026-09-11.database-research/` | now `docs/research/database-selection/` |
+| competitive research | was `discovery:docs/research/*.yaml` | now `docs/research/competitive-landscape/` |
+| CPG design docs (Joern-aligned schema detail) | was `master:design/**` ≡ `discovery:.agent/knowledge/design/**` | now `docs/architecture/cpg-design/` (+ `ERRATA.md`) |
+| original implementation's bug journals ("what sloppy looked like") | was `master:.claude/journal/*.md` | now `docs/history/archive/journal/` |
 
 ## Appendix B — Corpus cross-reference
 
