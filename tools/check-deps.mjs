@@ -52,7 +52,7 @@ function flag(file, line, rule, detail) {
 // it still gets the NUL-byte and deep-import rules, and scanning it is how we
 // notice core code that has drifted into the host tree. Omitting src/** left
 // the rank-1 invariant unenforced everywhere host code actually lands.
-const HOST_TREE = 'src';
+const HOST_TREE = 'apps';
 const files = [...walk(join(ROOT, 'packages')), ...walk(join(ROOT, HOST_TREE))];
 
 for (const file of files) {

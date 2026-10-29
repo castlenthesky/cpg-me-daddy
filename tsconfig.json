@@ -1,9 +1,4 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "out",
-    "rootDir": "."
-  },
-  "include": ["src/**/*"],
-  "references": [{ "path": "packages/model" }]
+  "files": [],
+  "references": [{ "path": "packages/model" }, { "path": "apps/vscode" }]
 }
