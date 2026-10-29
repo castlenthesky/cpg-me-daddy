@@ -16,7 +16,7 @@
 //     reaching past its front door and a fifth violating the rule silently.
 //     Enforced here so it cannot be violated silently again.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -29,6 +29,15 @@ function walk(dir, acc = []) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, acc);
     else if (/\.(ts|tsx|mts|cts|js|mjs)$/.test(full)) acc.push(full);
+  }
+  return acc;
+}
+
+function walkAll(dir, acc = []) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walkAll(full, acc);
+    else acc.push(full);
   }
   return acc;
 }
@@ -95,6 +104,26 @@ for (const file of files) {
       }
     }
   });
+}
+
+// Built output is skipped above, which is how a stale dist/__probe_types.js
+// carrying a real `require("vscode")` sat in packages/model undetected: tsc -b
+// never deletes outputs whose source is gone. Scanning dist for the import
+// (not the bare word: model's .d.ts mentions vscode in a doc comment) is
+// cheaper than cleaning before every compile, which would cost incrementality.
+for (const pkg of readdirSync(join(ROOT, 'packages'))) {
+  const dist = join(ROOT, 'packages', pkg, 'dist');
+  if (!existsSync(dist)) continue;
+  for (const file of walkAll(dist)) {
+    if (!/\.[cm]?js$/.test(file)) continue;
+    readFileSync(file, 'utf8').split('\n').forEach((text, i) => {
+      for (const [, spec] of text.matchAll(SPEC)) {
+        if (spec === 'vscode' || spec.startsWith('vscode/')) {
+          flag(file, i + 1, 'cli-purity', `built output of "${pkg}" requires ${spec}; delete the stale dist`);
+        }
+      }
+    });
+  }
 }
 
 if (violations.length) {
