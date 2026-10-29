@@ -20,7 +20,7 @@
 # Review agents must be explicitly told to use the code-review skill (L-42).
 
 summary:
-  units: 10          # U1..U10 (U0 is done-but-uncommitted foundation)
+  units: 10          # U1..U10 (U0 is the completed foundation)
   prs_in_original_spine: 16
   features: 24      # PR-sized; the 16-PR spine sliced finer, order unchanged
   stories: 53
@@ -74,7 +74,7 @@ milestones:
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
   - id: U0
     name: Foundation
-    status: built, UNCOMMITTED (develop working tree, 2026-09-17)
+    status: done (2026-10-28) — U0.1.1 committed as cfd080d (CI green); U0.1.2 and U0.2.x on feature/u0-finish
     goal: "The vocabulary package, the test runner, the dependency gate, CI, the archive tags, and the packages/ vs apps/ split — all committed and green."
     why_here: "A gate with no runner is a suggestion (L-31); a vocabulary inside the wrong package is how 13 deep imports happen (L-26). Everything else is gated on this."
     delivers: ["@cpg/model (13 exports, 17 tests, zero deps)", "tools/check-deps.mjs (4 rules)", ".github/workflows/ci.yml (verify on ubuntu+macos; gate-fails-when-violated job)", "vitest, tsconfig.base.json, project references", "5 archive tags", "apps/vscode with the one extension file", "two-tier layer rule"]

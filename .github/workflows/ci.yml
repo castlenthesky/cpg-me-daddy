@@ -4,8 +4,9 @@ name: CI
 # "CI asserts it" while no CI existed. A gate nobody runs is not a gate.
 #
 # The three checks are deliberately the three that encode a decision:
-#   check:deps  the CLI-purity hard invariant - core must run under plain node
-#               with zero `vscode` import. Enforced here, not in review.
+#   check:deps  the two-tier rule (DQ-08) - packages/** runs under plain node
+#               with no host SDK; each apps/* imports only its own. Enforced
+#               here, not in review.
 #   tsc -b      the build, including project references.
 #   vitest run  the test spine, added in the same slice as the seams it tests.
 
@@ -35,7 +36,7 @@ jobs:
 
       # Ordered cheapest-first so a dependency-direction violation fails in
       # seconds rather than after a full build.
-      - name: Dependency direction (CLI purity)
+      - name: Dependency direction (two-tier rule)
         run: npm run check:deps
 
       - name: Build
@@ -57,15 +58,22 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: A vscode import inside packages/** must fail the gate
+      # The three violations U0.2.2 names, one per tier rule. Each is planted
+      # alone, must make the gate exit non-zero, and is removed before the next.
+      # tools/check-deps.test.mjs covers the rest of the rules on fixtures.
+      - name: Each tier violation must fail the gate
         run: |
-          cat > packages/model/src/__ci_probe.ts <<'EOF'
-          import * as vscode from 'vscode';
-          export const probe = vscode;
-          EOF
-          if npm run check:deps --silent; then
-            echo "::error::check-deps PASSED on a deliberate vscode import in packages/** - the CLI-purity gate is not enforcing"
-            exit 1
-          fi
-          echo "check-deps correctly rejected the violation"
-          rm packages/model/src/__ci_probe.ts
+          plant() {
+            mkdir -p "$(dirname "$1")"
+            printf '%s\n' "$2" > "$1"
+            if npm run check:deps --silent; then
+              echo "::error::check-deps PASSED on $1 ($2) - the gate is not enforcing"
+              exit 1
+            fi
+            echo "check-deps correctly rejected $1"
+            rm "$1"
+          }
+          plant packages/model/src/__ci_probe.ts "import * as vscode from 'vscode';"
+          plant apps/vscode/src/__ci_probe.ts "import { Server } from '@modelcontextprotocol/sdk';"
+          plant apps/cli/src/__ci_probe.ts "import { x } from '@cpg/model/dist/x';"
+          npm run check:deps --silent

@@ -1,0 +1,10 @@
+{
+  "name": "@cpg/vscode-host",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The VS Code front door. The extension manifest stays at the repo root; this package owns the host code.",
+  "main": "./dist/extension.js",
+  "dependencies": {
+    "@cpg/model": "*"
+  }
+}
