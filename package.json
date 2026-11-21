@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.90.0",
+    "node": ">=24"
   },
   "categories": [
     "Other"
@@ -30,15 +31,19 @@
     "clean": "tsc -b --clean && rm -rf out",
     "check:deps": "node tools/check-deps.mjs",
     "test": "vitest run",
-    "verify": "npm run check:deps && npm run compile && npm run test"
+    "verify": "npm run check",
+    "typecheck": "tsc -b",
+    "check": "npm run check:deps && npm run typecheck && npm run test",
+    "check:gates": "node tools/prove-gates.mjs"
   },
   "dependencies": {
     "@cpg/model": "*"
   },
   "devDependencies": {
-    "@types/node": "^20.x",
+    "@types/node": "^24.19.2",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
-  }
+  },
+  "packageManager": "npm@11.8.0"
 }
