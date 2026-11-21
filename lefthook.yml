@@ -1,0 +1,28 @@
+# Git hooks. Hooks are installed automatically by the lefthook npm package's postinstall
+# (`npm install`); it skips itself when CI is set, so CI never needs .git.
+# Emergency bypass: `LEFTHOOK=0 git commit ...` / `LEFTHOOK=0 git push ...` (CI still runs every gate).
+
+# Pre-commit stays fast (staged files only) and cannot replace `npm run check`: that full gate
+# runs on pre-push and in CI.
+pre-commit:
+  parallel: true
+  jobs:
+    # Write-then-restage: formatting is mechanical, so fix it instead of rejecting the commit.
+    - name: oxfmt
+      run: npx --no-install oxfmt --write --no-error-on-unmatched-pattern {staged_files}
+      glob: '*.{ts,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml}'
+      stage_fixed: true
+    # Fails the commit: lint findings need a human decision. Only ts/js (type-aware rules
+    # still resolve through tsconfig).
+    - name: oxlint
+      run: npx --no-install oxlint --deny-warnings {staged_files}
+      glob: '*.{ts,mts,cts,js,mjs,cjs}'
+    # Whole-repo (cheap, ~50ms): dependency direction is a global property, not per-file.
+    - name: check-deps
+      run: npm run --silent check:deps
+
+# Full gate; turbo makes an unchanged tree a cache hit.
+pre-push:
+  jobs:
+    - name: check
+      run: npm run --silent check

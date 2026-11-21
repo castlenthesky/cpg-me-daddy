@@ -13,6 +13,20 @@ import { rmSync, writeFileSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const at = (p) => `${ROOT}/${p}`;
 
+const git = (args) => spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+// Leaves the index exactly as found: drops only the probe from it, then deletes the file.
+function unstageProbe() {
+  git([
+    'rm',
+    '--cached',
+    '-f',
+    '--quiet',
+    '--ignore-unmatch',
+    'packages/model/src/__gate_probe.ts',
+  ]);
+  rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+}
+
 const CASES = [
   {
     name: 'format:check rejects a mis-formatted .ts file',
@@ -156,6 +170,34 @@ const CASES = [
     cleanup() {
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
       // tsc -b emits the probe into dist when only lint is violated.
+      for (const ext of ['js', 'js.map', 'd.ts', 'd.ts.map'])
+        rmSync(at(`packages/model/dist/__gate_probe.${ext}`), { force: true });
+    },
+  },
+  {
+    // The hook must reject, not just exist: stage a lint violation and run the real pre-commit job.
+    name: 'lefthook pre-commit rejects a staged lint violation',
+    command: ['npx', '--no-install', 'lefthook', 'run', 'pre-commit'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(): void {\n  debugger;\n}\n',
+      );
+      git(['add', 'packages/model/src/__gate_probe.ts']);
+    },
+    cleanup: unstageProbe,
+  },
+  {
+    name: 'lefthook pre-push rejects a lint violation (runs the full npm run check)',
+    command: ['npx', '--no-install', 'lefthook', 'run', 'pre-push'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(): void {\n  debugger;\n}\n',
+      );
+    },
+    cleanup() {
+      unstageProbe();
       for (const ext of ['js', 'js.map', 'd.ts', 'd.ts.map'])
         rmSync(at(`packages/model/dist/__gate_probe.${ext}`), { force: true });
     },
