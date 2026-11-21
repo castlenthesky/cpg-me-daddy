@@ -33,12 +33,13 @@
     "format:check": "oxfmt --check",
     "lint": "oxlint --deny-warnings",
     "lint:fix": "oxlint --fix",
+    "knip": "knip",
     "check:deps": "node tools/check-deps.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "verify": "npm run check",
     "typecheck": "tsc -b",
-    "check": "npm run format:check && npm run lint && npm run check:deps && npm run typecheck && npm run test:coverage",
+    "check": "npm run format:check && npm run lint && npm run knip && npm run check:deps && npm run typecheck && npm run test:coverage",
     "check:gates": "node tools/prove-gates.mjs"
   },
   "dependencies": {
@@ -49,6 +50,7 @@
     "@types/vscode": "^1.90.0",
     "@vitest/coverage-v8": "^3.2.7",
     "fast-check": "^4.10.3",
+    "knip": "^6.47.0",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "oxlint-tsgolint": "^7.0.2008",

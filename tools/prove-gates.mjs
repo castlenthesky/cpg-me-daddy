@@ -52,6 +52,16 @@ const CASES = [
     },
   },
   {
+    name: 'knip rejects an unreferenced file with an unused export',
+    command: ['npm', 'run', '--silent', 'knip'],
+    plant() {
+      writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const probe = 1;\n');
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
     name: 'check:deps rejects a vscode import in packages/**',
     command: ['npm', 'run', '--silent', 'check:deps'],
     plant() {
