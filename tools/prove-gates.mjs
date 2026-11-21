@@ -15,6 +15,17 @@ const at = (p) => `${ROOT}/${p}`;
 
 const CASES = [
   {
+    name: 'format:check rejects a mis-formatted .ts file',
+    command: ['npm', 'run', '--silent', 'format:check'],
+    plant() {
+      // Double quotes, no semicolon, extra spaces: violates every non-default format choice.
+      writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const   probe = "x"\n');
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
     name: 'check:deps rejects a vscode import in packages/**',
     command: ['npm', 'run', '--silent', 'check:deps'],
     plant() {
@@ -31,7 +42,10 @@ const CASES = [
     name: 'typecheck rejects a type error',
     command: ['npm', 'run', '--silent', 'typecheck'],
     plant() {
-      writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const probe: number = "not a number";\n');
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export const probe: number = "not a number";\n',
+      );
     },
     cleanup() {
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
@@ -74,7 +88,12 @@ for (const c of CASES) {
   results.push({ name: c.name, status, detail });
 }
 
-for (const r of results) console.log(`${r.status.padEnd(5)} ${r.name}${r.detail ? `  (${r.detail})` : ''}`);
+for (const r of results)
+  console.log(`${r.status.padEnd(5)} ${r.name}${r.detail ? `  (${r.detail})` : ''}`);
 const bad = results.filter((r) => r.status !== 'ok');
-console.log(bad.length ? `\n${bad.length} gate(s) did not fail when they should have` : '\nall gates fail when violated');
+console.log(
+  bad.length
+    ? `\n${bad.length} gate(s) did not fail when they should have`
+    : '\nall gates fail when violated',
+);
 process.exit(bad.length ? 1 : 0);

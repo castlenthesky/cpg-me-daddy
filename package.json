@@ -29,11 +29,13 @@
     "compile": "tsc -b",
     "watch": "tsc -b -w",
     "clean": "tsc -b --clean && rm -rf out",
+    "format": "oxfmt --write",
+    "format:check": "oxfmt --check",
     "check:deps": "node tools/check-deps.mjs",
     "test": "vitest run",
     "verify": "npm run check",
     "typecheck": "tsc -b",
-    "check": "npm run check:deps && npm run typecheck && npm run test",
+    "check": "npm run format:check && npm run check:deps && npm run typecheck && npm run test",
     "check:gates": "node tools/prove-gates.mjs"
   },
   "dependencies": {
@@ -42,6 +44,7 @@
   "devDependencies": {
     "@types/node": "^24.19.2",
     "@types/vscode": "^1.90.0",
+    "oxfmt": "^0.79.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },

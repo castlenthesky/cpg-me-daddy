@@ -79,11 +79,17 @@ for (const file of files) {
       // Rule 1 applies to core only. src/** is the host adapter and is allowed
       // to import vscode; that is its entire job.
       if (!isHost && (spec === 'vscode' || spec.startsWith('vscode/'))) {
-        flag(file, at, 'cli-purity', `package "${pkg}" imports ${spec}; core must run under plain node`);
+        flag(
+          file,
+          at,
+          'cli-purity',
+          `package "${pkg}" imports ${spec}; core must run under plain node`,
+        );
       }
 
       const deep = spec.match(/^(@cpg\/[^/]+)\/(.+)$/);
-      if (deep) flag(file, at, 'deep-import', `reach past the front door of ${deep[1]} into "${deep[2]}"`);
+      if (deep)
+        flag(file, at, 'deep-import', `reach past the front door of ${deep[1]} into "${deep[2]}"`);
 
       // The zero-deps rule is about what @cpg/model *ships*. Its own tests are
       // not shipped (tsconfig excludes them from the build), so they may import
