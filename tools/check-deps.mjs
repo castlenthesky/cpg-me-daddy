@@ -21,7 +21,11 @@ import { join, relative } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const SKIP = new Set(['node_modules', 'dist', 'out', '.git', '.vscode-test', '.debate']);
-const SPEC = /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)['"]([^'"]+)['"]/g;
+// Every way a module specifier is written: `... from 'x'` (import, import type, export {..} from,
+// export * from; `from` may sit on a later line than `import`/`export`, and `\s` spans newlines),
+// a bare side-effect `import 'x'`, `require('x')` and dynamic `import('x')`. Applied to the whole
+// file (not line by line) so a specifier on a line of its own is still seen.
+const SPEC = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"\n]+)['"]/g;
 
 function walk(dir, acc = []) {
   for (const entry of readdirSync(dir)) {
@@ -52,7 +56,6 @@ for (const file of files) {
   const isHost = tree === HOST_TREE;
   const pkg = isHost ? HOST_TREE : rel.split('/')[1];
   const source = readFileSync(file, 'utf8');
-  const lines = source.split('\n');
 
   // Rule 4: NO NUL BYTES IN SOURCE.
   //
@@ -72,35 +75,34 @@ for (const file of files) {
     flag(file, line, 'nul-byte', 'literal NUL byte in source; grep will treat this file as binary');
   }
 
-  lines.forEach((text, i) => {
-    for (const [, spec] of text.matchAll(SPEC)) {
-      const at = i + 1;
+  for (const m of source.matchAll(SPEC)) {
+    const spec = m[1];
+    const at = source.slice(0, m.index).split('\n').length;
 
-      // Rule 1 applies to core only. src/** is the host adapter and is allowed
-      // to import vscode; that is its entire job.
-      if (!isHost && (spec === 'vscode' || spec.startsWith('vscode/'))) {
-        flag(
-          file,
-          at,
-          'cli-purity',
-          `package "${pkg}" imports ${spec}; core must run under plain node`,
-        );
-      }
-
-      const deep = spec.match(/^(@cpg\/[^/]+)\/(.+)$/);
-      if (deep)
-        flag(file, at, 'deep-import', `reach past the front door of ${deep[1]} into "${deep[2]}"`);
-
-      // The zero-deps rule is about what @cpg/model *ships*. Its own tests are
-      // not shipped (tsconfig excludes them from the build), so they may import
-      // a test runner. Rules 1 and 3 still apply to them.
-      const isTest = /\.test(-d)?\.[cm]?tsx?$/.test(file);
-      const isRelative = spec.startsWith('.');
-      if (pkg === 'model' && !isTest && !isRelative) {
-        flag(file, at, 'model-zero-deps', `@cpg/model imports "${spec}"; it must have none`);
-      }
+    // Rule 1 applies to core only. src/** is the host adapter and is allowed
+    // to import vscode; that is its entire job.
+    if (!isHost && (spec === 'vscode' || spec.startsWith('vscode/'))) {
+      flag(
+        file,
+        at,
+        'cli-purity',
+        `package "${pkg}" imports ${spec}; core must run under plain node`,
+      );
     }
-  });
+
+    const deep = spec.match(/^(@cpg\/[^/]+)\/(.+)$/);
+    if (deep)
+      flag(file, at, 'deep-import', `reach past the front door of ${deep[1]} into "${deep[2]}"`);
+
+    // The zero-deps rule is about what @cpg/model *ships*. Its own tests are
+    // not shipped (tsconfig excludes them from the build), so they may import
+    // a test runner. Rules 1 and 3 still apply to them.
+    const isTest = /\.test(-d)?\.[cm]?tsx?$/.test(file);
+    const isRelative = spec.startsWith('.');
+    if (pkg === 'model' && !isTest && !isRelative) {
+      flag(file, at, 'model-zero-deps', `@cpg/model imports "${spec}"; it must have none`);
+    }
+  }
 }
 
 if (violations.length) {

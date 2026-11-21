@@ -23,19 +23,26 @@
         "!coverage/**",
         "!.turbo/**",
         "!.git/**",
+        "!.claude/settings.local.json",
         "!**/*.tsbuildinfo",
         "!package-lock.json"
       ]
     },
     "//#lint": {
+      // Root config files are matched by extension, and the extension list must cover every module
+      // flavour: vitest.config.mts was once missed by "*.ts" and a config edit replayed a cache hit.
       // Type-aware: the result depends on all sources and on every tsconfig, not only .oxlintrc.json.
       "inputs": [
         "src/**",
         "packages/**",
         "tools/**",
         "*.ts",
+        "*.mts",
+        "*.cts",
         "*.mjs",
+        "*.cjs",
         "*.json",
+        "*.jsonc",
         ".oxlintrc.json",
         "!packages/*/dist/**",
         "!**/*.tsbuildinfo"
@@ -48,8 +55,16 @@
         "packages/**",
         "tools/**",
         "*.ts",
+        "*.mts",
+        "*.cts",
         "*.mjs",
+        "*.cjs",
         "*.json",
+        "*.jsonc",
+        // knip plugins read these too (lefthook binaries, CI workflow scripts, changeset config).
+        "lefthook.yml",
+        ".github/**",
+        ".changeset/**",
         "!packages/*/dist/**",
         "!**/*.tsbuildinfo"
       ]
@@ -91,7 +106,12 @@
         "src/**",
         "packages/**",
         "*.ts",
+        "*.mts",
+        "*.cts",
+        "*.mjs",
+        "*.cjs",
         "*.json",
+        "*.jsonc",
         "!packages/*/dist/**",
         "!**/*.tsbuildinfo"
       ],

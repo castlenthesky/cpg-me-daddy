@@ -14,6 +14,8 @@
     "out",
     "node_modules",
     "package-lock.json",
+    // Machine-local, git-ignored (user-global ignore) tool state; not ours to format.
+    ".claude/settings.local.json",
     // docs/** is hand-written prose/YAML with intentional layout (long folded scalars, flow lists);
     // oxfmt rewrites ~7k lines of it, which is churn with no value. Benchmark JSON is generated data.
     "docs/**"

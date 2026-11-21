@@ -2,13 +2,25 @@
 // Proves every gate can fail. A gate nobody has seen fail is not a gate.
 //
 // Each case plants a violation, runs the gate command, and asserts a NON-ZERO
-// exit. cleanup() always runs (finally), even when the plant or the gate throws.
+// exit AND that the output names the violation (`expectOutput`: string or RegExp, normally the
+// planted file or the rule id). The second half matters: a crashed script, a typo'd npm script or a
+// missing binary also exits non-zero, and must not be mistaken for the gate rejecting the probe.
+// A case without `expectOutput` is allowed only when impossible, and is listed in a warning.
+// cleanup() always runs (finally), even when the plant or the gate throws.
 // Every step that adds a gate must add its case to CASES below.
 //
 // Run: npm run check:gates
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -34,9 +46,108 @@ function unstageProbe() {
   rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
 }
 
+// Colour codes would break the output matchers.
+const PLAIN_ENV = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' };
+const outputOf = (r) => `${r.stdout ?? ''}${r.stderr ?? ''}`;
+const matches = (pattern, text) =>
+  typeof pattern === 'string' ? text.includes(pattern) : pattern.test(text);
+const tail = (text) => text.trim().split('\n').slice(-6).join(' | ').slice(0, 400);
+
+// Judges one gate run against a case's expectations; returns a problem string, or null when the
+// gate rejected the violation the way the case says it should.
+function verdict(r, c) {
+  const out = outputOf(r);
+  if (r.error) return `could not run: ${r.error.message}`;
+  if (r.status === null) return `killed by signal ${r.signal}`;
+  if (c.forbidOutput?.test(out))
+    return `output matched ${c.forbidOutput} (gate was skipped, not run)`;
+  if (c.expectStatus !== undefined) {
+    // Exact-status cases (e.g. the agent hook must exit 2, and 0 on clean files).
+    if (r.status !== c.expectStatus) return `expected exit ${c.expectStatus}, got ${r.status}`;
+  } else if (r.status === 0) return 'gate exited 0 on a planted violation';
+  if (c.expectOutput !== undefined && !matches(c.expectOutput, out))
+    return `exit ${r.status} but output does not mention ${c.expectOutput} (crash, not a rejection?): ${tail(out)}`;
+  return null;
+}
+
+// Removes every probe a case may have planted, plus what `tsc -b` emits from them.
+function cleanupProbes() {
+  for (const dir of [
+    'packages/model/src',
+    'packages/model/dist',
+    'packages/ast-generator',
+    'src',
+  ]) {
+    if (!existsSync(at(dir))) continue;
+    for (const f of readdirSync(at(dir)))
+      if (f.startsWith('__gate_probe')) rmSync(at(`${dir}/${f}`), { force: true });
+  }
+}
+
+// A planted file in one of the trees check-deps scans.
+const depsCase = (name, file, body, expectOutput, extra = {}) => ({
+  name,
+  command: ['npm', 'run', '--silent', 'check:deps'],
+  expectOutput,
+  plant: () => writeFileSync(at(file), body),
+  cleanup: cleanupProbes,
+  ...extra,
+});
+
+const npmCheck = () =>
+  spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8', env: PLAIN_ENV });
+
+// Config-driven cache invalidation. Turbo must never replay a cached pass after a CONFIG-only
+// edit: warm the cache on a tree that is legal under the current config, change ONLY the config so
+// the tree becomes a violation, then run the full check and require (1) a failure that names the
+// violation and (2) that turbo reported a cache MISS for the task, i.e. the config is a task input.
+// `plant` writes files that are legal under every gate and the unedited config; the config text is
+// always restored in finally.
+function configCase({ name, task, file, from, to, expectOutput, plant }) {
+  return {
+    name,
+    expectOutput,
+    run() {
+      const path = at(file);
+      const original = readFileSync(path, 'utf8');
+      if (!original.includes(from)) throw new Error(`${file} no longer contains: ${from}`);
+      try {
+        plant?.();
+        const warm = npmCheck();
+        if (warm.status !== 0)
+          throw new Error(`baseline \`npm run check\` must pass first: ${tail(outputOf(warm))}`);
+        writeFileSync(
+          path,
+          original.replace(from, () => to),
+        );
+        const r = npmCheck();
+        const problem = verdict(r, { expectOutput });
+        if (problem) throw new Error(problem);
+        if (!new RegExp(`^//:${task}: cache miss`, 'm').test(outputOf(r)))
+          throw new Error(
+            `${task} was not a cache miss after editing ${file}: add it to turbo.json inputs`,
+          );
+      } finally {
+        writeFileSync(path, original);
+        cleanupProbes();
+      }
+    },
+  };
+}
+
+// Legal under every gate (knip treats *.test.ts as a vitest entry; coverage ignores it).
+const probeTest = (body) => () =>
+  writeFileSync(
+    at('packages/model/src/__gate_probe.test.ts'),
+    `import { expect, it } from 'vitest';\n\nit('gate probe', () => {\n${body}\n  expect(1).toBe(1);\n});\n`,
+  );
+
+const NUL = String.fromCharCode(0); // never write a literal NUL byte into this file
+
 const CASES = [
   {
     name: 'format:check rejects a mis-formatted .ts file',
+    expectOutput: /__gate_probe\.ts/,
     command: ['npm', 'run', '--silent', 'format:check'],
     plant() {
       // Double quotes, no semicolon, extra spaces: violates every non-default format choice.
@@ -48,6 +159,7 @@ const CASES = [
   },
   {
     name: 'lint rejects a floating promise (type-aware rule)',
+    expectOutput: /no-floating-promises/,
     command: ['npm', 'run', '--silent', 'lint'],
     plant() {
       writeFileSync(
@@ -61,6 +173,7 @@ const CASES = [
   },
   {
     name: 'lint rejects a debugger statement (correctness)',
+    expectOutput: /no-debugger/,
     command: ['npm', 'run', '--silent', 'lint'],
     plant() {
       writeFileSync(
@@ -74,6 +187,7 @@ const CASES = [
   },
   {
     name: 'knip rejects an unreferenced file with an unused export',
+    expectOutput: /__gate_probe\.ts/,
     command: ['npm', 'run', '--silent', 'knip'],
     plant() {
       writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const probe = 1;\n');
@@ -84,6 +198,7 @@ const CASES = [
   },
   {
     name: 'check:deps rejects a vscode import in packages/**',
+    expectOutput: /cli-purity/,
     command: ['npm', 'run', '--silent', 'check:deps'],
     plant() {
       writeFileSync(
@@ -95,10 +210,53 @@ const CASES = [
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
     },
   },
+  depsCase(
+    'check:deps rejects a non-relative import in packages/model/src (model-zero-deps)',
+    'packages/model/src/__gate_probe.ts',
+    "import { probe } from 'left-pad';\nexport const value = probe;\n",
+    /model-zero-deps.*__gate_probe|__gate_probe.*model-zero-deps/s,
+  ),
+  depsCase(
+    'check:deps rejects a deep import of @cpg/model from src/ (deep-import)',
+    'src/__gate_probe.ts',
+    "export { x } from '@cpg/model/dist/index';\n",
+    /deep-import/,
+  ),
+  depsCase(
+    'check:deps rejects a NUL byte in source (nul-byte)',
+    'packages/model/src/__gate_probe.ts',
+    `export const probe = 1; // ${NUL}\n`,
+    /nul-byte/,
+  ),
+  depsCase(
+    "check:deps rejects a bare side-effect import 'vscode' in packages/** (cli-purity)",
+    'packages/ast-generator/__gate_probe.ts',
+    "import 'vscode';\n",
+    /cli-purity/,
+  ),
+  depsCase(
+    'check:deps rejects a double-quoted bare import "vscode" in packages/** (cli-purity)',
+    'packages/ast-generator/__gate_probe.ts',
+    'import "vscode";\n',
+    /cli-purity/,
+  ),
+  depsCase(
+    "check:deps rejects export * from 'vscode' in packages/** (cli-purity)",
+    'packages/ast-generator/__gate_probe.ts',
+    "export * from 'vscode';\n",
+    /cli-purity/,
+  ),
+  depsCase(
+    'check:deps rejects a multi-line import whose from is on a later line (cli-purity)',
+    'packages/ast-generator/__gate_probe.ts',
+    "import type {\n  Uri,\n  Range,\n}\n  from\n  'vscode';\nexport type { Uri, Range };\n",
+    /cli-purity/,
+  ),
   {
     // Realistic failure: a test-d file escapes the tsconfig exclusion and tsc emits it into dist.
     // Plants the dist files directly (what `tsc -b` would emit) and runs the tarball gate.
     name: 'check:pack rejects a test file and a runtime require in the model tarball',
+    expectOutput: /__gate_probe\.test-d\.js/,
     command: ['npm', 'run', '--silent', 'check:pack'],
     plant() {
       // dist is gitignored: a fresh checkout (CI) has none until a build runs.
@@ -111,6 +269,7 @@ const CASES = [
   },
   {
     name: 'check:pack rejects a non-relative require in a non-test shipped .js',
+    expectOutput: /__gate_probe\.js/,
     command: ['npm', 'run', '--silent', 'check:pack'],
     plant() {
       // dist is gitignored: a fresh checkout (CI) has none until a build runs.
@@ -123,6 +282,7 @@ const CASES = [
   },
   {
     name: 'typecheck rejects a type error',
+    expectOutput: /TS2322/,
     command: ['npm', 'run', '--silent', 'typecheck'],
     plant() {
       writeFileSync(
@@ -141,6 +301,7 @@ const CASES = [
   },
   {
     name: 'npm test fails on a failing test (and a glob matching nothing is not a pass)',
+    expectOutput: /__gate_probe\.test\.ts/,
     command: ['npm', 'run', '--silent', 'test'],
     plant() {
       writeFileSync(
@@ -154,12 +315,14 @@ const CASES = [
   },
   {
     name: 'vitest with an include glob matching no files exits non-zero (passWithNoTests: false)',
+    expectOutput: /No test files found/i,
     command: ['npx', 'vitest', 'run', '--typecheck.enabled=false', 'no-such-dir-probe'],
     plant() {},
     cleanup() {},
   },
   {
     name: 'test:coverage rejects an untested source file (threshold)',
+    expectOutput: /does not meet global threshold/,
     command: ['npm', 'run', '--silent', 'test:coverage'],
     plant() {
       const body = Array.from(
@@ -175,6 +338,7 @@ const CASES = [
   {
     // Runtime-valid (the body never fails at runtime), so only the type check can reject it.
     name: 'typecheck:tests rejects a type error in a .test.ts',
+    expectOutput: /__gate_probe\.test\.ts.*TS2322/,
     command: ['npm', 'run', '--silent', 'typecheck:tests'],
     plant() {
       writeFileSync(
@@ -188,6 +352,7 @@ const CASES = [
   },
   {
     name: 'type test (*.test-d.ts) fails on a wrong type assertion',
+    expectOutput: /__gate_probe\.test-d\.ts/,
     command: ['npm', 'run', '--silent', 'typecheck:tests'],
     plant() {
       writeFileSync(
@@ -204,6 +369,7 @@ const CASES = [
     // lint violation, and run the FULL `npm run check` twice (a failed run must not be cached
     // either). The asserted run is the second one; the first only has to have been attempted.
     name: 'npm run check fails on a planted lint error even with a warm turbo cache',
+    expectOutput: /no-debugger/,
     command: ['npm', 'run', '--silent', 'check'],
     plant() {
       const warm = spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
@@ -224,6 +390,7 @@ const CASES = [
   {
     // The hook must reject, not just exist: stage a lint violation and run the real pre-commit job.
     name: 'lefthook pre-commit rejects a staged lint violation',
+    expectOutput: /no-debugger/,
     command: ['npx', '--no-install', 'lefthook', 'run', 'pre-commit'],
     plant() {
       writeFileSync(
@@ -236,6 +403,7 @@ const CASES = [
   },
   {
     name: 'lefthook pre-push rejects a lint violation (runs the full npm run check)',
+    expectOutput: /no-debugger/,
     command: ['npx', '--no-install', 'lefthook', 'run', 'pre-push'],
     // lefthook exits 0 with "(skip)" when it thinks there is nothing to push (up-to-date upstream,
     // detached CI checkout): that must never pass for a rejection.
@@ -258,6 +426,7 @@ const CASES = [
     // clones where there is nothing to push and assert the hook still runs the full check and
     // rejects a planted lint violation. Uses the committed lefthook.yml (HEAD), not the worktree.
     name: 'lefthook pre-push never skips when there is nothing new to push (upstream up to date, detached HEAD + CI)',
+    expectOutput: 'no-debugger', // asserted per run inside run()
     run() {
       const dir = mkdtempSync(`${tmpdir()}/cpg-prepush-`);
       try {
@@ -296,6 +465,8 @@ const CASES = [
           const out = `${r.stdout}${r.stderr}`;
           if (/\(skip\)/.test(out)) problems.push(`${label}: hook skipped`);
           else if (r.status === 0) problems.push(`${label}: exited 0 on a planted lint violation`);
+          else if (!/no-debugger/.test(out))
+            problems.push(`${label}: failed without naming no-debugger`);
         };
         judge('up-to-date upstream', push({}));
         must(sh(clone, 'git', ['checkout', '-q', '--detach']), 'detach');
@@ -309,6 +480,7 @@ const CASES = [
   {
     // Uncovered mutants count against the score, so an untested file must push it under `break`.
     name: 'test:mutation rejects an untested source file (break threshold)',
+    expectOutput: /threshold|break/i,
     command: ['npm', 'run', '--silent', 'test:mutation'],
     plant() {
       const body = Array.from(
@@ -326,6 +498,7 @@ const CASES = [
   {
     // Not part of `npm run check`, but it is the agent feedback loop: it must exit 2 on a lint error.
     name: 'claude post-edit hook exits exactly 2 on a lint violation',
+    expectOutput: /no-debugger/,
     expectStatus: 2,
     command: [
       'sh',
@@ -373,6 +546,48 @@ const CASES = [
       rmSync(at('packages/model/src/__gate_probe.json'), { force: true });
     },
   },
+  configCase({
+    name: 'lint: a .oxlintrc.json-only edit (no-console to error) invalidates the turbo cache',
+    task: 'lint',
+    file: '.oxlintrc.json',
+    from: '"rules": {',
+    to: '"rules": {\n    "no-console": "error",',
+    expectOutput: /no-console/,
+    plant: probeTest("  console.log('probe');"),
+  }),
+  configCase({
+    name: 'test: a vitest.config.mts-only edit (coverage threshold 99) invalidates the turbo cache',
+    task: 'test:coverage',
+    file: 'vitest.config.mts',
+    from: 'lines: 95,',
+    to: 'lines: 99,',
+    expectOutput: /does not meet global threshold \(99%\)/,
+  }),
+  configCase({
+    name: 'typecheck: a tsconfig.base.json-only edit (noPropertyAccessFromIndexSignature) invalidates the turbo cache',
+    task: 'typecheck:tests',
+    file: 'tsconfig.base.json',
+    from: '"noUnusedParameters": true',
+    to: '"noUnusedParameters": true,\n    "noPropertyAccessFromIndexSignature": true',
+    expectOutput: /TS4111/,
+    plant: probeTest('  const o: Record<string, number> = {};\n  expect(o.x).toBeUndefined();'),
+  }),
+  configCase({
+    name: 'format: an .oxfmtrc.json-only edit (singleQuote off) invalidates the turbo cache',
+    task: 'format:check',
+    file: '.oxfmtrc.json',
+    from: '"singleQuote": true,',
+    to: '"singleQuote": false,',
+    expectOutput: /src\/extension\.ts/,
+  }),
+  configCase({
+    name: 'knip: a knip.json-only edit (drop the tools entry) invalidates the turbo cache',
+    task: 'knip',
+    file: 'knip.json',
+    from: '"entry": ["tools/*.mjs"],',
+    to: '"entry": [],',
+    expectOutput: /claude-post-edit\.mjs/,
+  }),
 ];
 
 const results = [];
@@ -383,29 +598,16 @@ for (const c of CASES) {
     if (c.run) {
       c.run(); // self-contained case: throws on failure
       status = 'ok';
-      results.push({ name: c.name, status, detail });
-      continue;
-    }
-    c.plant();
-    const r = spawnSync(c.command[0], c.command.slice(1), { cwd: ROOT, encoding: 'utf8' });
-    if (r.error) {
-      status = 'ERROR';
-      detail = r.error.message;
-    } else if (c.expectStatus !== undefined) {
-      // Exact-status cases (e.g. the agent hook must exit 2, and 0 on clean files).
-      if (r.status === c.expectStatus) status = 'ok';
-      else {
-        status = 'FAIL';
-        detail = `expected exit ${c.expectStatus}, got ${r.status}`;
-      }
-    } else if (c.forbidOutput?.test(`${r.stdout}${r.stderr}`)) {
-      status = 'FAIL';
-      detail = `output matched ${c.forbidOutput} (gate was skipped, not run)`;
-    } else if (r.status === 0) {
-      status = 'FAIL';
-      detail = 'gate exited 0 on a planted violation';
     } else {
-      status = 'ok';
+      c.plant();
+      const r = spawnSync(c.command[0], c.command.slice(1), {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: PLAIN_ENV,
+      });
+      const problem = verdict(r, c);
+      status = problem ? 'FAIL' : 'ok';
+      detail = problem ?? '';
     }
   } catch (e) {
     status = 'ERROR';
@@ -423,6 +625,14 @@ for (const c of CASES) {
 
 for (const r of results)
   console.log(`${r.status.padEnd(5)} ${r.name}${r.detail ? `  (${r.detail})` : ''}`);
+
+const unchecked = CASES.filter((c) => c.expectOutput === undefined);
+if (unchecked.length)
+  console.warn(
+    `\nWARNING: ${unchecked.length} case(s) have no expectOutput, so a crash would pass for a rejection:\n` +
+      unchecked.map((c) => `  - ${c.name}`).join('\n'),
+  );
+
 const bad = results.filter((r) => r.status !== 'ok');
 console.log(
   bad.length
