@@ -162,8 +162,22 @@ const CASES = [
     },
   },
   {
+    // Runtime-valid (the body never fails at runtime), so only the type check can reject it.
+    name: 'typecheck:tests rejects a type error in a .test.ts',
+    command: ['npm', 'run', '--silent', 'typecheck:tests'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.test.ts'),
+        "import { expect, it } from 'vitest';\nit('probe', () => {\n  const n: number = 'oops';\n  expect(n).toBeDefined();\n});\n",
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.test.ts'), { force: true });
+    },
+  },
+  {
     name: 'type test (*.test-d.ts) fails on a wrong type assertion',
-    command: ['npm', 'run', '--silent', 'test'],
+    command: ['npm', 'run', '--silent', 'typecheck:tests'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.test-d.ts'),

@@ -40,6 +40,7 @@
     "test:coverage": "vitest run --coverage",
     "verify": "npm run check",
     "typecheck": "tsc -b",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
     "check": "node tools/check.mjs",
     "check:gates": "node tools/prove-gates.mjs",
     "test:mutation": "stryker run",

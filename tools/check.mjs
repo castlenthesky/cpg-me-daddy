@@ -14,6 +14,7 @@ const GATES = [
   'check:deps',
   'check:pack',
   'typecheck',
+  'typecheck:tests',
   'test:coverage',
 ];
 

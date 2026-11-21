@@ -72,8 +72,21 @@
       "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/*.tsbuildinfo"],
       "outputs": ["out/**", "packages/*/dist/**", "**/*.tsbuildinfo", "!node_modules/**"]
     },
+    "//#typecheck:tests": {
+      // tsc over every test file and the sources they import; no outputs (noEmit).
+      "inputs": [
+        "src/**",
+        "packages/*/src/**",
+        "tsconfig*.json",
+        "packages/*/tsconfig*.json",
+        "package.json",
+        "packages/*/package.json",
+        "!packages/*/dist/**",
+        "!**/*.tsbuildinfo"
+      ],
+      "outputs": []
+    },
     "//#test:coverage": {
-      // Vitest also runs a tsc pass (*.test-d.ts), hence the tsconfigs; json inputs include them.
       "inputs": [
         "src/**",
         "packages/**",

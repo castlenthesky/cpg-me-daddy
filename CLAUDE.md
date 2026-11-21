@@ -9,18 +9,19 @@ Code Property Graph for TypeScript/JavaScript/Python: an npm-workspaces TypeScri
 
 ## Commands (npm only)
 
-| Command                 | What it does                                    |
-| ----------------------- | ----------------------------------------------- |
-| `npm run check`         | THE gate: every fast check via turbo (cached)   |
-| `npm run check:gates`   | Proves each gate fails on a planted violation   |
-| `npm run format`        | oxfmt write                                     |
-| `npm run lint:fix`      | oxlint autofix                                  |
-| `npm test`              | vitest (unit, property, type tests)             |
-| `npm run test:coverage` | vitest with coverage thresholds                 |
-| `npm run test:mutation` | Stryker mutation testing (slow, not in `check`) |
-| `npm run typecheck`     | `tsc -b`                                        |
-| `npm run knip`          | unused files/exports/deps                       |
-| `npm run changeset`     | record a semver change for a package            |
+| Command                   | What it does                                    |
+| ------------------------- | ----------------------------------------------- |
+| `npm run check`           | THE gate: every fast check via turbo (cached)   |
+| `npm run check:gates`     | Proves each gate fails on a planted violation   |
+| `npm run format`          | oxfmt write                                     |
+| `npm run lint:fix`        | oxlint autofix                                  |
+| `npm test`                | vitest (unit, property, type tests)             |
+| `npm run test:coverage`   | vitest with coverage thresholds                 |
+| `npm run test:mutation`   | Stryker mutation testing (slow, not in `check`) |
+| `npm run typecheck`       | `tsc -b`                                        |
+| `npm run typecheck:tests` | `tsc` over all test files (incl. type tests)    |
+| `npm run knip`            | unused files/exports/deps                       |
+| `npm run changeset`       | record a semver change for a package            |
 
 ## Hard rules
 

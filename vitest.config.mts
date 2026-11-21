@@ -7,14 +7,10 @@ export default defineConfig({
     // Explicit (it is also the default): a glob that matches nothing must FAIL,
     // so a moved/renamed test dir can never turn the suite silently green.
     passWithNoTests: false,
-    // Type-level tests (*.test-d.ts) run through vitest's own tsc pass instead
-    // of expect-type: no extra dependency, failures surface as ordinary test
-    // failures in the same run. tsc -b excludes tests, hence a dedicated tsconfig.
-    typecheck: {
-      enabled: true,
-      include: ['packages/*/src/**/*.test-d.ts'],
-      tsconfig: './tsconfig.test.json',
-    },
+    // Type-level tests (*.test-d.ts) and type errors in *.test.ts are checked by
+    // `npm run typecheck:tests` (tsc), so vitest's typecheck mode is
+    // left off (its default; it would check the same files twice). *.test-d.ts is not in `include`, so
+    // it is never collected as a runtime test.
     coverage: {
       provider: 'v8',
       // Only shipped source; `all` behaviour means an untested new file counts as 0%.

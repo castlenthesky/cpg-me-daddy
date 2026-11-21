@@ -1,6 +1,8 @@
 {
-  // Used only by vitest's typecheck pass (*.test-d.ts). Not part of `tsc -b`,
-  // which deliberately excludes tests from build output.
+  // The ONE type-check for all test code (*.test.ts and *.test-d.ts), run by `npm run
+  // typecheck:tests`. vitest strips types and `tsc -b` deliberately excludes tests from build
+  // output, so without this a type error in a test (or a failed expectTypeOf) goes unseen.
+  // noEmit: checking only, never produces output.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "composite": false,
@@ -9,5 +11,5 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["packages/*/src/**/*.test-d.ts"]
+  "include": ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.test-d.ts", "src/**/*.test.ts"]
 }
