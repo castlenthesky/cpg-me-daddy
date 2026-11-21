@@ -82,6 +82,52 @@ const CASES = [
       rmSync(at('packages/model/dist/__gate_probe.js.map'), { force: true });
     },
   },
+  {
+    name: 'npm test fails on a failing test (and a glob matching nothing is not a pass)',
+    command: ['npm', 'run', '--silent', 'test'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.test.ts'),
+        "import { expect, it } from 'vitest';\nit('probe', () => {\n  expect(1).toBe(2);\n});\n",
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.test.ts'), { force: true });
+    },
+  },
+  {
+    name: 'vitest with an include glob matching no files exits non-zero (passWithNoTests: false)',
+    command: ['npx', 'vitest', 'run', '--typecheck.enabled=false', 'no-such-dir-probe'],
+    plant() {},
+    cleanup() {},
+  },
+  {
+    name: 'test:coverage rejects an untested source file (threshold)',
+    command: ['npm', 'run', '--silent', 'test:coverage'],
+    plant() {
+      const body = Array.from(
+        { length: 40 },
+        (_, i) => `export function probe${i}(x: number): number {\n  return x + ${i};\n}\n`,
+      ).join('\n');
+      writeFileSync(at('packages/model/src/__gate_probe.ts'), body);
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
+    name: 'type test (*.test-d.ts) fails on a wrong type assertion',
+    command: ['npm', 'run', '--silent', 'test'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.test-d.ts'),
+        "import { expectTypeOf, it } from 'vitest';\nit('probe', () => {\n  expectTypeOf<string>().toEqualTypeOf<number>();\n});\n",
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.test-d.ts'), { force: true });
+    },
+  },
 ];
 
 const results = [];

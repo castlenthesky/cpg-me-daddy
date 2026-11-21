@@ -7,3 +7,4 @@ node_modules
 
 # multi-agent deliberation working artifacts - never committed
 .debate/
+coverage/

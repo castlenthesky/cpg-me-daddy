@@ -1,0 +1,13 @@
+{
+  // Used only by vitest's typecheck pass (*.test-d.ts). Not part of `tsc -b`,
+  // which deliberately excludes tests from build output.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["packages/*/src/**/*.test-d.ts"]
+}

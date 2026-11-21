@@ -94,7 +94,7 @@ for (const file of files) {
       // The zero-deps rule is about what @cpg/model *ships*. Its own tests are
       // not shipped (tsconfig excludes them from the build), so they may import
       // a test runner. Rules 1 and 3 still apply to them.
-      const isTest = /\.test\.[cm]?tsx?$/.test(file);
+      const isTest = /\.test(-d)?\.[cm]?tsx?$/.test(file);
       const isRelative = spec.startsWith('.');
       if (pkg === 'model' && !isTest && !isRelative) {
         flag(file, at, 'model-zero-deps', `@cpg/model imports "${spec}"; it must have none`);
