@@ -11,5 +11,9 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.test-d.ts", "src/**/*.test.ts"]
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "packages/*/src/**/*.test-d.ts",
+    "apps/*/src/**/*.test.ts"
+  ]
 }

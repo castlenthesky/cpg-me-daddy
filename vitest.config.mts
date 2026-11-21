@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['packages/*/src/**/*.test.ts', 'src/**/*.test.ts'],
+    include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'tools/**/*.test.mjs'],
     environment: 'node',
     // Explicit (it is also the default): a glob that matches nothing must FAIL,
     // so a moved/renamed test dir can never turn the suite silently green.

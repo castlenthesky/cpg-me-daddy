@@ -1,6 +1,6 @@
 # cpg-me-daddy — Project Outline
 
-**Status:** authoritative as of 2026-09-17 (develop @ `8cd478f` plus the uncommitted U0 working tree).
+**Status:** authoritative as of 2026-09-17; U0 completed 2026-10-28 (foundation committed in `cfd080d`, finished on `feature/u0-finish`). Next: U1.
 **Supersedes:** the earlier STATUS document, the unified-architecture plan, the current-target architecture review, the 2026-09-11 planning corpus, and the three decision-queue rounds. Those documents, and everything else that used to live beside this directory, are historical and are being retired to the `docs/archive` branch (see `12-retirement.md`). Do not cite them; if something you need is missing here, that is a defect in this directory, not a reason to reach back.
 
 This directory is the whole plan. A developer who has never seen the project should be able to read it, pick a story from `07-milestones.yaml`, and start, knowing what is being built, why it is built this way, and how "done" is decided.

@@ -25,6 +25,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const at = (p) => `${ROOT}/${p}`;
@@ -75,27 +76,31 @@ function verdict(r, c) {
 
 // Removes every probe a case may have planted, plus what `tsc -b` emits from them.
 function cleanupProbes() {
-  for (const dir of [
-    'packages/model/src',
-    'packages/model/dist',
-    'packages/ast-generator',
-    'src',
-  ]) {
+  for (const dir of ['packages/model/src', 'packages/model/dist']) {
     if (!existsSync(at(dir))) continue;
     for (const f of readdirSync(at(dir)))
       if (f.startsWith('__gate_probe')) rmSync(at(`${dir}/${f}`), { force: true });
   }
 }
 
-// A planted file in one of the trees check-deps scans.
-const depsCase = (name, file, body, expectOutput, extra = {}) => ({
-  name,
-  command: ['npm', 'run', '--silent', 'check:deps'],
-  expectOutput,
-  plant: () => writeFileSync(at(file), body),
-  cleanup: cleanupProbes,
-  ...extra,
-});
+// A planted file in one of the trees check-deps scans. An app that does not exist yet (apps/cli)
+// is created for the plant and removed with it.
+const depsCase = (name, file, body, expectOutput) => {
+  let made;
+  return {
+    name,
+    command: ['npm', 'run', '--silent', 'check:deps'],
+    expectOutput,
+    plant() {
+      made = mkdirSync(at(dirname(file)), { recursive: true });
+      writeFileSync(at(file), body);
+    },
+    cleanup() {
+      rmSync(at(file), { force: true });
+      if (made) rmSync(made, { recursive: true, force: true });
+    },
+  };
+};
 
 const npmCheck = () =>
   spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8', env: PLAIN_ENV });
@@ -144,8 +149,6 @@ const probeTest = (body) => () =>
     at('packages/model/src/__gate_probe.test.ts'),
     `import { expect, it } from 'vitest';\n\nit('gate probe', () => {\n${body}\n  expect(1).toBe(1);\n});\n`,
   );
-
-const NUL = String.fromCharCode(0); // never write a literal NUL byte into this file
 
 const CASES = [
   {
@@ -229,62 +232,43 @@ const CASES = [
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
     },
   },
+  // check:deps on the real tree: the three tier violations U0.2.2 names, one per rule. Every other
+  // rule and specifier form is planted on fixtures in tools/check-deps.test.mjs; the case after
+  // these proves `npm test` runs that file.
+  depsCase(
+    'check:deps rejects a vscode import in packages/model (host-sdk)',
+    'packages/model/src/__gate_probe.ts',
+    "import * as vscode from 'vscode';\nexport const probe = vscode;\n",
+    /__gate_probe\.ts:1 +\[host-sdk\]/,
+  ),
+  depsCase(
+    'check:deps rejects the MCP SDK in apps/vscode (app-tier)',
+    'apps/vscode/src/__gate_probe.ts',
+    "import { Server } from '@modelcontextprotocol/sdk';\nexport const probe = Server;\n",
+    /__gate_probe\.ts:1 +\[app-tier\]/,
+  ),
+  depsCase(
+    'check:deps rejects a deep import of @cpg/model in apps/cli (deep-import)',
+    'apps/cli/src/__gate_probe.ts',
+    "export { x } from '@cpg/model/dist/x';\n",
+    /__gate_probe\.ts:1 +\[deep-import\]/,
+  ),
   {
-    name: 'check:deps rejects a vscode import in packages/**',
-    expectOutput: /cli-purity/,
-    command: ['npm', 'run', '--silent', 'check:deps'],
+    // The check-deps rules are proven by fixtures in tools/check-deps.test.mjs. If the vitest
+    // include stopped matching tools/, that proof would vanish while `npm test` stayed green.
+    name: 'npm test runs tools/*.test.mjs (the check-deps rule fixtures run under the check)',
+    expectOutput: /__gate_probe\.test\.mjs/,
+    command: ['npm', 'run', '--silent', 'test'],
     plant() {
       writeFileSync(
-        at('packages/model/src/__gate_probe.ts'),
-        "import * as vscode from 'vscode';\nexport const probe = vscode;\n",
+        at('tools/__gate_probe.test.mjs'),
+        "import { expect, it } from 'vitest';\nit('probe', () => {\n  expect(1).toBe(2);\n});\n",
       );
     },
     cleanup() {
-      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+      rmSync(at('tools/__gate_probe.test.mjs'), { force: true });
     },
   },
-  depsCase(
-    'check:deps rejects a non-relative import in packages/model/src (model-zero-deps)',
-    'packages/model/src/__gate_probe.ts',
-    "import { probe } from 'left-pad';\nexport const value = probe;\n",
-    /model-zero-deps.*__gate_probe|__gate_probe.*model-zero-deps/s,
-  ),
-  depsCase(
-    'check:deps rejects a deep import of @cpg/model from src/ (deep-import)',
-    'src/__gate_probe.ts',
-    "export { x } from '@cpg/model/dist/index';\n",
-    /deep-import/,
-  ),
-  depsCase(
-    'check:deps rejects a NUL byte in source (nul-byte)',
-    'packages/model/src/__gate_probe.ts',
-    `export const probe = 1; // ${NUL}\n`,
-    /nul-byte/,
-  ),
-  depsCase(
-    "check:deps rejects a bare side-effect import 'vscode' in packages/** (cli-purity)",
-    'packages/ast-generator/__gate_probe.ts',
-    "import 'vscode';\n",
-    /cli-purity/,
-  ),
-  depsCase(
-    'check:deps rejects a double-quoted bare import "vscode" in packages/** (cli-purity)',
-    'packages/ast-generator/__gate_probe.ts',
-    'import "vscode";\n',
-    /cli-purity/,
-  ),
-  depsCase(
-    "check:deps rejects export * from 'vscode' in packages/** (cli-purity)",
-    'packages/ast-generator/__gate_probe.ts',
-    "export * from 'vscode';\n",
-    /cli-purity/,
-  ),
-  depsCase(
-    'check:deps rejects a multi-line import whose from is on a later line (cli-purity)',
-    'packages/ast-generator/__gate_probe.ts',
-    "import type {\n  Uri,\n  Range,\n}\n  from\n  'vscode';\nexport type { Uri, Range };\n",
-    /cli-purity/,
-  ),
   {
     // Realistic failure: a test-d file escapes the tsconfig exclusion and tsc emits it into dist.
     // Plants the dist files directly (what `tsc -b` would emit) and runs the tarball gate.
@@ -612,7 +596,7 @@ const CASES = [
     file: '.oxfmtrc.json',
     from: '"singleQuote": true,',
     to: '"singleQuote": false,',
-    expectOutput: /src\/extension\.ts/,
+    expectOutput: /apps\/vscode\/src\/extension\.ts/,
   }),
   configCase({
     name: 'knip: a knip.json-only edit (drop the tools entry) invalidates the turbo cache',

@@ -5,7 +5,8 @@
   "version": "0.0.1",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "engines": {
     "vscode": "^1.90.0",
@@ -15,7 +16,7 @@
     "Other"
   ],
   "activationEvents": [],
-  "main": "./out/src/extension.js",
+  "main": "./apps/vscode/dist/extension.js",
   "contributes": {
     "commands": [
       {

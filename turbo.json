@@ -33,7 +33,7 @@
       // flavour: vitest.config.mts was once missed by "*.ts" and a config edit replayed a cache hit.
       // Type-aware: the result depends on all sources and on every tsconfig, not only .oxlintrc.json.
       "inputs": [
-        "src/**",
+        "apps/**",
         "packages/**",
         "tools/**",
         "*.ts",
@@ -45,13 +45,14 @@
         "*.jsonc",
         ".oxlintrc.json",
         "!packages/*/dist/**",
+        "!apps/*/dist/**",
         "!**/.tsbuildinfo"
       ]
     },
     "//#knip": {
       // knip reads sources, every package.json (entries, deps) and knip.json.
       "inputs": [
-        "src/**",
+        "apps/**",
         "packages/**",
         "tools/**",
         "*.ts",
@@ -66,12 +67,15 @@
         ".github/**",
         ".changeset/**",
         "!packages/*/dist/**",
+        "!apps/*/dist/**",
         "!**/.tsbuildinfo"
       ]
     },
     "//#check:deps": {
-      // tools/check-deps.mjs walks packages/** and src/**; the script itself is an input.
-      "inputs": ["src/**", "packages/**", "tools/**", "!packages/*/dist/**", "!**/.tsbuildinfo"]
+      // tools/check-deps.mjs walks packages/** and apps/**, and scans packages/*/dist for stale
+      // host-SDK imports, so dist is an input here; the script itself is an input.
+      "dependsOn": ["//#typecheck"],
+      "inputs": ["apps/**", "packages/**", "tools/**", "!apps/*/dist/**", "!**/.tsbuildinfo"]
     },
     "//#check:pack": {
       // Inspects built output, so it runs after the build and is keyed on that output.
@@ -79,17 +83,26 @@
       "inputs": ["packages/*/dist/**", "packages/*/package.json", "tools/check-pack.mjs"]
     },
     "//#typecheck": {
-      "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/.tsbuildinfo"],
-      "outputs": ["out/**", "packages/*/dist/**", "!node_modules/**"]
+      "inputs": [
+        "apps/**",
+        "packages/**",
+        "*.json",
+        "!packages/*/dist/**",
+        "!apps/*/dist/**",
+        "!**/.tsbuildinfo"
+      ],
+      "outputs": ["apps/*/dist/**", "packages/*/dist/**", "!node_modules/**"]
     },
     "//#typecheck:tests": {
       // tsc over every test file and the sources they import; no outputs (noEmit).
       "inputs": [
-        "src/**",
+        "apps/*/src/**",
         "packages/*/src/**",
         "tsconfig*.json",
+        "apps/*/tsconfig*.json",
         "packages/*/tsconfig*.json",
         "package.json",
+        "apps/*/package.json",
         "packages/*/package.json",
         "!packages/*/dist/**",
         "!**/.tsbuildinfo"
@@ -97,9 +110,11 @@
       "outputs": []
     },
     "//#test:coverage": {
+      // tools/** holds tools/*.test.mjs and the scripts they run (check-deps.test.mjs).
       "inputs": [
-        "src/**",
+        "apps/**",
         "packages/**",
+        "tools/**",
         "*.ts",
         "*.mts",
         "*.cts",
@@ -108,6 +123,7 @@
         "*.json",
         "*.jsonc",
         "!packages/*/dist/**",
+        "!apps/*/dist/**",
         "!**/.tsbuildinfo"
       ],
       "outputs": ["coverage/**"]
