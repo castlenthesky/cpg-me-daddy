@@ -89,6 +89,28 @@ const CASES = [
     },
   },
   {
+    // Realistic failure: a test-d file escapes the tsconfig exclusion and tsc emits it into dist.
+    // Plants the dist files directly (what `tsc -b` would emit) and runs the tarball gate.
+    name: 'check:pack rejects a test file and a runtime require in the model tarball',
+    command: ['npm', 'run', '--silent', 'check:pack'],
+    plant() {
+      writeFileSync(at('packages/model/dist/__gate_probe.test-d.js'), "require('vitest');\n");
+    },
+    cleanup() {
+      rmSync(at('packages/model/dist/__gate_probe.test-d.js'), { force: true });
+    },
+  },
+  {
+    name: 'check:pack rejects a non-relative require in a non-test shipped .js',
+    command: ['npm', 'run', '--silent', 'check:pack'],
+    plant() {
+      writeFileSync(at('packages/model/dist/__gate_probe.js'), "require('left-pad');\n");
+    },
+    cleanup() {
+      rmSync(at('packages/model/dist/__gate_probe.js'), { force: true });
+    },
+  },
+  {
     name: 'typecheck rejects a type error',
     command: ['npm', 'run', '--silent', 'typecheck'],
     plant() {

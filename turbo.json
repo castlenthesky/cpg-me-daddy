@@ -58,6 +58,16 @@
       // tools/check-deps.mjs walks packages/** and src/**; the script itself is an input.
       "inputs": ["src/**", "packages/**", "tools/**", "!packages/*/dist/**", "!**/*.tsbuildinfo"]
     },
+    "//#check:pack": {
+      // Inspects built output, so it runs after the build and is keyed on that output.
+      "dependsOn": ["//#typecheck"],
+      "inputs": [
+        "packages/*/dist/**",
+        "!packages/*/dist/**/*.tsbuildinfo",
+        "packages/*/package.json",
+        "tools/check-pack.mjs"
+      ]
+    },
     "//#typecheck": {
       "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/*.tsbuildinfo"],
       "outputs": ["out/**", "packages/*/dist/**", "**/*.tsbuildinfo", "!node_modules/**"]

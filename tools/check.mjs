@@ -7,7 +7,15 @@ import { spawnSync } from 'node:child_process';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 
-const GATES = ['format:check', 'lint', 'knip', 'check:deps', 'typecheck', 'test:coverage'];
+const GATES = [
+  'format:check',
+  'lint',
+  'knip',
+  'check:deps',
+  'check:pack',
+  'typecheck',
+  'test:coverage',
+];
 
 const r = spawnSync(
   'npx',
