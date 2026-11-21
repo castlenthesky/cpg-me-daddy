@@ -22,7 +22,7 @@ export default defineConfig({
       exclude: ['**/*.test.ts', '**/*.test-d.ts'],
       reporter: ['text-summary', 'lcov', 'json-summary'],
       // Thresholds ONLY RATCHET UP. Set to measured coverage rounded down to the
-      // nearest 5 (lines/statements 96.55, branches 96.66, functions 100).
+      // nearest 5 (lines/statements 95.65, branches 96.42, functions 100).
       // Raise them when coverage rises; never lower them to make a change pass.
       thresholds: { lines: 95, functions: 100, branches: 95, statements: 95 },
     },
