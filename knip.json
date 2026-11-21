@@ -13,5 +13,9 @@
     }
   },
   // Stub awaiting deletion in story U0.1.2; remove this line with the package.
-  "ignoreWorkspaces": ["packages/ast-generator"]
+  "ignoreWorkspaces": ["packages/ast-generator"],
+  // knip's lefthook plugin only counts lefthook as used when CI is set or .git/hooks are
+  // installed. A clone installed with LEFTHOOK=0 or --ignore-scripts would fail with a false
+  // "unused devDependency", and turbo doesn't hash either condition. lefthook.yml is the real use.
+  "ignoreDependencies": ["lefthook"]
 }
