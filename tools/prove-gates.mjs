@@ -138,6 +138,28 @@ const CASES = [
       rmSync(at('packages/model/src/__gate_probe.test-d.ts'), { force: true });
     },
   },
+  {
+    // Turbo must never mask a failure via its cache: warm the cache on the clean tree, plant a
+    // lint violation, and run the FULL `npm run check` twice (a failed run must not be cached
+    // either). The asserted run is the second one; the first only has to have been attempted.
+    name: 'npm run check fails on a planted lint error even with a warm turbo cache',
+    command: ['npm', 'run', '--silent', 'check'],
+    plant() {
+      const warm = spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
+      if (warm.status !== 0) throw new Error('baseline `npm run check` must pass before this case');
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(): void {\n  debugger;\n}\n',
+      );
+      spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+      // tsc -b emits the probe into dist when only lint is violated.
+      for (const ext of ['js', 'js.map', 'd.ts', 'd.ts.map'])
+        rmSync(at(`packages/model/dist/__gate_probe.${ext}`), { force: true });
+    },
+  },
 ];
 
 const results = [];

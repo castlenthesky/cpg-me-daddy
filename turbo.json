@@ -1,0 +1,78 @@
+{
+  // Caching only. Every gate stays a plain root script (runnable directly); turbo just skips a
+  // gate when NOTHING that can affect its result has changed. A failed task is never cached, so a
+  // cache hit can only ever replay a previous success for byte-identical inputs.
+  //
+  // Root tasks ("//#name") because the repo has no per-package scripts to orchestrate.
+  // Inputs are explicit (never the default) so that a config, tool script or tsconfig edit
+  // invalidates the cache. Untracked files (e.g. a new, unstaged source file) count as inputs.
+  "$schema": "https://turborepo.dev/schema.json",
+  // Hashed into EVERY task: dependency versions and the Node major (tsc/oxlint/vitest behaviour).
+  "globalDependencies": ["package.json", "package-lock.json", ".node-version"],
+  "tasks": {
+    "//#format:check": {
+      // oxfmt checks every non-ignored file type, so everything except what .oxfmtrc.json ignores
+      // and what is generated output (outputs/logs would otherwise change the hash after a run).
+      "inputs": [
+        "**",
+        "!docs/**",
+        "!node_modules/**",
+        "!**/node_modules/**",
+        "!out/**",
+        "!**/dist/**",
+        "!coverage/**",
+        "!.turbo/**",
+        "!.git/**",
+        "!**/*.tsbuildinfo",
+        "!package-lock.json"
+      ]
+    },
+    "//#lint": {
+      // Type-aware: the result depends on all sources and on every tsconfig, not only .oxlintrc.json.
+      "inputs": [
+        "src/**",
+        "packages/**",
+        "tools/**",
+        "*.ts",
+        "*.mjs",
+        "*.json",
+        ".oxlintrc.json",
+        "!packages/*/dist/**",
+        "!**/*.tsbuildinfo"
+      ]
+    },
+    "//#knip": {
+      // knip reads sources, every package.json (entries, deps) and knip.json.
+      "inputs": [
+        "src/**",
+        "packages/**",
+        "tools/**",
+        "*.ts",
+        "*.mjs",
+        "*.json",
+        "!packages/*/dist/**",
+        "!**/*.tsbuildinfo"
+      ]
+    },
+    "//#check:deps": {
+      // tools/check-deps.mjs walks packages/** and src/**; the script itself is an input.
+      "inputs": ["src/**", "packages/**", "tools/**", "!packages/*/dist/**", "!**/*.tsbuildinfo"]
+    },
+    "//#typecheck": {
+      "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/*.tsbuildinfo"],
+      "outputs": ["out/**", "packages/*/dist/**", "**/*.tsbuildinfo", "!node_modules/**"]
+    },
+    "//#test:coverage": {
+      // Vitest also runs a tsc pass (*.test-d.ts), hence the tsconfigs; json inputs include them.
+      "inputs": [
+        "src/**",
+        "packages/**",
+        "*.ts",
+        "*.json",
+        "!packages/*/dist/**",
+        "!**/*.tsbuildinfo"
+      ],
+      "outputs": ["coverage/**"]
+    }
+  }
+}

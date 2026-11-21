@@ -39,7 +39,7 @@
     "test:coverage": "vitest run --coverage",
     "verify": "npm run check",
     "typecheck": "tsc -b",
-    "check": "npm run format:check && npm run lint && npm run knip && npm run check:deps && npm run typecheck && npm run test:coverage",
+    "check": "node tools/check.mjs",
     "check:gates": "node tools/prove-gates.mjs"
   },
   "dependencies": {
@@ -54,6 +54,7 @@
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "oxlint-tsgolint": "^7.0.2008",
+    "turbo": "^2.11.13",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },
