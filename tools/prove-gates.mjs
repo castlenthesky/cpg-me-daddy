@@ -219,6 +219,56 @@ const CASES = [
       rmSync(at('reports/stryker-incremental.json'), { force: true });
     },
   },
+  {
+    // Not part of `npm run check`, but it is the agent feedback loop: it must exit 2 on a lint error.
+    name: 'claude post-edit hook exits exactly 2 on a lint violation',
+    expectStatus: 2,
+    command: [
+      'sh',
+      '-c',
+      `echo '{"tool_input":{"file_path":"${at('packages/model/src/__gate_probe.ts')}"}}' | node tools/claude-post-edit.mjs`,
+    ],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(): void {\n  debugger;\n}\n',
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
+    // Counter-cases: the hook must not send false feedback on clean files (.json once did).
+    name: 'claude post-edit hook exits 0 on a clean .ts file',
+    expectStatus: 0,
+    command: [
+      'sh',
+      '-c',
+      `echo '{"tool_input":{"file_path":"${at('packages/model/src/__gate_probe.ts')}"}}' | node tools/claude-post-edit.mjs`,
+    ],
+    plant() {
+      writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const probe = 1;\n');
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
+    name: 'claude post-edit hook exits 0 on a clean .json file',
+    expectStatus: 0,
+    command: [
+      'sh',
+      '-c',
+      `echo '{"tool_input":{"file_path":"${at('packages/model/src/__gate_probe.json')}"}}' | node tools/claude-post-edit.mjs`,
+    ],
+    plant() {
+      writeFileSync(at('packages/model/src/__gate_probe.json'), '{ "a": 1 }\n');
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.json'), { force: true });
+    },
+  },
 ];
 
 const results = [];
@@ -231,6 +281,13 @@ for (const c of CASES) {
     if (r.error) {
       status = 'ERROR';
       detail = r.error.message;
+    } else if (c.expectStatus !== undefined) {
+      // Exact-status cases (e.g. the agent hook must exit 2, and 0 on clean files).
+      if (r.status === c.expectStatus) status = 'ok';
+      else {
+        status = 'FAIL';
+        detail = `expected exit ${c.expectStatus}, got ${r.status}`;
+      }
     } else if (r.status === 0) {
       status = 'FAIL';
       detail = 'gate exited 0 on a planted violation';
