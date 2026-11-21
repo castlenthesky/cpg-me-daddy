@@ -41,12 +41,15 @@
     "typecheck": "tsc -b",
     "check": "node tools/check.mjs",
     "check:gates": "node tools/prove-gates.mjs",
-    "test:mutation": "stryker run"
+    "test:mutation": "stryker run",
+    "changeset": "changeset",
+    "version-packages": "changeset version"
   },
   "dependencies": {
     "@cpg/model": "*"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.3",
     "@stryker-mutator/core": "^10.1.1",
     "@stryker-mutator/typescript-checker": "^10.1.1",
     "@stryker-mutator/vitest-runner": "^10.1.1",
