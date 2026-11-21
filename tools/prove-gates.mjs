@@ -202,6 +202,23 @@ const CASES = [
         rmSync(at(`packages/model/dist/__gate_probe.${ext}`), { force: true });
     },
   },
+  {
+    // Uncovered mutants count against the score, so an untested file must push it under `break`.
+    name: 'test:mutation rejects an untested source file (break threshold)',
+    command: ['npm', 'run', '--silent', 'test:mutation'],
+    plant() {
+      const body = Array.from(
+        { length: 40 },
+        (_, i) => `export function probe${i}(x: number): number {\n  return x + ${i};\n}\n`,
+      ).join('\n');
+      writeFileSync(at('packages/model/src/__gate_probe.ts'), body);
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+      // Drop incremental state so planted mutants cannot colour the next real run.
+      rmSync(at('reports/stryker-incremental.json'), { force: true });
+    },
+  },
 ];
 
 const results = [];

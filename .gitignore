@@ -11,3 +11,7 @@ coverage/
 
 # turbo local cache and run logs
 .turbo/
+
+# stryker mutation reports, incremental state and sandbox
+reports/
+.stryker-tmp/
