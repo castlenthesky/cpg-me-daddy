@@ -1,0 +1,39 @@
+name: Mutation
+
+# Mutation testing is too slow for every push, so it runs weekly and on demand.
+# The break threshold in stryker.config.mjs fails the job when the score drops.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DO_NOT_TRACK: '1'
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run test:mutation
+      # Upload even when the score is under the threshold: the report shows the survivors.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          if-no-files-found: warn

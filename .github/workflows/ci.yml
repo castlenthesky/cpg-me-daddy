@@ -1,13 +1,7 @@
 name: CI
 
-# Exists because six rules and three acceptance criteria in the prior corpus said
-# "CI asserts it" while no CI existed. A gate nobody runs is not a gate.
-#
-# The three checks are deliberately the three that encode a decision:
-#   check:deps  the CLI-purity hard invariant - core must run under plain node
-#               with zero `vscode` import. Enforced here, not in review.
-#   tsc -b      the build, including project references.
-#   vitest run  the test spine, added in the same slice as the seams it tests.
+# CI runs the same commands as a laptop, a git hook and an agent: `npm run check` is THE gate.
+# Nothing here re-implements a check; jobs only choose where each command runs.
 
 on:
   push:
@@ -15,57 +9,77 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same PR supersedes the old run; pushes to develop/master always finish.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Tooling telemetry is off everywhere (same as tools/check.mjs).
+  TURBO_TELEMETRY_DISABLED: '1'
+  DO_NOT_TRACK: '1'
+
 jobs:
-  verify:
+  check:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      # Node version comes from .node-version, the single source also hashed by turbo.
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .node-version
           cache: npm
 
+      # `npm ci` runs lefthook's postinstall, which skips itself when CI=true (set by Actions),
+      # so no hooks are installed on the runner.
       - run: npm ci
 
-      # Ordered cheapest-first so a dependency-direction violation fails in
-      # seconds rather than after a full build.
-      - name: Dependency direction (CLI purity)
-        run: npm run check:deps
+      # Turbo local cache only (no remote cache). The sha suffix makes every run save a fresh
+      # entry; restore-keys then fall back to the newest cache for the same lockfile.
+      - uses: actions/cache@v6
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            turbo-${{ runner.os }}-
 
-      - name: Build
-        run: npm run compile
+      - run: npm run check
 
-      - name: Tests
-        run: npm run test
-
-  # Proves the dependency gate can actually fail. A rule nobody has seen fail is
-  # not a gate, so this job introduces a real violation and asserts a non-zero
-  # exit. If check-deps is ever silently neutered, this job goes green-to-red.
-  gate-fails-when-violated:
+  # Proves the gates can actually fail. A rule nobody has seen fail is not a gate: this job
+  # plants real violations (tools/prove-gates.mjs) and asserts each gate exits non-zero, so a
+  # silently neutered gate turns CI red instead of staying quietly green.
+  gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - run: npm run check:gates
 
-      - name: A vscode import inside packages/** must fail the gate
-        run: |
-          cat > packages/model/src/__ci_probe.ts <<'EOF'
-          import * as vscode from 'vscode';
-          export const probe = vscode;
-          EOF
-          if npm run check:deps --silent; then
-            echo "::error::check-deps PASSED on a deliberate vscode import in packages/** - the CLI-purity gate is not enforcing"
-            exit 1
-          fi
-          echo "check-deps correctly rejected the violation"
-          rm packages/model/src/__ci_probe.ts
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
