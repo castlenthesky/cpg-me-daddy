@@ -26,6 +26,32 @@ const CASES = [
     },
   },
   {
+    name: 'lint rejects a floating promise (type-aware rule)',
+    command: ['npm', 'run', '--silent', 'lint'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'async function work(): Promise<void> {}\nexport function probe(): void {\n  work();\n}\n',
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
+    name: 'lint rejects a debugger statement (correctness)',
+    command: ['npm', 'run', '--silent', 'lint'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(): void {\n  debugger;\n}\n',
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
     name: 'check:deps rejects a vscode import in packages/**',
     command: ['npm', 'run', '--silent', 'check:deps'],
     plant() {
@@ -82,7 +108,7 @@ for (const c of CASES) {
       c.cleanup();
     } catch (e) {
       status = 'ERROR';
-      detail += ` cleanup failed: ${e}`;
+      detail += ` cleanup failed: ${String(e)}`;
     }
   }
   results.push({ name: c.name, status, detail });

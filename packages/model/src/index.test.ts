@@ -124,7 +124,7 @@ describe('nodeLocation', () => {
       { id: 'a', type: 'file', data: { location: { filePath: '/x.ts', range: { startRow: 1 } } } },
     ],
   ])('returns undefined rather than throwing: %s', (_label, node) => {
-    expect(nodeLocation(node as never)).toBeUndefined();
+    expect(nodeLocation(node)).toBeUndefined();
   });
 });
 

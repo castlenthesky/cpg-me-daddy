@@ -134,11 +134,15 @@ export function edgeResolution(edge: GraphEdge): EdgeResolution | undefined {
   return readResolution(edge.data?.['resolution']);
 }
 
-function readResolution(resolution: unknown): EdgeResolution | undefined {
-  if (typeof resolution !== 'object' || resolution === null) {
+// Type guard rather than `as`: narrows `unknown` to a property bag without an unchecked assertion.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readResolution(candidate: unknown): EdgeResolution | undefined {
+  if (!isRecord(candidate)) {
     return undefined;
   }
-  const candidate = resolution as Record<string, unknown>;
   if (typeof candidate['status'] !== 'string' || typeof candidate['resolvedBy'] !== 'string') {
     return undefined;
   }
@@ -193,10 +197,10 @@ export type HostToWebview =
 export type WebviewToHost = { type: 'ready' } | { type: 'reveal'; nodeId: string };
 
 function isSourceRange(value: unknown): value is SourceRange {
-  if (typeof value !== 'object' || value === null) {
+  if (!isRecord(value)) {
     return false;
   }
-  const range = value as Record<string, unknown>;
+  const range = value;
   return (
     typeof range['startRow'] === 'number' &&
     typeof range['startColumn'] === 'number' &&
@@ -217,10 +221,10 @@ function isSourceRange(value: unknown): value is SourceRange {
  */
 export function nodeLocation(node: GraphNode): NodeLocation | undefined {
   const location = node.data?.['location'];
-  if (typeof location !== 'object' || location === null) {
+  if (!isRecord(location)) {
     return undefined;
   }
-  const candidate = location as Record<string, unknown>;
+  const candidate = location;
   if (typeof candidate['filePath'] !== 'string' || !isSourceRange(candidate['range'])) {
     return undefined;
   }
