@@ -8,12 +8,19 @@
 // Run: npm run check:gates
 
 import { spawnSync } from 'node:child_process';
-import { rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const at = (p) => `${ROOT}/${p}`;
 
 const git = (args) => spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+const sh = (cwd, cmd, args, opts = {}) => spawnSync(cmd, args, { cwd, encoding: 'utf8', ...opts });
+const must = (r, what) => {
+  if (r.status !== 0) throw new Error(`${what} failed: ${r.stderr || r.stdout}`);
+  return r;
+};
+
 // Leaves the index exactly as found: drops only the probe from it, then deletes the file.
 function unstageProbe() {
   git([
@@ -94,6 +101,8 @@ const CASES = [
     name: 'check:pack rejects a test file and a runtime require in the model tarball',
     command: ['npm', 'run', '--silent', 'check:pack'],
     plant() {
+      // dist is gitignored: a fresh checkout (CI) has none until a build runs.
+      mkdirSync(at('packages/model/dist'), { recursive: true });
       writeFileSync(at('packages/model/dist/__gate_probe.test-d.js'), "require('vitest');\n");
     },
     cleanup() {
@@ -104,6 +113,8 @@ const CASES = [
     name: 'check:pack rejects a non-relative require in a non-test shipped .js',
     command: ['npm', 'run', '--silent', 'check:pack'],
     plant() {
+      // dist is gitignored: a fresh checkout (CI) has none until a build runs.
+      mkdirSync(at('packages/model/dist'), { recursive: true });
       writeFileSync(at('packages/model/dist/__gate_probe.js'), "require('left-pad');\n");
     },
     cleanup() {
@@ -226,6 +237,9 @@ const CASES = [
   {
     name: 'lefthook pre-push rejects a lint violation (runs the full npm run check)',
     command: ['npx', '--no-install', 'lefthook', 'run', 'pre-push'],
+    // lefthook exits 0 with "(skip)" when it thinks there is nothing to push (up-to-date upstream,
+    // detached CI checkout): that must never pass for a rejection.
+    forbidOutput: /\(skip\)/,
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -236,6 +250,60 @@ const CASES = [
       unstageProbe();
       for (const ext of ['js', 'js.map', 'd.ts', 'd.ts.map'])
         rmSync(at(`packages/model/dist/__gate_probe.${ext}`), { force: true });
+    },
+  },
+  {
+    // Regression: lefthook skipped the pre-push job ("no matching push files") whenever HEAD had no
+    // unpushed commits, so a push of nothing new, or any CI checkout, ran no gate. Build throwaway
+    // clones where there is nothing to push and assert the hook still runs the full check and
+    // rejects a planted lint violation. Uses the committed lefthook.yml (HEAD), not the worktree.
+    name: 'lefthook pre-push never skips when there is nothing new to push (upstream up to date, detached HEAD + CI)',
+    run() {
+      const dir = mkdtempSync(`${tmpdir()}/cpg-prepush-`);
+      try {
+        const sha = must(git(['rev-parse', 'HEAD']), 'rev-parse').stdout.trim();
+        const bare = `${dir}/origin.git`;
+        const clone = `${dir}/clone`;
+        must(sh(dir, 'git', ['init', '-q', '--bare', bare]), 'init bare');
+        must(git(['push', '-q', bare, `${sha}:refs/heads/probe`]), 'push to throwaway origin');
+        must(sh(dir, 'git', ['clone', '-q', '-b', 'probe', bare, clone]), 'clone');
+        must(
+          sh(clone, 'npm', [
+            'ci',
+            '--prefer-offline',
+            '--ignore-scripts',
+            '--no-audit',
+            '--no-fund',
+          ]),
+          'npm ci',
+        );
+        // Precondition: nothing to push, i.e. exactly the state that triggered the skip.
+        const ahead = must(sh(clone, 'git', ['rev-list', '--count', '@{push}..HEAD']), 'ahead');
+        if (ahead.stdout.trim() !== '0') throw new Error('clone is not up to date with upstream');
+        writeFileSync(
+          `${clone}/packages/model/src/__gate_probe.ts`,
+          'export function probe(): void {\n  debugger;\n}\n',
+        );
+        // What git feeds the pre-push hook: <local ref> <local sha> <remote ref> <remote sha>.
+        const stdin = `refs/heads/probe ${sha} refs/heads/probe ${sha}\n`;
+        const push = (env) =>
+          sh(clone, 'npx', ['--no-install', 'lefthook', 'run', 'pre-push', 'origin', bare], {
+            input: stdin,
+            env: { ...process.env, ...env },
+          });
+        const problems = [];
+        const judge = (label, r) => {
+          const out = `${r.stdout}${r.stderr}`;
+          if (/\(skip\)/.test(out)) problems.push(`${label}: hook skipped`);
+          else if (r.status === 0) problems.push(`${label}: exited 0 on a planted lint violation`);
+        };
+        judge('up-to-date upstream', push({}));
+        must(sh(clone, 'git', ['checkout', '-q', '--detach']), 'detach');
+        judge('detached HEAD, CI=true', push({ CI: 'true' }));
+        if (problems.length) throw new Error(problems.join('; '));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     },
   },
   {
@@ -312,6 +380,12 @@ for (const c of CASES) {
   let status;
   let detail = '';
   try {
+    if (c.run) {
+      c.run(); // self-contained case: throws on failure
+      status = 'ok';
+      results.push({ name: c.name, status, detail });
+      continue;
+    }
     c.plant();
     const r = spawnSync(c.command[0], c.command.slice(1), { cwd: ROOT, encoding: 'utf8' });
     if (r.error) {
@@ -324,6 +398,9 @@ for (const c of CASES) {
         status = 'FAIL';
         detail = `expected exit ${c.expectStatus}, got ${r.status}`;
       }
+    } else if (c.forbidOutput?.test(`${r.stdout}${r.stderr}`)) {
+      status = 'FAIL';
+      detail = `output matched ${c.forbidOutput} (gate was skipped, not run)`;
     } else if (r.status === 0) {
       status = 'FAIL';
       detail = 'gate exited 0 on a planted violation';
@@ -335,7 +412,7 @@ for (const c of CASES) {
     detail = String(e);
   } finally {
     try {
-      c.cleanup();
+      c.cleanup?.();
     } catch (e) {
       status = 'ERROR';
       detail += ` cleanup failed: ${String(e)}`;

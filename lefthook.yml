@@ -22,7 +22,17 @@ pre-commit:
       run: npm run --silent check:deps
 
 # Full gate; turbo makes an unchanged tree a cache hit.
+#
+# This job must NEVER be skipped. lefthook (v2.2.2) skips any pre-push job whose `run` has no
+# file template when `git diff --name-only HEAD @{push}` is empty ("(skip) no matching push
+# files"): an up-to-date upstream, a no-upstream branch already on origin, and the detached HEAD
+# that actions/checkout leaves in CI all hit it, so the push would go out ungated. There is no
+# config key to opt out (`skip_empty` is not in this version's schema; `--force` is CLI-only and
+# git invokes the hook without it). `{all_files}` (every tracked file, never empty) is the one
+# file template that does not depend on push history, so passing it keeps the job from being
+# skipped. It must be a real argument (a template inside a shell comment does not count). The
+# check ignores the file list; it is only there as the anti-skip. Do not remove it.
 pre-push:
   jobs:
     - name: check
-      run: npm run --silent check
+      run: sh -c 'exec npm run --silent check' check {all_files}
