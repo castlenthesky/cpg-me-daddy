@@ -54,6 +54,15 @@ jobs:
 
       - run: npm run check
 
+      # coverage/** is a turbo output of //#test:coverage, so it exists on a cache hit too: no
+      # second test run is needed. Ubuntu only: one copy is enough.
+      - uses: actions/upload-artifact@v7
+        if: ${{ runner.os == 'Linux' }}
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
+
   # Proves the gates can actually fail. A rule nobody has seen fail is not a gate: this job
   # plants real violations (tools/prove-gates.mjs) and asserts each gate exits non-zero, so a
   # silently neutered gate turns CI red instead of staying quietly green.
@@ -66,20 +75,7 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      # The Stryker case is slow: skipped here (and logged by name), run weekly by mutation.yml.
       - run: npm run check:gates
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .node-version
-          cache: npm
-      - run: npm ci
-      - run: npm run test:coverage
-      - uses: actions/upload-artifact@v7
-        with:
-          name: coverage
-          path: coverage/
-          if-no-files-found: error
+        env:
+          PROVE_GATES_SKIP_SLOW: '1'

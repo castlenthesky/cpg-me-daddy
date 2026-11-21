@@ -30,6 +30,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:mutation
+      # The slow prove-gates cases (skipped on every PR) run here: proves the mutation gate fails.
+      - run: npm run check:gates -- --only-slow
       # Upload even when the score is under the threshold: the report shows the survivors.
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}

@@ -9,7 +9,10 @@
 // cleanup() always runs (finally), even when the plant or the gate throws.
 // Every step that adds a gate must add its case to CASES below.
 //
-// Run: npm run check:gates
+// Slow cases carry `slow: true`. PROVE_GATES_SKIP_SLOW=1 skips them (and logs which, never
+// silently); `--only-slow` runs only them. Default (no flag, no env): everything runs.
+//
+// Run: npm run check:gates [-- --only-slow]
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -145,6 +148,36 @@ const probeTest = (body) => () =>
 const NUL = String.fromCharCode(0); // never write a literal NUL byte into this file
 
 const CASES = [
+  {
+    // oxlint is the single owner of unused-variable checks (tsc's noUnused* flags are off).
+    name: 'lint rejects an unused local variable (no-unused-vars)',
+    expectOutput: /no-unused-vars/,
+    command: ['npm', 'run', '--silent', 'lint'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(): number {\n  const unused = 1;\n  return 2;\n}\n',
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
+  {
+    // `before` is unused but sits BEFORE a used parameter: needs args "all" (default is after-used).
+    name: 'lint rejects an unused function parameter (no-unused-vars, args: all)',
+    expectOutput: /no-unused-vars/,
+    command: ['npm', 'run', '--silent', 'lint'],
+    plant() {
+      writeFileSync(
+        at('packages/model/src/__gate_probe.ts'),
+        'export function probe(before: number, after: number): number {\n  return after;\n}\n',
+      );
+    },
+    cleanup() {
+      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+    },
+  },
   {
     name: 'format:check rejects a mis-formatted .ts file',
     expectOutput: /__gate_probe\.ts/,
@@ -479,6 +512,7 @@ const CASES = [
   },
   {
     // Uncovered mutants count against the score, so an untested file must push it under `break`.
+    slow: true,
     name: 'test:mutation rejects an untested source file (break threshold)',
     expectOutput: /threshold|break/i,
     command: ['npm', 'run', '--silent', 'test:mutation'],
@@ -567,8 +601,8 @@ const CASES = [
     name: 'typecheck: a tsconfig.base.json-only edit (noPropertyAccessFromIndexSignature) invalidates the turbo cache',
     task: 'typecheck:tests',
     file: 'tsconfig.base.json',
-    from: '"noUnusedParameters": true',
-    to: '"noUnusedParameters": true,\n    "noPropertyAccessFromIndexSignature": true',
+    from: '"noFallthroughCasesInSwitch": true',
+    to: '"noFallthroughCasesInSwitch": true,\n    "noPropertyAccessFromIndexSignature": true',
     expectOutput: /TS4111/,
     plant: probeTest('  const o: Record<string, number> = {};\n  expect(o.x).toBeUndefined();'),
   }),
@@ -590,8 +624,19 @@ const CASES = [
   }),
 ];
 
+const onlySlow = process.argv.includes('--only-slow');
+const skipSlow = process.env.PROVE_GATES_SKIP_SLOW === '1' && !onlySlow;
+const selected = CASES.filter((c) => (onlySlow ? c.slow : !(skipSlow && c.slow)));
+const skipped = CASES.filter((c) => !selected.includes(c));
+if (skipped.length)
+  console.log(
+    `SKIPPED ${skipped.length} case(s) (${onlySlow ? 'not slow, --only-slow' : 'slow, PROVE_GATES_SKIP_SLOW=1'}):\n` +
+      skipped.map((c) => `  - ${c.name}`).join('\n') +
+      '\n',
+  );
+
 const results = [];
-for (const c of CASES) {
+for (const c of selected) {
   let status;
   let detail = '';
   try {
@@ -626,7 +671,7 @@ for (const c of CASES) {
 for (const r of results)
   console.log(`${r.status.padEnd(5)} ${r.name}${r.detail ? `  (${r.detail})` : ''}`);
 
-const unchecked = CASES.filter((c) => c.expectOutput === undefined);
+const unchecked = selected.filter((c) => c.expectOutput === undefined);
 if (unchecked.length)
   console.warn(
     `\nWARNING: ${unchecked.length} case(s) have no expectOutput, so a crash would pass for a rejection:\n` +

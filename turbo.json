@@ -24,7 +24,7 @@
         "!.turbo/**",
         "!.git/**",
         "!.claude/settings.local.json",
-        "!**/*.tsbuildinfo",
+        "!**/.tsbuildinfo",
         "!package-lock.json"
       ]
     },
@@ -45,7 +45,7 @@
         "*.jsonc",
         ".oxlintrc.json",
         "!packages/*/dist/**",
-        "!**/*.tsbuildinfo"
+        "!**/.tsbuildinfo"
       ]
     },
     "//#knip": {
@@ -66,26 +66,21 @@
         ".github/**",
         ".changeset/**",
         "!packages/*/dist/**",
-        "!**/*.tsbuildinfo"
+        "!**/.tsbuildinfo"
       ]
     },
     "//#check:deps": {
       // tools/check-deps.mjs walks packages/** and src/**; the script itself is an input.
-      "inputs": ["src/**", "packages/**", "tools/**", "!packages/*/dist/**", "!**/*.tsbuildinfo"]
+      "inputs": ["src/**", "packages/**", "tools/**", "!packages/*/dist/**", "!**/.tsbuildinfo"]
     },
     "//#check:pack": {
       // Inspects built output, so it runs after the build and is keyed on that output.
       "dependsOn": ["//#typecheck"],
-      "inputs": [
-        "packages/*/dist/**",
-        "!packages/*/dist/**/*.tsbuildinfo",
-        "packages/*/package.json",
-        "tools/check-pack.mjs"
-      ]
+      "inputs": ["packages/*/dist/**", "packages/*/package.json", "tools/check-pack.mjs"]
     },
     "//#typecheck": {
-      "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/*.tsbuildinfo"],
-      "outputs": ["out/**", "packages/*/dist/**", "**/*.tsbuildinfo", "!node_modules/**"]
+      "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/.tsbuildinfo"],
+      "outputs": ["out/**", "packages/*/dist/**", "!node_modules/**"]
     },
     "//#typecheck:tests": {
       // tsc over every test file and the sources they import; no outputs (noEmit).
@@ -97,7 +92,7 @@
         "package.json",
         "packages/*/package.json",
         "!packages/*/dist/**",
-        "!**/*.tsbuildinfo"
+        "!**/.tsbuildinfo"
       ],
       "outputs": []
     },
@@ -113,7 +108,7 @@
         "*.json",
         "*.jsonc",
         "!packages/*/dist/**",
-        "!**/*.tsbuildinfo"
+        "!**/.tsbuildinfo"
       ],
       "outputs": ["coverage/**"]
     }

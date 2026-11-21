@@ -16,9 +16,9 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noFallthroughCasesInSwitch": true
+    // Unused locals/parameters are deliberately NOT checked here: oxlint (no-unused-vars) is the
+    // single owner, because it runs in the editor, the Claude post-edit hook and pre-commit.
   },
   "exclude": ["node_modules", "dist", "out", ".vscode-test", ".debate"]
 }

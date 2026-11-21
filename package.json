@@ -28,7 +28,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -b",
     "watch": "tsc -b -w",
-    "clean": "tsc -b --clean && rm -rf out",
+    "clean": "node tools/clean.mjs",
     "format": "oxfmt --write",
     "format:check": "oxfmt --check",
     "lint": "oxlint --deny-warnings",

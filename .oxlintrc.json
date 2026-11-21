@@ -13,6 +13,20 @@
     "typeAware": true
   },
   "rules": {
+    // The single owner of unused-variable checks (tsc's noUnusedLocals/Parameters are off).
+    // args "all" also flags unused parameters (default "after-used" skips ones before a used one);
+    // a leading underscore marks an intentionally unused name.
+    "no-unused-vars": [
+      "error",
+      {
+        "args": "all",
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrors": "all",
+        "caughtErrorsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_"
+      }
+    ],
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/await-thenable": "error",

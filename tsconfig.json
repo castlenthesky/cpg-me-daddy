@@ -2,6 +2,8 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "outDir": "out",
+    // Inside outDir so deleting out/ always forces a re-emit (never a stale "up to date").
+    "tsBuildInfoFile": "out/.tsbuildinfo",
     "rootDir": "."
   },
   "include": ["src/**/*"],
