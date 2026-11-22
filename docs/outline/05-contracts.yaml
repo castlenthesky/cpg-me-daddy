@@ -205,6 +205,8 @@ contracts:
       - { id: OQ-6, kind: spike, text: "case-insensitive volumes: fold the pending-map key?", disposition: "U4 30-minute spike on macOS" }
       - { id: OQ-7, kind: human, text: "human clock or pipeline clock?", disposition: "ANSWERED: human clock (DQ-05)" }
       - { id: OQ-8, kind: human, text: "directory move in scope?", disposition: "v1: arrives as N deletes + N creates (ids under the subtree churn); directory-move relocation deferred with a trigger" }
+      - { id: OQ-9, kind: human, text: "INV-6 says a backend does not coalesce (create-then-change yields >= 2 raw events), but @parcel/watcher merges per path inside its 50 ms window: create+change arrives as one create, create+delete as nothing (M-RESEARCH-watcher-linux). Parcel cannot pass INV-6 as written. Restate it as 'the backend adds no coalescing of its own beyond its declared window', or drop it?", disposition: "open; evidence 2026-11-22; owner ruling needed before the U4 backend suite is ported" }
+      - { id: OQ-10, kind: spike, text: "a file created right after its new parent directory was not delivered in 3 of 10 trials on inotify, though directoryEvents is 'all'. INV-5 (a creation is delivered at least once) then holds only if layer B rescans the subtree of every created directory", disposition: "open; evidence 2026-11-22 (M-RESEARCH-watcher-linux); proposed: a directory create always triggers a subtree walk, not only when directoryEvents is 'none'" }
 
   # ───────────────────────────────────────────────────────────────────────────────────────────────────
   - id: C-PARSE
@@ -439,6 +441,7 @@ contracts:
       - { id: Q6, kind: human, text: "restart budget?", disposition: "3, then permanent degraded" }
       - { id: Q7, kind: debate, text: "ProcessHost in @cpg/resolve or shared?", disposition: "in @cpg/resolve until a second caller exists (L-43)" }
       - { id: Q8, kind: debate, text: "the ceiling is capped by the graph model: 17 of 21 remaining LSP misses are parameter/with bindings that mint no node", disposition: "recorded for the schema evolution backlog (P-C): PARAM already exists; `with` bindings are a property or a documented gap" }
+      - { id: Q9, kind: spike, text: "the readiness gate ('wait on initialized + progress tokens') has nothing to wait on: basedpyright sent no $/progress on small workspaces, nor did tsserver without a tsconfig, and a cold tsserver answers an imported call with the local import binding rather than nothing (M-RESOLVE-lsp-readiness). What marks a backend ready, and is 'definition lands on a same-file import binding' always unresolved?", disposition: "open; evidence 2026-11-22; U8/U9 driver design input" }
 
   # ───────────────────────────────────────────────────────────────────────────────────────────────────
   - id: C-SINK
