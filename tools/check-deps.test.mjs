@@ -198,10 +198,16 @@ describe('rule 7: seam contract.ts imports types only', () => {
     ],
     ['export type * as N from', "export type * as N from '@cpg/model';\n"],
     ['import type with no semicolon', "import type { A } from '@cpg/model'\nexport type R = A\n"],
-    // U2c.3: the scanner skips comments, so a specifier inside one is no longer a false positive
+    // U2c.3: the scanner skips comments, so a specifier inside one is no longer a false positive,
+    // and a statement is type-only by the parse tree, not by a regex over its text
     [
       'a quoted specifier inside a comment',
       "// see import { x } from '@cpg/model'\nexport type R = 1;\n",
+    ],
+    ['an import type with a comment inside', "import type /* c */ { A } from '@cpg/model';\n"],
+    [
+      'a disallowed import type inside a block comment',
+      "/*\nimport type { X } from '@cpg/sink';\n*/\nexport type R = 1;\n",
     ],
   ])('accepts %s', (_name, text) => {
     const { status, out } = run(contract(text));
@@ -341,15 +347,23 @@ describe('check-deps finds specifiers with the TypeScript scanner, in packages/*
       'host-sdk',
     ],
     [
-      'an import after a regex literal holding a quote',
+      'a require after a regex literal holding a quote',
       'packages/foo/src/probe.ts',
-      "const r = /'/;\nimport 'vscode';\nexport { r };\n",
+      "const r = /'/; require('vscode');\nexport { r };\n",
+      'host-sdk',
+    ],
+    // after a regex literal holding a backtick preProcessFile sees nothing, so only the parse tree
+    // can find these two
+    [
+      'import x = require() after a regex literal holding a backtick',
+      'packages/foo/src/probe.ts',
+      "const r = /`/;\nimport v = require('vscode');\nexport { r, v };\n",
       'host-sdk',
     ],
     [
-      'import x = require()',
+      'an import type node after a regex literal holding a backtick',
       'packages/foo/src/probe.ts',
-      "import v = require('vscode');\nexport { v };\n",
+      "const r = /`/;\nexport type R = import('vscode').Uri;\nexport { r };\n",
       'host-sdk',
     ],
     [

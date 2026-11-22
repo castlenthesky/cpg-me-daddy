@@ -8,8 +8,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,11 +25,18 @@ const PLANT = 'packages/engine/out/__purity_plant.js';
 const roots = [];
 
 // The front door loads the engine with a CJS require, as tsc emits main.ts, and sets
-// process.exitCode after the asynchronous dry run, as main.ts does.
+// process.exitCode after the asynchronous dry run, as main.ts does. The run finishes only after real
+// async I/O and a timer, so a proof that judges any earlier than beforeExit judges too early.
 const bin = (extra = '') =>
-  `const engine = require('../../../packages/engine/dist/index.js');\n${extra}\n` +
+  "const engine = require('../../../packages/engine/dist/index.js');\n" +
+  `const { readdir } = require('node:fs/promises');\n${extra}\n` +
   "console.log('argv ' + JSON.stringify(process.argv.slice(2)));\n" +
-  'Promise.resolve()\n  .then(() => engine.index())\n  .then((code) => {\n    process.exitCode = code;\n  });\n';
+  "const names = ['CPG_WORKSPACE', 'CPG_HOST', 'CPG_PORT', 'CPG_GRAPH'];\n" +
+  "console.log('env ' + JSON.stringify(names.map((n) => process.env[n] ?? null)));\n" +
+  'readdir(__dirname)\n' +
+  '  .then(() => new Promise((done) => setTimeout(done, 10)))\n' +
+  '  .then(() => engine.index())\n' +
+  '  .then((code) => {\n    process.exitCode = code;\n  });\n';
 const engine = (extra = '', code = 0) =>
   `const walker = require('./walker.js');\n${extra}\n` +
   `exports.index = () => {\n  walker.walk();\n  return ${code};\n};\n`;
@@ -63,20 +72,28 @@ function tree(files = {}) {
   return root;
 }
 
-function proof(root, args = [], nodeArgs = []) {
+// NODE_OPTIONS is dropped: an IDE or debugger preload would add modules to the child's list.
+function proof(root, args = [], nodeArgs = [], env = {}) {
+  const childEnv = { ...process.env, ...env };
+  delete childEnv.NODE_OPTIONS;
   const r = spawnSync(process.execPath, [...nodeArgs, SCRIPT, ...args, root], {
     encoding: 'utf8',
+    env: childEnv,
   });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
 }
 
-// A preload that makes Module._load read-only before the script runs.
-function frozenLoad(root) {
-  const file = join(root, 'freeze-load.mjs');
-  writeFileSync(
-    file,
-    "import Module from 'node:module';\nObject.defineProperty(Module, '_load', { value: Module._load, writable: false, configurable: false });\n",
-  );
+// Preloads that leave Module._load impossible to replace before the script runs.
+const BROKEN_LOAD = {
+  'read-only':
+    "Object.defineProperty(Module, '_load', { value: Module._load, writable: false, configurable: false });",
+  deleted: 'delete Module._load;',
+  'a setter that ignores writes':
+    "const load = Module._load;\nObject.defineProperty(Module, '_load', { get: () => load, set() {} });",
+};
+function brokenLoad(root, kind = 'read-only') {
+  const file = join(root, 'break-load.mjs');
+  writeFileSync(file, `import Module from 'node:module';\n${BROKEN_LOAD[kind]}\n`);
   return ['--import', pathToFileURL(file).href];
 }
 
@@ -100,10 +117,43 @@ describe('purity-proof on a clean front door and engine', () => {
   });
 
   it('prints the module list: one line per owner with its distinct-file count', () => {
-    const { status, out } = proof(tree());
-    expect(out).toMatch(/^ {2}apps\/cli \(1\)$/m);
-    expect(out).toMatch(/^ {2}packages\/engine \(2\)$/m);
-    expect(out).toMatch(/^ {2}node:fs \(1\)$/m);
+    const root = tree({
+      // repeat loads, fs as node:fs, a bare builtin, an unscoped and a scoped package
+      'packages/engine/dist/index.js': engine(
+        "require('./walker.js');\nrequire('fs');\nrequire('path');\nrequire('pkg');\nrequire('@scope/pkg/lib/x.js');",
+      ),
+      'node_modules/pkg/index.js': "require('./other.js');\n",
+      'node_modules/pkg/other.js': '\n',
+      'node_modules/@scope/pkg/lib/x.js': '\n',
+    });
+    const { status, out } = proof(root);
+    for (const line of [
+      'apps/cli (1)',
+      'packages/engine (2)',
+      'node:fs (1)',
+      'node:path (1)',
+      'pkg (2)',
+      '@scope/pkg (1)',
+    ])
+      expect(out.split('\n')).toContain(`  ${line}`);
+    expect(status).toBe(0);
+  });
+
+  it('drops CPG_WORKSPACE, CPG_HOST, CPG_PORT and CPG_GRAPH before the bin reads its config', () => {
+    const env = { CPG_WORKSPACE: '/elsewhere', CPG_HOST: 'h', CPG_PORT: 'x', CPG_GRAPH: 'g' };
+    const { status, out } = proof(tree(), [], [], env);
+    expect(out).toContain('env [null,null,null,null]');
+    expect(status).toBe(0);
+  });
+
+  it('resolves a symlinked root to its real path, the form Node reports module filenames in', () => {
+    const root = tree();
+    const dir = mkdtempSync(join(tmpdir(), 'purity-link-'));
+    roots.push(dir);
+    const link = join(dir, 'root');
+    symlinkSync(root, link, 'dir');
+    const { status, out } = proof(link);
+    expect(out).toMatch(/^purity-proof: ok/m);
     expect(status).toBe(0);
   });
 
@@ -125,6 +175,7 @@ describe('purity-proof fails on a forbidden load, naming the request and the req
     ['a vscode subpath', 'packages/engine/dist/index.js', 'vscode/lib/api'],
     ['the MCP SDK', 'packages/engine/dist/index.js', '@modelcontextprotocol/sdk/server/index.js'],
     ['a DOM implementation (jsdom)', 'packages/engine/dist/walker.js', 'jsdom'],
+    ['a DOM implementation subpath', 'packages/engine/dist/walker.js', 'jsdom/lib/api'],
     ['a DOM implementation (happy-dom)', 'packages/engine/dist/index.js', 'happy-dom'],
     ['a DOM implementation (linkedom)', 'packages/engine/dist/index.js', 'linkedom'],
     ['vscode from the front door itself', 'apps/cli/dist/main.js', 'vscode'],
@@ -151,8 +202,8 @@ describe('purity-proof fails on a forbidden load, naming the request and the req
     expect(status).toBe(1);
   });
 
-  it('fails when a DOM global (document or window) appears during the run', () => {
-    const root = tree({ 'packages/engine/dist/walker.js': walker('globalThis.document = {};') });
+  it.each(['document', 'window'])('fails when a DOM global (%s) appears during the run', (name) => {
+    const root = tree({ 'packages/engine/dist/walker.js': walker(`globalThis.${name} = {};`) });
     const { status, out } = proof(root);
     expect(out).toMatch(/DOM global/);
     expect(status).toBe(1);
@@ -180,9 +231,9 @@ describe('purity-proof fails loudly when its own run would prove nothing', () =>
     expect(status).toBe(1);
   });
 
-  it('fails when Module._load cannot be replaced', () => {
+  it.each(Object.keys(BROKEN_LOAD))('fails when Module._load cannot be replaced (%s)', (kind) => {
     const root = tree();
-    const { status, out } = proof(root, [], frozenLoad(root));
+    const { status, out } = proof(root, [], brokenLoad(root, kind));
     expect(out).toMatch(/cannot install/);
     expect(out).not.toMatch(/^purity-proof: ok/m);
     expect(status).toBe(1);
@@ -211,6 +262,8 @@ describe('purity-proof --plant (anti-vacuity)', () => {
     const root = tree(ESM_ENGINE);
     const { status, out } = proof(root, ['--plant']);
     expect(out).toMatch(/did not fire/);
+    // loading the plant must not itself count as the engine loading through Module._load
+    expect(out).toMatch(/did not load through Module\._load/);
     expect(out).not.toMatch(/^purity-proof: ok/m);
     expect(existsSync(join(root, PLANT))).toBe(false);
     expect(status).toBe(1);
@@ -226,7 +279,7 @@ describe('purity-proof --plant (anti-vacuity)', () => {
 
   it('fails, leaving no plant, when Module._load cannot be replaced', () => {
     const root = tree();
-    const { status, out } = proof(root, ['--plant'], frozenLoad(root));
+    const { status, out } = proof(root, ['--plant'], brokenLoad(root));
     expect(out).toMatch(/cannot install/);
     expect(existsSync(join(root, PLANT))).toBe(false);
     expect(status).toBe(1);
@@ -242,5 +295,18 @@ describe('purity-proof --plant (anti-vacuity)', () => {
   it('plants at a path this repository git-ignores, so the plant can never be committed', () => {
     const r = spawnSync('git', ['check-ignore', '-q', PLANT], { cwd: REPO });
     expect(r.status).toBe(0);
+  });
+});
+
+describe('CI runs both modes', () => {
+  it('check:purity runs the proof then --plant, and bun run check runs it after check:cli-bin', () => {
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+    expect(pkg.scripts['check:purity']).toBe(
+      'node tools/purity-proof.mjs && node tools/purity-proof.mjs --plant',
+    );
+    expect(readFileSync(join(REPO, 'tools/check.mjs'), 'utf8')).toContain("'check:purity'");
+    expect(readFileSync(join(REPO, 'turbo.json'), 'utf8')).toMatch(
+      /"\/\/#check:purity":\s*\{[^{}]*"dependsOn":\s*\["\/\/#check:cli-bin"\]/,
+    );
   });
 });
