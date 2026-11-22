@@ -15,6 +15,8 @@ import type {
   IndexRequest,
   IndexWalk,
   StoreTarget,
+  VerifyConfig,
+  VerifyReport,
 } from './port';
 import { filesystemTier, type FilesystemTier } from './walker/filesystem-tier';
 import { walkWorkspace } from './walker/walker';
@@ -209,6 +211,15 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
         target: req.session?.target ?? null,
         consumers: req.session === null ? [] : deps.sinks.map((s) => s.id),
       };
+    },
+
+    async verify(
+      _session: EngineSession,
+      _config: VerifyConfig,
+      _expected: IndexReport | null,
+    ): Promise<VerifyReport> {
+      // SEAT: U2a.3
+      throw new Error('SEAT: verify lands with U2a.3');
     },
   };
 }

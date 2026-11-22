@@ -1,6 +1,6 @@
 // The CpgEngine port (C-CLI): the one surface a front door sees. C-CLI Q1 puts the contract types in
-// @cpg/engine's public surface. Types only. This is the slice U2a needs (identity, connect, index);
-// watch, read, verify, inspect, doctor and schema arrive with their units (U4, U2a.3, U2b, U2a.4).
+// @cpg/engine's public surface. Types only. This is the slice U2a needs (identity, connect, index,
+// verify); watch, read, inspect, doctor and schema arrive with their units.
 
 import type { WorkspacePath } from '@cpg/model';
 
@@ -76,6 +76,46 @@ export interface IndexProgress {
   readonly filesTotal: number;
 }
 
+/** The shared enum (05-contracts.yaml shared.verify_check_ids), in its order. */
+export type VerifyCheckId =
+  | 'filesystem-reconciliation'
+  | 'identity-invariants'
+  | 'id-uniqueness'
+  | 'render-reconciliation'
+  | 'revision-reconciliation'
+  | 'resolution-health';
+
+/** Worst-of ordering: fail > stale > unavailable > pass. */
+export type CheckState = 'pass' | 'fail' | 'stale' | 'unavailable';
+
+export interface CheckResult {
+  readonly id: VerifyCheckId;
+  readonly state: CheckState;
+  readonly observed: number;
+  readonly expected: number;
+  /** The offending workspace paths (directories or files) or keys, sorted. */
+  readonly localisedTo: readonly string[];
+  readonly detail?: string;
+  /** The graph's seq, snapshotted before the check's first await. */
+  readonly asOfSeq: number;
+}
+
+export interface VerifyReport {
+  /** The worst state of `checks`. */
+  readonly state: CheckState;
+  /** All six, once each, in enum order. */
+  readonly checks: readonly CheckResult[];
+  /** The ids of the stores this run read (P-A); empty when no store consumer is enabled. */
+  readonly consumers: readonly string[];
+  readonly durationMs: number;
+}
+
+/** The walk scope verify reconciles against, plus `--strict`. */
+export interface VerifyConfig extends IndexConfig {
+  /** Promote every `unavailable` check to `fail`. */
+  readonly strict?: boolean;
+}
+
 export interface CpgEngine {
   readonly identity: {
     readonly name: string;
@@ -88,4 +128,10 @@ export interface CpgEngine {
     onProgress: (progress: IndexProgress) => void,
     signal: AbortSignal,
   ): Promise<IndexReport>;
+  /** Read-only. `expected` must be null (C-CLI Q9: the live filesystem suffices). */
+  verify(
+    session: EngineSession,
+    config: VerifyConfig,
+    expected: IndexReport | null,
+  ): Promise<VerifyReport>;
 }

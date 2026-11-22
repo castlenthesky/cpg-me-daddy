@@ -3,7 +3,7 @@
 
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import type { CpgEngine, IndexProgress, StoreTarget } from '@cpg/engine';
+import type { CheckResult, CpgEngine, IndexProgress, StoreTarget } from '@cpg/engine';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -16,6 +16,7 @@ export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
   | { kind: 'not-built'; verb: string; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
+  | { kind: 'verification'; failures: readonly CheckResult[] }
   | { kind: 'interrupted'; committed: number; pending: number };
 
 // Total (the compiler rejects a kind with no row); the ONLY exit-code decision site.
@@ -23,6 +24,7 @@ const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   usage: EXIT.USAGE,
   'not-built': EXIT.USAGE,
   'engine-unavailable': EXIT.FAILED,
+  verification: EXIT.VERIFY_FAILED,
   interrupted: EXIT.INTERRUPTED,
 };
 export const exitCodeFor = (error: CliError): ExitCode => EXIT_FOR[error.kind];
@@ -48,6 +50,8 @@ export async function run(argv: readonly string[], io: Io, opts: RunOptions): Pr
     if (!(e instanceof Fail)) throw e;
     const { error } = e;
     if (error.kind === 'interrupted') io.err('cpg: interrupted');
+    else if (error.kind === 'verification')
+      io.err(`cpg: verify failed: ${error.failures.map((f) => f.id).join(', ')}`);
     else io.err(`cpg: ${error.message}`);
     if (error.kind === 'usage')
       io.err(error.verb ? `run 'cpg ${error.verb} --help'` : renderUsage());
@@ -85,6 +89,9 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   if (spec.verb === 'index' && values['dry-run'] === true) {
     return runIndexDryRun(opts.engine, values, positionals, io, opts);
   }
+  if (spec.verb === 'verify' && target) {
+    return runVerify(opts.engine, target, values, positionals, io, opts);
+  }
   if (target) {
     const session = await opts.engine
       .connect(target, { readOnly: spec.session === 'read' })
@@ -96,6 +103,18 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
     await session.close();
   }
   throw seat;
+}
+
+function runVerify(
+  _engine: CpgEngine,
+  _target: StoreTarget,
+  _values: Values,
+  _positionals: readonly string[],
+  _io: Io,
+  _opts: RunOptions,
+): Promise<ExitCode> {
+  // SEAT: U2a.3
+  throw new Error('SEAT: cpg verify lands with U2a.3');
 }
 
 async function runIndexDryRun(

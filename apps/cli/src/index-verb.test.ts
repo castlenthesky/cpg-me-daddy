@@ -58,6 +58,7 @@ function fakeEngine(report: IndexReport = REPORT) {
       onProgress({ phase: 'walked', filesTotal: 3 });
       return Promise.resolve(report);
     },
+    verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
   };
   return { engine, requests, signals, connects: () => connects };
 }

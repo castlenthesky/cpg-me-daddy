@@ -17,6 +17,7 @@ function fakeEngine(fail = false) {
       return Promise.resolve({ target, close: () => Promise.resolve(void closed++) });
     },
     index: () => Promise.reject(new Error('fakeEngine.index is not driven by these tests')),
+    verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
   };
   return { engine, connects, closed: () => closed };
 }
@@ -91,7 +92,8 @@ describe('exit codes', () => {
   });
 
   it.each(COMMANDS.map((c) => c.verb))('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
-    for (const engine of [undefined, fakeEngine().engine]) {
+    // verify is built (U2a.3, verify-verb.test.ts): only without an engine is it still a SEAT.
+    for (const engine of verb === 'verify' ? [undefined] : [undefined, fakeEngine().engine]) {
       const r = await cli([verb], engine ? { engine } : {});
       expect(r).toEqual({ code: EXIT.USAGE, out: '', err: `cpg: '${verb}' is not built yet` });
     }
@@ -116,7 +118,7 @@ describe('exit codes', () => {
   });
 
   it('a failed connect exits 1', async () => {
-    const r = await cli(['verify'], { engine: fakeEngine(true).engine });
+    const r = await cli(['verify', '/w'], { engine: fakeEngine(true).engine });
     expect(r.code).toBe(EXIT.FAILED);
     expect(r.err).toContain('localhost:6382/cpg');
   });

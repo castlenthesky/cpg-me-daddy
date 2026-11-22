@@ -29,6 +29,7 @@ function expectRun(args, status, stream, pattern, cwd = ROOT) {
     errors.push(
       `cpg ${args.join(' ')}: expected exit ${status} and ${stream} ${pattern}, got exit ${r.status}: ${JSON.stringify(`${r.stdout}${r.stderr}`)}`,
     );
+  return r;
 }
 
 const banner = `${binName} ${pkg.version}`.replace(/[.]/g, '\\.');
@@ -43,6 +44,20 @@ try {
   expectRun(['index', '--dry-run', ws], 0, 'stdout', /^files seen=2 indexed=2 /m);
   // no root given: main.ts hands run() process.cwd(), the last workspace-root fallback
   expectRun(['index', '--dry-run'], 0, 'stdout', /^files seen=2 indexed=2 /m, ws);
+  // verify through the bin reads main.ts's own MemoryStore, which nothing has indexed in this
+  // process (U2a.3 known gap: no store outlives a process before U5). filesystem-reconciliation
+  // fails, and that is exit 3 (never 1) with exactly one cpg.verify.report document on stdout.
+  const v = expectRun(['verify', '--format=json', ws], 3, 'stdout', /^\{.*\}\n$/);
+  try {
+    const doc = JSON.parse(v.stdout);
+    const fs = doc.body.checks.find((c) => c.id === 'filesystem-reconciliation');
+    if (doc.kind !== 'cpg.verify.report' || doc.body.checks.length !== 6 || fs?.state !== 'fail')
+      errors.push(`cpg verify --format=json: unexpected document ${v.stdout}`);
+  } catch (e) {
+    errors.push(
+      `cpg verify --format=json: stdout is not one JSON document (${String(e)}): ${v.stdout}`,
+    );
+  }
 } finally {
   rmSync(ws, { recursive: true, force: true });
 }
