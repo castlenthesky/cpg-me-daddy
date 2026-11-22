@@ -366,6 +366,26 @@ describe('check-deps finds specifiers with the TypeScript scanner, in packages/*
       "const r = /`/;\nexport type R = import('vscode').Uri;\nexport { r };\n",
       'host-sdk',
     ],
+    // post-implementation (sabotage survivors): the parse tree's import() and template-literal
+    // handling, and the one form only preProcessFile sees
+    [
+      'a dynamic import after a regex literal holding a backtick',
+      'packages/foo/src/probe.ts',
+      "const r = /`/;\nexport const m = import('vscode');\n",
+      'host-sdk',
+    ],
+    [
+      'a template-literal require after a regex literal holding a backtick',
+      'packages/foo/src/probe.js',
+      'const r = /`/;\nrequire(`vscode`);\n',
+      'host-sdk',
+    ],
+    [
+      'an AMD define dependency',
+      'packages/foo/src/probe.js',
+      "define(['vscode'], function (v) {\n  return v;\n});\n",
+      'host-sdk',
+    ],
     [
       'an app import with a comment before its specifier (apps/inspector)',
       'apps/inspector/src/probe.ts',

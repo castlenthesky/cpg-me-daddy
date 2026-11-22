@@ -127,15 +127,21 @@ describe('purity-proof on a clean front door and engine', () => {
       'node_modules/@scope/pkg/lib/x.js': '\n',
     });
     const { status, out } = proof(root);
-    for (const line of [
-      'apps/cli (1)',
-      'packages/engine (2)',
-      'node:fs (1)',
-      'node:path (1)',
-      'pkg (2)',
-      '@scope/pkg (1)',
-    ])
-      expect(out.split('\n')).toContain(`  ${line}`);
+    const owners = out.split('\n').filter((line) => line.startsWith('  '));
+    // exactly these: fs and node:fs are one module (post-implementation, a sabotage survivor)
+    expect(owners.toSorted((a, b) => a.localeCompare(b))).toEqual(
+      [
+        'apps/cli (1)',
+        'packages/engine (2)',
+        'node:fs (1)',
+        'node:fs/promises (1)',
+        'node:path (1)',
+        'pkg (2)',
+        '@scope/pkg (1)',
+      ]
+        .map((line) => `  ${line}`)
+        .toSorted((a, b) => a.localeCompare(b)),
+    );
     expect(status).toBe(0);
   });
 
