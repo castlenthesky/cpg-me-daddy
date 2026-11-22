@@ -22,8 +22,8 @@ if (build.status !== 0) {
 }
 
 const errors = [];
-function expectRun(args, status, stream, pattern) {
-  const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], { encoding: 'utf8' });
+function expectRun(args, status, stream, pattern, cwd = ROOT) {
+  const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], { cwd, encoding: 'utf8' });
   const text = r[stream];
   if (r.status !== status || !pattern.test(text))
     errors.push(
@@ -41,6 +41,8 @@ try {
   writeFileSync(join(ws, 'a.ts'), 'export const a = 1;\n');
   writeFileSync(join(ws, 'b.py'), 'b = 2\n');
   expectRun(['index', '--dry-run', ws], 0, 'stdout', /^files seen=2 indexed=2 /m);
+  // no root given: main.ts hands run() process.cwd(), the last workspace-root fallback
+  expectRun(['index', '--dry-run'], 0, 'stdout', /^files seen=2 indexed=2 /m, ws);
 } finally {
   rmSync(ws, { recursive: true, force: true });
 }

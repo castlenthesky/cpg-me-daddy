@@ -167,7 +167,7 @@ describe('index --dry-run (session null): NullGraphStore, no store', () => {
 
 describe('index with a session: ONE merge-filesystem op through the sinks', () => {
   it('writes the filesystem tier as one op, no deltas, and reports the receipt counts', async () => {
-    const files = { 'a.ts': 'export {};\n', 'src/b.py': 'x = 1\n' };
+    const files = { 'a.ts': 'export {};\n', 'n.txt': 'n', 'src/b.py': 'x = 1\n' };
     const root = await tree(files);
     const r = recording('memory', { nodesWritten: 41, edgesWritten: 17 });
     const { report } = await index(root, [r.sink]);
@@ -180,7 +180,9 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
     expect(op.moves).toEqual([]);
     expect(op.removals).toEqual([]);
     expect(keys(op.directories)).toEqual(['DIRECTORY .', 'DIRECTORY src']);
-    expect(keys(op.files)).toEqual(['FILE a.ts', 'FILE src/b.py']);
+    expect(keys(op.files)).toEqual(['FILE a.ts', 'FILE n.txt', 'FILE src/b.py']);
+    // an unsupported file is still written by the filesystem tier, with language null
+    expect(op.files.find((f) => f.key === 'n.txt')?.properties['language']).toBeNull();
     expect(op.files.find((f) => f.key === 'src/b.py')?.properties).toMatchObject({
       path: 'src/b.py',
       name: 'b.py',
@@ -200,6 +202,7 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
     ).toEqual([
       'HAS_ENTRY DIRECTORY:. -> DIRECTORY:src',
       'HAS_ENTRY DIRECTORY:. -> FILE:a.ts',
+      'HAS_ENTRY DIRECTORY:. -> FILE:n.txt',
       'HAS_ENTRY DIRECTORY:src -> FILE:src/b.py',
     ]);
 
@@ -248,6 +251,8 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
     ]);
     expect(a.ops).toEqual(b.ops);
     expect(report.consumers).toEqual(['a', 'b']);
+    // the root DIRECTORY and m.py, one HAS_ENTRY: one write's receipt, not the sum over sinks
+    expect(report).toMatchObject({ nodesWritten: 2, edgesWritten: 1 });
   });
 });
 
@@ -302,13 +307,23 @@ describe('IndexReport', () => {
   );
 
   it('passes include, exclude and maxFileSizeBytes to the walk', async () => {
-    const root = await tree({ 'src/a.ts': '', 'src/skip.ts': '', 'top.py': '' });
+    const root = await tree({
+      'src/a.ts': '',
+      'src/big.ts': '123456',
+      'src/skip.ts': '',
+      'top.py': '',
+    });
     const { report } = await index(root, [], {
       dryRun: true,
-      config: { include: ['**/*.ts'], exclude: ['**/skip.ts'] },
+      config: { include: ['**/*.ts'], exclude: ['**/skip.ts'], maxFileSizeBytes: 5 },
     });
     expect(report.files.map((f) => f.path)).toEqual(['src/a.ts']);
-    expect(report.walk).toMatchObject({ filesSeen: 3, filesIndexed: 1, filesExcluded: 2 });
+    expect(report.walk).toMatchObject({
+      filesSeen: 4,
+      filesIndexed: 1,
+      filesExcluded: 2,
+      filesTooLarge: 1,
+    });
   });
 
   it('warns that the code tier is a SEAT on every run, and when no file was indexed', async () => {
@@ -333,6 +348,23 @@ describe('IndexReport', () => {
       { phase: 'walked', filesTotal: 2 },
       { phase: 'written', filesTotal: 2 },
     ]);
+
+    const log: string[] = [];
+    const r = recording('memory', undefined, log);
+    const engine = createEngine({ version: '0' }, { sinks: [r.sink] });
+    const session = await engine.connect(TARGET, { readOnly: false });
+    await engine.index(
+      { config: { root }, session, resumeFrom: null },
+      (p) => log.push(`progress:${p.phase}`),
+      new AbortController().signal,
+    );
+    expect(log).toEqual([
+      'memory.open',
+      'progress:walked',
+      'memory.write:start',
+      'memory.write:end',
+      'progress:written',
+    ]);
   });
 });
 
@@ -350,6 +382,29 @@ describe('interruption and resume', () => {
     });
     expect(i20(report.walk)).toBe(report.walk.filesSeen);
     expect(progress.map((p) => p.phase)).not.toContain('written');
+  });
+
+  it('a signal that fires after the walk, before the write, still writes nothing', async () => {
+    const root = await tree({ 'a.py': '' });
+    const r = recording();
+    const engine = createEngine({ version: '0' }, { sinks: [r.sink] });
+    const session = await engine.connect(TARGET, { readOnly: false });
+    const controller = new AbortController();
+    const report = await engine.index(
+      { config: { root }, session, resumeFrom: null },
+      (p) => {
+        if (p.phase === 'walked') controller.abort();
+      },
+      controller.signal,
+    );
+    expect(r.ops).toEqual([]);
+    expect(report).toMatchObject({
+      interrupted: true,
+      files: [],
+      nodesWritten: 0,
+      edgesWritten: 0,
+      consumers: [],
+    });
   });
 
   it('a non-null resumeFrom is refused: v1 index is not resumable', async () => {
