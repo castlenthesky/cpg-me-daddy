@@ -343,6 +343,26 @@ describe('MemoryStore as a GraphStore', () => {
     ]);
   });
 
+  it('a removed FILE takes the edges it is the source of, not only those into it', async () => {
+    const store = await opened();
+    await store.write(TREE);
+    // DEPENDS_ON runs FILE -> FILE, so a.py's removal must not leave a.py -> pkg/m.py dangling.
+    await store.onDelta(
+      {
+        seq: 0,
+        file: wp('a.py'),
+        revision_id: 'r1',
+        producer: 'code',
+        addedNodes: [],
+        addedEdges: [{ source: 'file:a.py', target: 'file:pkg/m.py', type: 'DEPENDS_ON' }],
+        removedNodeIds: [],
+      },
+      { seq: 0, cause: 'live' },
+    );
+    await store.write(mergeFs({ removals: ['a.py'] }));
+    expect(await store.stats()).toMatchObject({ nodeCount: 3, edgeCount: 2 });
+  });
+
   it('audits each removal of one op', async () => {
     const store = await opened();
     await store.write(TREE);
