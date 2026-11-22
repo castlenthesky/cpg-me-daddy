@@ -6,6 +6,7 @@
     { "path": "packages/parse" },
     { "path": "packages/resolve" },
     { "path": "packages/watch" },
+    { "path": "packages/engine" },
     { "path": "apps/vscode" },
     { "path": "apps/cli" }
   ]
