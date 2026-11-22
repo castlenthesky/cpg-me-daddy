@@ -39,6 +39,7 @@
     "check:pack": "node tools/check-pack.mjs",
     "check:coords": "node tools/check-archive-coords.mjs",
     "check:cli-bin": "node tools/check-cli-bin.mjs",
+    "check:purity": "node tools/purity-proof.mjs && node tools/purity-proof.mjs --plant",
     "schema:doc": "node tools/schema-doc.mjs",
     "check:schema": "node tools/schema-doc.mjs --check",
     "test": "vitest run",

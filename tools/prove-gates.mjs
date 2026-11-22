@@ -103,6 +103,9 @@ const depsCase = (name, file, body, expectOutput) => {
   };
 };
 
+const buildCli = () =>
+  must(sh(ROOT, 'bun', ['run', '--silent', 'tsc', '-b', 'apps/cli']), 'build apps/cli');
+
 const runCheck = () =>
   spawnSync('bun', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8', env: PLAIN_ENV });
 
@@ -343,6 +346,28 @@ const CASES = [
         if (original) writeFileSync(file, original);
         // Rebuild so the probe's dist/main.js never outlives the probe.
         must(sh(ROOT, 'bun', ['run', '--silent', 'tsc', '-b', 'apps/cli']), 'rebuild apps/cli');
+      },
+    };
+  })(),
+  (() => {
+    // The runtime purity proof on the real engine (U2c.3, CS-6): a vscode import planted in
+    // packages/engine's source and built into dist must fail check:purity, named by the trap with
+    // the file that asked for it. Builds before the run and again after the restore, so the
+    // probe's dist/index.js never outlives the probe.
+    const file = at('packages/engine/src/index.ts');
+    let original = '';
+    return {
+      name: 'check:purity rejects a vscode import planted in packages/engine (Module._load trap)',
+      expectOutput: /"vscode" requested by packages\/engine\/dist\/index\.js/,
+      command: ['bun', 'run', '--silent', 'check:purity'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        writeFileSync(file, `${original}import 'vscode';\n`);
+        buildCli();
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+        buildCli();
       },
     };
   })(),
