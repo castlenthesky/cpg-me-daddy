@@ -4,3 +4,4 @@ export * from './schema';
 export * from './edges';
 export * from './nodes';
 export * from './types';
+export * from './validate';
