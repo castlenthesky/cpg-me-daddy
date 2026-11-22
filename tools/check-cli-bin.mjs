@@ -3,7 +3,7 @@
 // then spawns the built dist/main.js the way an installed `cpg` runs, and asserts what it does.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,10 +22,10 @@ if (build.status !== 0) {
   process.exit(1);
 }
 
-// The bin's workspace root falls back to CPG_WORKSPACE before cwd: a value in the caller's shell
-// would redirect the cases below that rely on cwd.
+// The bin reads CPG_WORKSPACE (the workspace root's fallback before cwd) and CPG_HOST/PORT/GRAPH (the
+// config's env layer, U2c.1): a value in the caller's shell would redirect the cases below.
 const env = { ...process.env };
-delete env.CPG_WORKSPACE;
+for (const name of ['CPG_WORKSPACE', 'CPG_HOST', 'CPG_PORT', 'CPG_GRAPH']) delete env[name];
 const errors = [];
 function expectRun(args, status, stream, pattern, cwd = ROOT) {
   const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], {
@@ -48,6 +48,8 @@ expectRun(['mcp'], 2, 'stderr', /not built yet/);
 // main.ts is the composition root: createEngine wired with the MemoryStore sink (BMO-79).
 const ws = mkdtempSync(join(tmpdir(), 'cpg-cli-bin-'));
 try {
+  // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
+  mkdirSync(join(ws, '.git'));
   writeFileSync(join(ws, 'a.ts'), 'export const a = 1;\n');
   writeFileSync(join(ws, 'b.py'), 'b = 2\n');
   expectRun(['index', '--dry-run', ws], 0, 'stdout', /^files seen=2 indexed=2 /m);
@@ -81,6 +83,28 @@ try {
   }
   expectRun(['schema', '--check'], 0, 'stderr', /up to date/);
   expectRun(['schema', '--check', '--workspace', ws], 1, 'stderr', /cannot read/);
+  // cpg config (U2c.1): one cpg.config.resolved document. The workspace has a cpg.config.yaml, so
+  // this also proves the built bin loads the engine's yaml and zod at runtime.
+  const cws = join(ws, 'configured');
+  mkdirSync(join(cws, '.git'), { recursive: true });
+  writeFileSync(
+    join(cws, 'cpg.config.yaml'),
+    'version: 1\nstore: { falkor: { graph: bin-graph } }\n',
+  );
+  const c = expectRun(['config', '--format=json', cws], 0, 'stdout', /^\{.*\}\n$/);
+  try {
+    const doc = JSON.parse(c.stdout);
+    const graph = doc.body.store.graph;
+    if (
+      doc.kind !== 'cpg.config.resolved' ||
+      doc.body.root.value !== cws ||
+      graph.value !== 'bin-graph' ||
+      graph.layer !== 'file'
+    )
+      errors.push(`cpg config --format=json: unexpected document ${c.stdout}`);
+  } catch (e) {
+    errors.push(`cpg config --format=json: stdout is not one JSON document (${String(e)})`);
+  }
 } finally {
   rmSync(ws, { recursive: true, force: true });
 }

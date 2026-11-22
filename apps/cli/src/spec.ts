@@ -34,6 +34,12 @@ const format = (...values: string[]): FlagSpec => ({
   summary: 'output format; never inferred from the terminal',
 });
 const workspace: FlagSpec = { name: 'workspace', type: 'string', summary: 'workspace root' };
+const config: FlagSpec = {
+  name: 'config',
+  type: 'string',
+  summary:
+    'path to cpg.config.yaml, relative to cwd; else the nearest ancestor of the root holding one, stopping at .git',
+};
 // No port default here: nothing user-facing may default to 6381, the test harness port (I-16).
 const store: readonly FlagSpec[] = [
   { name: 'host', type: 'string', summary: 'graph store host' },
@@ -63,6 +69,7 @@ const cmd = (
 export const COMMANDS: readonly CommandSpec[] = [
   cmd('index', 'index a workspace into the graph and print an index report', 'write', [
     workspace,
+    config,
     format('text', 'json'),
     ...store,
     bool('dry-run', 'index without a store'),
@@ -88,6 +95,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   ),
   cmd('verify', 'run the six verify checks; exit 3 when the graph does not pass', 'read', [
     workspace,
+    config,
     format('text', 'json'),
     ...store,
     bool('strict', 'treat unavailable checks as failures'),
@@ -103,7 +111,9 @@ export const COMMANDS: readonly CommandSpec[] = [
   }),
   cmd('config', 'print the resolved config with the layer and source of every key', 'none', [
     workspace,
+    config,
     format('text', 'json'),
+    ...store,
   ]),
   cmd(
     'schema',

@@ -4,15 +4,22 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import type {
-  CheckResult,
-  CpgEngine,
-  EngineSession,
-  IndexProgress,
-  StoreTarget,
-  VerifyReport,
+import {
+  CONFIG_DEFAULTS,
+  ConfigError,
+  toCpgConfigInput,
+  type CheckResult,
+  type ConfigLayer,
+  type ConfigLayerInput,
+  type CpgEngine,
+  type EngineSession,
+  type IndexProgress,
+  type ResolvedConfig,
+  type StoreTarget,
+  type VerifyReport,
 } from '@cpg/engine';
 import { checkSchemaDoc } from '@cpg/model';
+import { loadConfig } from './config';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -24,6 +31,7 @@ export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 // for `cpg schema --check` failures (CLI-local like 'not-built', exit 1).
 export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
+  | { kind: 'config'; key: string; layer: ConfigLayer; message: string }
   | { kind: 'not-built'; verb: string; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
   | { kind: 'verification'; failures: readonly CheckResult[] }
@@ -33,6 +41,7 @@ export type CliError =
 // Total (the compiler rejects a kind with no row); the ONLY exit-code decision site.
 const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   usage: EXIT.USAGE,
+  config: EXIT.USAGE,
   'not-built': EXIT.USAGE,
   'engine-unavailable': EXIT.FAILED,
   verification: EXIT.VERIFY_FAILED,
@@ -93,18 +102,19 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
     return EXIT.OK;
   }
   // Every flag is validated before anything touches the engine (I-12).
-  const target = storeTarget(spec, values);
-  if (spec.verb === 'schema') return runSchema(opts.engine, values, io, opts);
-  // SEAT: no verb has a handler until the engine exists (U2a.2+). Until then every verb stops here.
+  if (spec.verb === 'schema') return runSchema(spec, opts.engine, values, io, opts);
+  if (spec.verb === 'config') return runConfig(spec, values, positionals, io, opts);
+  // SEAT: verbs without a handler yet stop here (watch, query, inspect, doctor, index without --dry-run).
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (!opts.engine) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
   if (spec.verb === 'index' && values['dry-run'] === true) {
-    return runIndexDryRun(opts.engine, values, positionals, io, opts);
+    return runIndexDryRun(spec, opts.engine, values, positionals, io, opts);
   }
-  if (spec.verb === 'verify' && target) {
-    return runVerify(opts.engine, target, values, positionals, io, opts);
+  if (spec.verb === 'verify') {
+    return runVerify(spec, opts.engine, values, positionals, io, opts);
   }
+  const target = storeTarget(spec, values);
   if (target) {
     const session = await connectStore(opts.engine, target, spec.session === 'read');
     await session.close();
@@ -112,23 +122,80 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   throw seat;
 }
 
+function rootLayers(
+  spec: CommandSpec,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): readonly ConfigLayerInput[] {
+  const layers: ConfigLayerInput[] = [];
+  const add = (layer: ConfigLayer, source: string, raw: string | undefined): void => {
+    if (raw === undefined) return;
+    const root = opts.cwd !== undefined ? resolve(opts.cwd, raw) : raw;
+    layers.push({ layer, source, values: { root } });
+  };
+  add(
+    'flag',
+    '--workspace',
+    typeof values['workspace'] === 'string' ? values['workspace'] : undefined,
+  );
+  if (spec.positionals[0]?.name === 'root') {
+    add('flag', '<root>', positionals[0]);
+  }
+  add('env', 'CPG_WORKSPACE', io.env['CPG_WORKSPACE']);
+  add('default', 'cwd', opts.cwd);
+  if (layers.length === 0) {
+    throw new Fail({
+      kind: 'usage',
+      verb: spec.verb,
+      message: 'no workspace root: pass --workspace or a root',
+    });
+  }
+  return layers;
+}
+
+// The winning root: rootLayers lists the sources in precedence order, so it is the first.
 function resolveWorkspaceRoot(
-  verb: string,
+  spec: CommandSpec,
   values: Values,
   positionals: readonly string[],
   io: Io,
   opts: RunOptions,
 ): string {
-  const workspace = typeof values['workspace'] === 'string' ? values['workspace'] : undefined;
-  const raw = workspace ?? positionals[0] ?? io.env['CPG_WORKSPACE'] ?? opts.cwd;
-  if (raw === undefined) {
-    throw new Fail({
-      kind: 'usage',
-      verb,
-      message: 'no workspace root: pass --workspace or a root',
+  return String(rootLayers(spec, values, positionals, io, opts)[0]?.values['root']);
+}
+
+async function load(
+  spec: CommandSpec,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): Promise<{ readonly resolved: ResolvedConfig; readonly file: string | null }> {
+  const roots = rootLayers(spec, values, positionals, io, opts);
+  try {
+    const result = await loadConfig({
+      rootLayers: roots,
+      values,
+      env: io.env,
+      cwd: opts.cwd,
     });
+    for (const w of result.warnings) {
+      io.err(`cpg: warning: ${w}`);
+    }
+    return { resolved: result.resolved, file: result.file };
+  } catch (e: unknown) {
+    if (e instanceof ConfigError) {
+      throw new Fail({
+        kind: 'config',
+        key: e.key,
+        layer: e.layer,
+        message: e.message,
+      });
+    }
+    throw e;
   }
-  return opts.cwd !== undefined ? resolve(opts.cwd, raw) : raw;
 }
 
 async function connectStore(
@@ -153,20 +220,55 @@ function formatDocument(kind: string, body: unknown, io: Io, manifest: Manifest)
   });
 }
 
-async function runVerify(
-  engine: CpgEngine,
-  target: StoreTarget,
+// One `key value layer source` line per Provenanced leaf, in ResolvedConfig declaration order.
+function configLines(v: unknown, prefix = ''): string[] {
+  if (typeof v !== 'object' || v === null) return [];
+  if ('layer' in v && 'source' in v && 'value' in v)
+    return [`${prefix} ${JSON.stringify(v.value)} ${String(v.layer)} ${String(v.source)}`];
+  return Object.entries(v).flatMap(([k, x]) => configLines(x, prefix ? `${prefix}.${k}` : k));
+}
+
+async function runConfig(
+  spec: CommandSpec,
   values: Values,
   positionals: readonly string[],
   io: Io,
   opts: RunOptions,
 ): Promise<ExitCode> {
   // REAL
-  const root = resolveWorkspaceRoot('verify', values, positionals, io, opts);
+  const { resolved, file } = await load(spec, values, positionals, io, opts);
+  if (values['format'] === 'json') {
+    io.out(formatDocument('cpg.config.resolved', resolved, io, opts.manifest));
+  } else {
+    for (const line of configLines(resolved)) io.out(line);
+  }
+  io.err(file !== null ? `cpg: config file: ${file}` : 'cpg: config file: none');
+  return EXIT.OK;
+}
+
+async function runVerify(
+  spec: CommandSpec,
+  engine: CpgEngine,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): Promise<ExitCode> {
+  // REAL
+  const { resolved } = await load(spec, values, positionals, io, opts);
+  const target: StoreTarget = {
+    host: resolved.store.host.value,
+    port: resolved.store.port.value,
+    graph: resolved.store.graph.value,
+  };
   const session = await connectStore(engine, target, true);
   let report: VerifyReport;
   try {
-    report = await engine.verify(session, { root, strict: values['strict'] === true }, null);
+    report = await engine.verify(
+      session,
+      { ...toCpgConfigInput(resolved), strict: values['strict'] === true },
+      null,
+    );
   } finally {
     await session.close();
   }
@@ -198,6 +300,7 @@ async function runVerify(
 }
 
 async function runSchema(
+  spec: CommandSpec,
   engine: CpgEngine | undefined,
   values: Values,
   io: Io,
@@ -221,7 +324,7 @@ async function runSchema(
     return EXIT.OK;
   }
 
-  const root = resolveWorkspaceRoot('schema', values, [], io, opts);
+  const root = resolveWorkspaceRoot(spec, values, [], io, opts);
   const file = join(root, 'docs', 'outline', '04-schema.yaml');
   let text: string;
   try {
@@ -251,19 +354,21 @@ async function runSchema(
 }
 
 async function runIndexDryRun(
+  spec: CommandSpec,
   engine: CpgEngine,
   values: Values,
   positionals: readonly string[],
   io: Io,
   opts: RunOptions,
 ): Promise<ExitCode> {
-  const root = resolveWorkspaceRoot('index', values, positionals, io, opts);
+  // REAL
+  const { resolved } = await load(spec, values, positionals, io, opts);
   const quiet = values['quiet'] === true;
   const onProgress = (p: IndexProgress): void => {
     if (!quiet) io.status(`index: ${p.phase} ${p.filesTotal} files`);
   };
   const report = await engine.index(
-    { config: { root }, session: null, resumeFrom: null },
+    { config: toCpgConfigInput(resolved), session: null, resumeFrom: null },
     onProgress,
     opts.signal ?? new AbortController().signal,
   );
@@ -331,13 +436,14 @@ function parseFlags(
 
 const isPort = (v: string): boolean => /^\d{1,5}$/.test(v) && Number(v) >= 1 && Number(v) <= 65535;
 
-// Store defaults are provisional until the config loader (U2): 6382, never the harness's 6381.
+// SEAT: used only by verbs without a handler yet (watch, query, inspect, index without --dry-run).
 function storeTarget(spec: CommandSpec, values: Values): StoreTarget | null {
   if (spec.session === 'none') return null;
   const str = (k: string, d: string) => (typeof values[k] === 'string' ? values[k] : d);
   return {
-    host: str('host', 'localhost'),
-    port: Number(str('port', '6382')),
-    graph: str('graph', 'cpg'),
+    host: str('host', CONFIG_DEFAULTS['store.host']),
+    port:
+      typeof values['port'] === 'string' ? Number(values['port']) : CONFIG_DEFAULTS['store.port'],
+    graph: str('graph', CONFIG_DEFAULTS['store.graph']),
   };
 }

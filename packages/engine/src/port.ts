@@ -15,7 +15,64 @@ export interface EngineSession {
   close(): Promise<void>;
 }
 
-/** The walk scope of one index run. The config loader (U2c.1) resolves it with provenance. */
+/** C-CLI: the five config layers. The index in CONFIG_PRECEDENCE is the rank (0 wins). */
+export type ConfigLayer = 'flag' | 'env' | 'file' | 'manifest' | 'default';
+
+/** One resolved value with the layer and source it came from (C-CLI I-25). */
+export interface Provenanced<T> {
+  readonly value: T;
+  readonly layer: ConfigLayer;
+  /** The flag as typed (`--host`), the env var name, the file's absolute path, `cwd` or `built-in`. */
+  readonly source: string;
+}
+
+/** One input to resolveConfig. `values` is keyed by ResolvedConfig key path (`store.port`). */
+export interface ConfigLayerInput {
+  readonly layer: ConfigLayer;
+  readonly source: string;
+  /** An undefined value is unset: the key falls through to the next layer. */
+  readonly values: Readonly<Record<string, unknown>>;
+}
+
+export interface ConsumerSwitches {
+  readonly inspect: boolean;
+  readonly store: 'memory' | 'falkor';
+  readonly vscode: boolean;
+}
+
+/** C-CLI ResolvedConfig: every key carries its value, layer and source. */
+export interface ResolvedConfig {
+  readonly root: Provenanced<string>;
+  readonly include: Provenanced<readonly string[]>;
+  readonly exclude: Provenanced<readonly string[]>;
+  readonly maxFileSizeBytes: Provenanced<number>;
+  /** One value (C-CLI): a layer that sets consumers sets all three switches. */
+  readonly consumers: Provenanced<ConsumerSwitches>;
+  readonly store: {
+    readonly host: Provenanced<string>;
+    readonly port: Provenanced<number>;
+    readonly graph: Provenanced<string>;
+    readonly mode: Provenanced<'remote' | 'docker'>;
+  };
+  readonly queryTimeoutMs: Provenanced<number>;
+  readonly resolve: {
+    readonly perFileMs: Provenanced<number>;
+    readonly perSiteMs: Provenanced<number>;
+  };
+  readonly watch: {
+    readonly trailingMs: Provenanced<number>;
+    readonly ceilingMs: Provenanced<number>;
+    readonly bulkThresholdFiles: Provenanced<number>;
+  };
+}
+
+type Unprovenanced<T> =
+  T extends Provenanced<infer V> ? V : { readonly [K in keyof T]: Unprovenanced<T[K]> };
+
+/** ResolvedConfig without provenance: the one object a front door hands the engine (U2c.1). */
+export type CpgConfigInput = Unprovenanced<ResolvedConfig>;
+
+/** The walk scope of one index run. A front door passes its CpgConfigInput, which satisfies it. */
 export interface IndexConfig {
   /** Absolute path to the workspace root. */
   readonly root: string;

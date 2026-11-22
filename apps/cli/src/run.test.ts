@@ -95,7 +95,9 @@ describe('exit codes', () => {
     }
   });
 
-  it.each(COMMANDS.map((c) => c.verb))('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
+  // config (U2c.1, config-verb.test.ts) needs no engine, so it is never a SEAT.
+  const seats = COMMANDS.map((c) => c.verb).filter((v) => v !== 'config');
+  it.each(seats)('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
     // verify (U2a.3, verify-verb.test.ts) and schema (U2a.4, schema-verb.test.ts) are built: only
     // without an engine are they still a SEAT. schema needs a mode flag to get that far.
     const built = verb === 'verify' || verb === 'schema';
@@ -120,14 +122,14 @@ describe('exit codes', () => {
   it('a well-formed --port reaches engine.connect (the test above is not vacuous)', async () => {
     const f = fakeEngine();
     await cli(['query', '--port', '7000', '--graph', 'g'], { engine: f.engine });
-    expect(f.connects).toEqual([{ host: 'localhost', port: 7000, graph: 'g' }]);
+    expect(f.connects).toEqual([{ host: '127.0.0.1', port: 7000, graph: 'g' }]);
     expect(f.closed()).toBe(1);
   });
 
   it('a failed connect exits 1', async () => {
     const r = await cli(['verify', '/w'], { engine: fakeEngine(true).engine });
     expect(r.code).toBe(EXIT.FAILED);
-    expect(r.err).toContain('localhost:6382/cpg');
+    expect(r.err).toContain('127.0.0.1:6382/cpg');
   });
 
   it('an aborted signal exits 130 before connecting', async () => {

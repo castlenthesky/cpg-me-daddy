@@ -61,6 +61,8 @@
         "@cpg/resolve": "*",
         "@cpg/sink": "*",
         "@cpg/store": "*",
+        "yaml": "2.9.1",
+        "zod": "4.6.7",
       },
     },
     "packages/model": {

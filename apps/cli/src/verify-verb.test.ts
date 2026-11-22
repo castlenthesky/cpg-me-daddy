@@ -4,7 +4,7 @@
 // go to stderr (I-10), a malformed flag never connects (I-12), the root is --workspace, then the
 // positional, then CPG_WORKSPACE, then cwd.
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -55,6 +55,8 @@ async function cli(
 async function indexedWorkspace(): Promise<{ root: string; engine: CpgEngine }> {
   const root = await mkdtemp(join(tmpdir(), 'cpg-cli-verify-'));
   roots.push(root);
+  // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
+  await mkdir(join(root, '.git'));
   await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
   await writeFile(join(root, 'b.py'), 'b = 2\n');
   const engine = createEngine({ version: manifest.version }, { sinks: [createMemoryStore()] });
@@ -206,16 +208,17 @@ function fakeEngine(state: CheckState = 'pass', reject = false) {
 }
 
 describe('cpg verify wiring', () => {
-  it('connects read-only, passes {root, strict} and expected null, then closes the session', async () => {
+  it('connects read-only, passes the config with strict and expected null, then closes', async () => {
     const f = fakeEngine();
     const r = await cli(['verify', '--strict', '--port', '7000', '/w'], f.engine);
     expect(r.code).toBe(EXIT.OK);
     expect(f.connects).toEqual([
-      { target: { host: 'localhost', port: 7000, graph: 'cpg' }, readOnly: true },
+      { target: { host: '127.0.0.1', port: 7000, graph: 'cpg' }, readOnly: true },
     ]);
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]?.session).toBe(f.sessions[0]);
-    expect(f.calls[0]?.config).toEqual({ root: '/w', strict: true });
+    // The whole CpgConfigInput (provenance dropped) is pinned in config-verb.test.ts (U2c.1).
+    expect(f.calls[0]?.config).toMatchObject({ root: '/w', strict: true });
     expect(f.calls[0]?.expected).toBeNull();
     expect(f.closed()).toBe(1);
   });
