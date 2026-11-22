@@ -9,9 +9,14 @@ describe('@cpg/parse front door', () => {
     expect(Object.keys(contract)).toEqual([]);
   });
 
-  it('index exports the registry and nothing else at runtime', () => {
+  it('index exports the registry and the parse service, nothing else at runtime', () => {
     expect(new Set(Object.keys(api))).toEqual(
-      new Set(['BUILTIN_LANGUAGES', 'createLanguageRegistry']),
+      new Set([
+        'BUILTIN_LANGUAGES',
+        'createLanguageRegistry',
+        'createParseService',
+        'HandleReleasedError',
+      ]),
     );
   });
 });
