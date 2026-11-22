@@ -16,6 +16,7 @@ const GATES = [
   'check:coords',
   'typecheck',
   'typecheck:tests',
+  'check:cli-bin',
   'test:coverage',
 ];
 

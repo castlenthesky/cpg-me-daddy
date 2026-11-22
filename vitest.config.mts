@@ -14,8 +14,15 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       // Only shipped source; `all` behaviour means an untested new file counts as 0%.
-      include: ['packages/*/src/**'],
-      exclude: ['**/*.test.ts', '**/*.test-d.ts'],
+      include: ['packages/*/src/**', 'apps/*/src/**'],
+      // apps/cli/src/main.ts is the process wrapper: tools/check-cli-bin.mjs spawns it, vitest cannot.
+      // apps/vscode/src/extension.ts needs the VS Code host to run; it is checked by F5, not vitest.
+      exclude: [
+        '**/*.test.ts',
+        '**/*.test-d.ts',
+        'apps/cli/src/main.ts',
+        'apps/vscode/src/extension.ts',
+      ],
       reporter: ['text-summary', 'lcov', 'json-summary'],
       // Thresholds ONLY RATCHET UP. Set to measured coverage rounded down to the
       // nearest 5 (lines/statements 95.65, branches 96.42, functions 100).

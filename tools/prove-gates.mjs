@@ -312,6 +312,28 @@ const CASES = [
       rmSync(at('packages/model/dist/__gate_probe.js'), { force: true });
     },
   },
+  (() => {
+    // Realistic failure: main.ts stops assigning process.exitCode, so every error exits 0. Only
+    // spawning the BUILT bin can see that; the in-process run() tests stay green.
+    const file = at('apps/cli/src/main.ts');
+    const from = 'process.exitCode = code;';
+    let original = '';
+    return {
+      name: 'check:cli-bin rejects a built bin that exits 0 on an unknown verb',
+      expectOutput: /cpg frobnicate: expected exit 2/,
+      command: ['bun', 'run', '--silent', 'check:cli-bin'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        if (!original.includes(from)) throw new Error(`main.ts no longer contains: ${from}`);
+        writeFileSync(file, original.replace(from, 'void code;'));
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+        // Rebuild so the probe's dist/main.js never outlives the probe.
+        must(sh(ROOT, 'bun', ['run', '--silent', 'tsc', '-b', 'apps/cli']), 'rebuild apps/cli');
+      },
+    };
+  })(),
   {
     name: 'typecheck rejects a type error',
     expectOutput: /TS2322/,
@@ -602,12 +624,12 @@ const CASES = [
     plant: probeTest("  console.log('probe');"),
   }),
   configCase({
-    name: 'test: a vitest.config.mts-only edit (coverage threshold 99) invalidates the turbo cache',
+    name: 'test: a vitest.config.mts-only edit (coverage threshold 100) invalidates the turbo cache',
     task: 'test:coverage',
     file: 'vitest.config.mts',
     from: 'lines: 95,',
-    to: 'lines: 99,',
-    expectOutput: /does not meet global threshold \(99%\)/,
+    to: 'lines: 100,',
+    expectOutput: /does not meet global threshold \(100%\)/,
   }),
   configCase({
     name: 'typecheck: a tsconfig.base.json-only edit (noPropertyAccessFromIndexSignature) invalidates the turbo cache',
