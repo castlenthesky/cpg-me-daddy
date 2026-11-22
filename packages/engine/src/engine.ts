@@ -1,7 +1,7 @@
 // createEngine: the engine's one constructor. Only a front door (apps/*) calls it (03-architecture §2
 // rule 3, check-deps rule engine-call-site); this package defines it and never calls it.
 
-import type { SchemaDocInput } from '@cpg/model';
+import { CPG_SCHEMA, type SchemaDocInput } from '@cpg/model';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
 import type { GraphSink } from '@cpg/sink';
@@ -234,7 +234,8 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
     },
 
     schema(): SchemaDocInput {
-      throw new Error('SEAT: schema lands with U2a.4');
+      // REAL
+      return CPG_SCHEMA;
     },
   };
 }

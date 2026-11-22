@@ -42,28 +42,22 @@ const build = spawnSync('bun', ['run', '--silent', 'tsc', '-b', 'packages/model'
 if (build.status !== 0)
   fail(`schema-doc: building @cpg/model failed\n${build.stdout}${build.stderr}`);
 
-const { CPG_SCHEMA, renderSchemaRegion, spliceGeneratedRegion } = createRequire(import.meta.url)(
-  join(root, 'packages/model'),
-);
+const { CPG_SCHEMA, checkSchemaDoc } = createRequire(import.meta.url)(join(root, 'packages/model'));
 
-let next;
+let result;
 try {
-  next = spliceGeneratedRegion(existing, renderSchemaRegion(CPG_SCHEMA));
+  result = checkSchemaDoc(existing, CPG_SCHEMA);
 } catch (err) {
   fail(err instanceof Error ? err.message : String(err));
 }
 
-if (next === existing) {
+if (result.firstDifferentLine === null) {
   console.log(`schema-doc: ${file} is up to date`);
 } else if (check) {
-  const a = existing.split('\n');
-  const b = next.split('\n');
-  let line = 0;
-  while (line < a.length && line < b.length && a[line] === b[line]) line++;
   fail(
-    `schema-doc: ${file} generated region is stale (first difference at line ${line + 1}); run \`bun run schema:doc\``,
+    `schema-doc: ${file} generated region is stale (first difference at line ${result.firstDifferentLine}); run \`bun run schema:doc\``,
   );
 } else {
-  writeFileSync(file, next);
+  writeFileSync(file, result.expected);
   console.log(`schema-doc: regenerated ${file}`);
 }

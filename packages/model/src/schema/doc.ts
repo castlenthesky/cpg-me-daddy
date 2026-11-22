@@ -187,8 +187,14 @@ export interface SchemaDocCheck {
 /**
  * Whether `existing` (the text of docs/outline/04-schema.yaml) holds `schema`'s generated region
  * byte-for-byte. Pure. Throws what renderSchemaRegion and spliceGeneratedRegion throw.
- * SEAT.
+ * REAL.
  */
-export function checkSchemaDoc(_existing: string, _schema: SchemaDocInput): SchemaDocCheck {
-  throw new Error('SEAT: checkSchemaDoc lands with U2a.4');
+export function checkSchemaDoc(existing: string, schema: SchemaDocInput): SchemaDocCheck {
+  const expected = spliceGeneratedRegion(existing, renderSchemaRegion(schema));
+  if (expected === existing) return { expected, firstDifferentLine: null };
+  const a = existing.split('\n');
+  const b = expected.split('\n');
+  let line = 0;
+  while (line < a.length && line < b.length && a[line] === b[line]) line++;
+  return { expected, firstDifferentLine: line + 1 };
 }
