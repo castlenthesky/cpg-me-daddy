@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      // src/extension.ts is detected from package.json "main" (compiled path mapped back
+      // to source); tools/*.mjs are run by package scripts / node directly, so are entries.
+      "entry": ["tools/*.mjs"],
+      "project": ["src/**/*.ts", "tools/**/*.mjs"]
+    },
+    // Entry src/index.ts is detected from package.json "main"/"types" (dist -> src).
+    "packages/model": {
+      "project": ["src/**/*.ts"]
+    }
+  },
+  // Stub awaiting deletion in story U0.1.2; remove this line with the package.
+  "ignoreWorkspaces": ["packages/ast-generator"],
+  // knip's lefthook plugin only counts lefthook as used when CI is set or .git/hooks are
+  // installed. A clone installed with LEFTHOOK=0 or --ignore-scripts would fail with a false
+  // "unused devDependency", and turbo doesn't hash either condition. lefthook.yml is the real use.
+  "ignoreDependencies": ["lefthook"]
+}

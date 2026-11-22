@@ -1,169 +1,36 @@
-# CodeGraph
+# cpg-me-daddy
 
-**CodeGraph** is a VS Code extension that provides real-time code property graph (CPG) visualization and analysis for multi-language codebases. The extension builds a comprehensive graph representation of source code that combines syntactic structure, control flow, and program dependencies into a unified, queryable model based on the [Joern CPG specification](https://cpg.joern.io/).
+Code Property Graph for TypeScript/JavaScript/Python. The plan is
+[`docs/outline/README.md`](docs/outline/README.md).
 
-## Vision
-
-Our goal is to enable developers to:
-
-- Visualize code dependencies and relationships in near-real-time
-- Navigate complex codebases through interactive graph exploration
-- Understand code impact and propagation of changes
-- Perform advanced code analysis queries across multiple languages
-
-## Features
-
-- **Multi-Language Support**: Analyze TypeScript/JavaScript, Python, Go, Rust, Java, and C/C++ codebases.
-- **Real-Time Analysis**: Incremental and surgical graph updates triggered automatically on file save.
-- **Interactive Visualization**: Explore code dependencies with a dynamic, theme-aware, force-directed graph rendering.
-- **Flexible Storage**: Use an embedded graph database or connect to a remote FalkorDB instance.
-- **Cypher Queries**: Query your codebase natively using the Cypher graph query language.
-
-## Prerequisites
-
-Before installing the extension, ensure your system has the following packages. These dependencies (such as OpenMP) are strictly required for the local fallback graph database (FalkorDB) to function correctly:
-
-### macOS
-
-```bash
-brew install redis libomp
-```
-
-### Linux (Debian/Ubuntu)
-
-```bash
-sudo apt-get install redis-server libgomp1
-```
-
-### Linux (RHEL/Fedora)
-
-```bash
-sudo dnf install redis libgomp
-```
-
-### Windows
-
-Install Redis using one of these methods:
-
-- [Redis for Windows](https://github.com/microsoftarchive/redis/releases)
-- [Memurai](https://www.memurai.com/) (Redis-compatible)
-- WSL2 with Linux installation
-
-*Note: Windows users may need additional configuration for OpenMP support depending on their compilation environment.*
-
-## Configuration
-
-Access the CodeGraph configuration panel from the VS Code sidebar. The extension supports two connection modes:
-
-### Embedded Mode (Default)
-
-Uses an embedded FalkorDB instance (`falkordblite`) that runs locally:
-
-- **Data Path**: Local directory where graph data is stored (default: `${workspaceFolder}/.codegraph`)
-
-### Remote Mode
-
-Connects to an external FalkorDB or Redis server:
-
-- **Host**: FalkorDB server hostname (default: `localhost`)
-- **Port**: Server port (default: `6379`)
-- **Password**: Optional authentication password
-- **Graph Name**: Name of the graph database to use (default: `default`)
-
-## Getting Started
-
-1. Install the system prerequisites (`redis` and `libomp` for macOS).
-2. Install the CodeGraph extension.
-3. Open a workspace or folder in VS Code.
-4. Open the CodeGraph configuration panel in the sidebar.
-5. Choose your connection mode and configure settings.
-6. Click "Apply Configuration".
-7. Save a file in your workspace to trigger the initial graph construction.
-
-## Extension Settings
-
-This extension contributes the following settings:
-
-- `falkordb.connectionMode`: Connection mode (`embedded` or `remote`)
-- `falkordb.host`: FalkorDB server host (remote mode)
-- `falkordb.port`: FalkorDB server port (remote mode)
-- `falkordb.password`: Authentication password (remote mode)
-- `falkordb.graphName`: Name of the graph database
-- `falkordb.dataPath`: Local data directory (embedded mode)
-
-## Architecture
-
-CodeGraph uses a multi-layered architecture:
-
-1. **UAST Layer**: Universal Abstract Syntax Tree utilizing Tree-sitter parsers
-2. **CFG Layer**: Control Flow Graph construction
-3. **PDG Layer**: Program Dependence Graph with data and control dependencies
-4. **Storage Layer**: FalkorDB graph database integration
-5. **Visualization Layer**: Interactive webview with force-directed graph rendering
-
-### Project Structure
+## Running
 
 ```
-src/
-  extension.ts                 -- Thin entry point (calls bootstrap)
-  bootstrap.ts                 -- Composition root: DI wiring, startup sequencing
-
-  types/                       -- Interfaces and type definitions (no implementations)
-    nodes.ts                   -- GraphNode, GraphEdge, FileNode, DirectoryNode, EdgeType
-    storage.ts                 -- IGraphStore interface
-    visualization.ts           -- IGraphViewProvider interface
-    parsing.ts                 -- IParser, ILanguageAdapter (future tree-sitter)
-    sync.ts                    -- IReconciler interface
-    filesystem.ts              -- IFileWatcher, IFileScanner interfaces
-
-  graph/                       -- Graph construction (the "what")
-    nodes/
-      nodeFactory.ts           -- Node/edge creation, language detection, path utilities
-    cpg/                       -- Code Property Graph layers (extension points)
-      uast/                    -- Layer 1: Universal AST (tree-sitter)
-      cfg/                     -- Layer 2: Control Flow Graph
-      pdg/                     -- Layer 3: Program Dependence Graph
-
-  services/                    -- Runtime infrastructure
-    storage/
-      FalkorDBStore.ts         -- IGraphStore implementation (embedded + remote)
-      cypher/
-        queries.ts             -- Cypher serialization helpers
-    filesystem/
-      FileWatcher.ts           -- Live change tracking (debounce, soft-delete, move detection)
-      FileScanner.ts           -- Full workspace directory scan
-    sync/
-      Reconciler.ts            -- Stale-While-Revalidate background sync
-      DiffEngine.ts            -- Graph diff computation + incremental patches
-
-  providers/                   -- VS Code webview providers (UI layer)
-    GraphViewProvider.ts       -- Force-directed graph visualization
-    ConfigViewProvider.ts      -- Connection and config panel
-    DetailsViewProvider.ts     -- Node/edge details panel
-
-  commands/                    -- VS Code command handlers
-    fullRefresh.ts             -- codegraph.fullRefresh
-    helloWorld.ts              -- falkordb.helloWorld
-
-test/
-  unit/                        -- Bun unit tests (no VS Code API)
-    graph/
-      nodeFactory.test.ts
-  fixtures/                    -- Shared test data
-  integration/                 -- vscode-test integration tests (future)
+bun install
+bun run compile
 ```
 
-For detailed architecture documentation and design goals, see the [Overview Documentation](design/02_planned/CPG/00-Overview.md).
+Then press F5 in VS Code to launch the Extension Development Host.
 
-## Known Issues
+## Commands
 
-- Large codebases (>10k files) may experience initial parse delays during the first run.
-- Embedded mode requires write permissions in the workspace directory.
-
-## Contributing
-
-See the [Design Documentation](design/02_planned/CPG/) for deeper implementation details, layer separation, and architectural decisions.
-
-## License
-
-See LICENSE file for details.
+| Command                     | What it does                                                                |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `bun run check`             | THE gate: every fast check via turbo (cached). `verify` is an alias         |
+| `bun run check:gates`       | Proves each gate fails on a planted violation (`-- --only-slow`: slow only) |
+| `bun run format`            | oxfmt write                                                                 |
+| `bun run format:check`      | oxfmt check                                                                 |
+| `bun run lint`              | oxlint, type-aware, warnings denied (owns unused vars/params)               |
+| `bun run lint:fix`          | oxlint autofix                                                              |
+| `bun run typecheck`         | `tsc -b`                                                                    |
+| `bun run typecheck:tests`   | `tsc` over all test files (incl. type tests)                                |
+| `bun run check:deps`        | dependency-direction rules (`tools/check-deps.mjs`)                         |
+| `bun run check:pack`        | asserts what `bun pm pack` would ship                                       |
+| `bun run knip`              | unused files/exports/deps                                                   |
+| `bun run test`              | vitest (unit, property, type tests)                                         |
+| `bun run test:coverage`     | vitest with coverage thresholds                                             |
+| `bun run test:mutation`     | Stryker mutation testing (slow, not in `check`)                             |
+| `bun run clean`             | SAFE FULL RESET: out, dist, tsbuildinfo, turbo, coverage, reports, stryker  |
+| `bun run compile` / `watch` | `tsc -b` / `tsc -b -w`                                                      |
+| `bun run changeset`         | record a semver change for a package                                        |
+| `bun run version-packages`  | apply changesets (`changeset version`)                                      |

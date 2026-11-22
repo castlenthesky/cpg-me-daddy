@@ -1,42 +1,20 @@
-.tmp/
-references/
-responses.csv
-
-# dependencies (bun install)
-node_modules
-.vscode-test/
-
-# output
 out
 dist
-*.tgz
-
-# code coverage
-coverage
-*.lcov
-
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# caches
-.eslintcache
-.cache
+node_modules
+.vscode-test/
+*.vsix
 *.tsbuildinfo
 
-# IntelliJ based IDEs
-.idea
+# multi-agent deliberation working artifacts - never committed
+.debate/
+coverage/
 
-# Finder (MacOS) folder config
-.DS_Store
+# turbo local cache and run logs
+.turbo/
 
-# git worktrees created for parallel unit work (never commit these)
+# stryker mutation reports, incremental state and sandbox
+reports/
+.stryker-tmp/
+
+# Claude linked checkouts. Not this tree's source; oxlint treats a nested config here as a second root.
 .claude/worktrees/

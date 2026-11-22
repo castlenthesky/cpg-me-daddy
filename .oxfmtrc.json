@@ -1,30 +1,23 @@
 {
+  // Only non-default choices are listed. Defaults already match the code (semi, trailingComma "all",
+  // 2-space indent, lf). singleQuote and printWidth are set to match the existing hand-written style
+  // and keep the one-time reformat diff small.
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": [
-    "/build/**",
-    "/design/**",
-    "/media/**",
-    "/out/**",
-    "/resources/**",
-    "/scripts/**",
-    "/src/**",
-    "/test/**",
-    "/.agent/**",
-    "/.vscode/**",
-    "/.claude/**",
-    "**/*.md",
-    "**/dist/**",
-    "bun.lock"
-  ],
+  "singleQuote": true,
   "printWidth": 100,
-  "tabWidth": 2,
-  "useTabs": false,
-  "semi": true,
-  "singleQuote": false,
-  "quoteProps": "as-needed",
-  "trailingComma": "all",
-  "arrowParens": "always",
-  "endOfLine": "lf",
-  "insertFinalNewline": true,
-  "sortImports": true
+  // Default would reorder package.json keys (e.g. scripts, engines); VS Code manifest order is
+  // meaningful to humans here, so keep it as written.
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    // Generated / vendored / lockfile content: never hand-formatted.
+    "dist",
+    "out",
+    "node_modules",
+    "bun.lock",
+    // Machine-local, git-ignored (user-global ignore) tool state; not ours to format.
+    ".claude/settings.local.json",
+    // docs/** is hand-written prose/YAML with intentional layout (long folded scalars, flow lists);
+    // oxfmt rewrites ~7k lines of it, which is churn with no value. Benchmark JSON is generated data.
+    "docs/**"
+  ]
 }

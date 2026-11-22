@@ -1,0 +1,117 @@
+{
+  // Caching only. Every gate stays a plain root script (runnable directly); turbo just skips a
+  // gate when NOTHING that can affect its result has changed. A failed task is never cached, so a
+  // cache hit can only ever replay a previous success for byte-identical inputs.
+  //
+  // Root tasks ("//#name") because the repo has no per-package scripts to orchestrate.
+  // Inputs are explicit (never the default) so that a config, tool script or tsconfig edit
+  // invalidates the cache. Untracked files (e.g. a new, unstaged source file) count as inputs.
+  "$schema": "https://turborepo.dev/schema.json",
+  // Hashed into EVERY task: dependency versions and the Node major (tsc/oxlint/vitest behaviour).
+  "globalDependencies": ["package.json", "bun.lock", ".node-version"],
+  "tasks": {
+    "//#format:check": {
+      // oxfmt checks every non-ignored file type, so everything except what .oxfmtrc.json ignores
+      // and what is generated output (outputs/logs would otherwise change the hash after a run).
+      "inputs": [
+        "**",
+        "!docs/**",
+        "!node_modules/**",
+        "!**/node_modules/**",
+        "!out/**",
+        "!**/dist/**",
+        "!coverage/**",
+        "!.turbo/**",
+        "!.git/**",
+        "!.claude/settings.local.json",
+        "!.claude/worktrees/**",
+        "!**/.tsbuildinfo",
+        "!bun.lock"
+      ]
+    },
+    "//#lint": {
+      // Root config files are matched by extension, and the extension list must cover every module
+      // flavour: vitest.config.mts was once missed by "*.ts" and a config edit replayed a cache hit.
+      // Type-aware: the result depends on all sources and on every tsconfig, not only .oxlintrc.json.
+      "inputs": [
+        "src/**",
+        "packages/**",
+        "tools/**",
+        "*.ts",
+        "*.mts",
+        "*.cts",
+        "*.mjs",
+        "*.cjs",
+        "*.json",
+        "*.jsonc",
+        ".oxlintrc.json",
+        "!packages/*/dist/**",
+        "!**/.tsbuildinfo"
+      ]
+    },
+    "//#knip": {
+      // knip reads sources, every package.json (entries, deps) and knip.json.
+      "inputs": [
+        "src/**",
+        "packages/**",
+        "tools/**",
+        "*.ts",
+        "*.mts",
+        "*.cts",
+        "*.mjs",
+        "*.cjs",
+        "*.json",
+        "*.jsonc",
+        // knip plugins read these too (lefthook binaries, CI workflow scripts, changeset config).
+        "lefthook.yml",
+        ".github/**",
+        ".changeset/**",
+        "!packages/*/dist/**",
+        "!**/.tsbuildinfo"
+      ]
+    },
+    "//#check:deps": {
+      // tools/check-deps.mjs walks packages/** and src/**; the script itself is an input.
+      "inputs": ["src/**", "packages/**", "tools/**", "!packages/*/dist/**", "!**/.tsbuildinfo"]
+    },
+    "//#check:pack": {
+      // Inspects built output, so it runs after the build and is keyed on that output.
+      "dependsOn": ["//#typecheck"],
+      "inputs": ["packages/*/dist/**", "packages/*/package.json", "tools/check-pack.mjs"]
+    },
+    "//#typecheck": {
+      "inputs": ["src/**", "packages/**", "*.json", "!packages/*/dist/**", "!**/.tsbuildinfo"],
+      "outputs": ["out/**", "packages/*/dist/**", "!node_modules/**"]
+    },
+    "//#typecheck:tests": {
+      // tsc over every test file and the sources they import; no outputs (noEmit).
+      "inputs": [
+        "src/**",
+        "packages/*/src/**",
+        "tsconfig*.json",
+        "packages/*/tsconfig*.json",
+        "package.json",
+        "packages/*/package.json",
+        "!packages/*/dist/**",
+        "!**/.tsbuildinfo"
+      ],
+      "outputs": []
+    },
+    "//#test:coverage": {
+      "inputs": [
+        "src/**",
+        "packages/**",
+        "*.ts",
+        "*.mts",
+        "*.cts",
+        "*.mjs",
+        "*.cjs",
+        "*.json",
+        "*.jsonc",
+        "!packages/*/dist/**",
+        "!**/.tsbuildinfo"
+      ],
+      "outputs": ["coverage/**"]
+    }
+  }
+}

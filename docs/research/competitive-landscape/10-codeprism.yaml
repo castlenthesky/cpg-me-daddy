@@ -1,0 +1,579 @@
+# Comparative study — codeprism · investigated 2026-09-14
+# One of five third-party code-graph tools studied to pressure-test cpg-me-daddy's own design.
+# House rules, enforced by schema shape, not by good intentions:
+#   * Every claim is a {claim, evidence, confidence} record. evidence is a path:line INSIDE THIS REPO.
+#   * confidence: verified = the cited lines were read. inferred = deduced from a manifest/doc/dep list.
+#   * A "no" is a finding: use not_applicable{} with >= 2 confirmed_by probes, never an empty field.
+# Sibling index: 00-index.yaml. Our schema under comparison: ../../.agent/knowledge/planning-sessions/
+#   2026-09-11.project-outline/50-schema.md.
+
+meta:
+  repo: codeprism
+  repo_path: /Users/brianhenson/projects/foss/codeprism
+  upstream: https://github.com/rustic-ai/codeprism.git
+  commit: 8115b77 2025-08-11
+  investigated_on: 2026-09-14
+  language: Rust, rust-version floor 1.82 (workspace.package.rust-version, Cargo.toml:22)
+  size:
+    source_files: 183
+    loc: 105440
+    counted_by: "find . -name '*.rs' -not -path './target/*' | xargs wc -l  (repo-wide, all crates+tests+benches)"
+  license:
+    spdx: "MIT OR Apache-2.0"
+    reuse: safe_to_borrow
+    note: >
+      Standard permissive Rust dual license (Cargo.toml:19, LICENSE-MIT, LICENSE-APACHE both present at
+      repo root). No SSPL/AGPL exposure at all — codeprism has no external database dependency (see
+      q5_graph_representation.storage), so cpg-me-daddy's RK4 concern (FalkorDB licensing) has no analog
+      here.
+  citation_base: /Users/brianhenson/projects/foss/codeprism
+  relevance:
+    verdict: in_scope
+    why: >
+      Parses JS/TS/Python/Java/Rust via tree-sitter into a language-agnostic node/edge graph
+      (GraphStore), with a dedicated cross-file symbol-resolution pass, held for graph queries and MCP
+      tool responses.
+    evidence: crates/codeprism-core/src/ast/mod.rs:61-151
+  coverage:
+    read_fully: [README.md, Cargo.toml, crates/codeprism-core/src/ast/mod.rs]
+    skimmed:
+      - crates/codeprism-core/src/graph.rs
+      - crates/codeprism-core/src/parser/mod.rs
+      - crates/codeprism-core/src/pipeline/mod.rs
+      - crates/codeprism-core/src/indexer/mod.rs
+      - crates/codeprism-core/src/linkers/symbol_resolver.rs
+      - crates/codeprism-core/src/repository/mod.rs
+      - crates/codeprism-lang-js/src/ast_mapper.rs
+      - crates/codeprism-lang-js/src/parser.rs
+      - crates/codeprism-analysis/src/complexity.rs
+      - crates/codeprism-storage/src/backends.rs
+      - crates/codeprism-dev-tools/src/graphviz_export.rs
+      - crates/codeprism-mcp-server/src/server.rs
+      - crates/codeprism-mcp-server/src/main.rs
+    not_read:
+      - crates/codeprism-lang-python/**
+      - crates/codeprism-lang-java/**
+      - crates/codeprism-lang-rust/**
+      - crates/codeprism-utils/**
+      - crates/mandrel-mcp-th/**
+      - crates/codeprism-moth-specs/**
+      - crates/codeprism-dev-tools/src/{dev_repl,parser_validator,performance_profiler,diff_comparison,ast_visualizer}.rs
+      - crates/codeprism-analysis/src/{duplicates,security,performance,api_surface,semantic/*}.rs (grep-probed only, not opened)
+      - crates/codeprism-mcp-server/src/tools/*.rs
+      - crates/codeprism-mcp-server/src/{config,response,error}.rs
+      - crates/codeprism-storage/src/{cache,config,graph,serialization,lib}.rs
+      - docs/**, specification/**, scripts/**, benches/**, examples/**, tests/**, test-projects/**
+    read_ratio: "~14 of 183 .rs files opened (several more grep-probed with exact line citations); the four language adapters, mandrel-mcp-th/moth-specs, and most of codeprism-analysis's detectors were not opened"
+  caveat: >
+    Studied one language adapter in depth (JS/TS); Python/Java/Rust adapters were not opened, so
+    claims about "the direct-AST-walk mechanism" and "no target resolution at emit time" are verified
+    for JS/TS only and treated as inferred (same crate-layout convention: adapter.rs/ast_mapper.rs/
+    parser.rs/types.rs repeats across all four lang crates per `find crates -name '*.rs'`) for the
+    others. codeprism-mcp-server/src/server.rs is ~5000+ lines and was read only in targeted slices
+    around confirmed emit/dispatch sites, not sequentially.
+
+study_summary:
+  thesis: >
+    codeprism is a Rust/tree-sitter MCP server that builds a language-agnostic AST graph
+    (Node/Edge/NodeId, entirely in-process via a DashMap-backed GraphStore) and exposes 20 MCP tools
+    over it. The single most interesting thing relative to cpg-me-daddy: despite marketing itself as
+    "Graph-First Intelligence," its bad-code-analytics tools (complexity, security, duplicates) are
+    implemented as regex/keyword scans over raw file text, not as traversals of the graph they build —
+    the graph and the analytics are two separate, disconnected subsystems wired into the same server.
+  one_line_verdict: "A predecessor pattern, not a peer: a real (if simplistic) AST graph exists, but the analytics layer bypasses it entirely, which is exactly the trap cpg-me-daddy's D6 is designed to avoid."
+  most_useful_finding: L1
+  sharpest_disagreement: >
+    q7's detectors read raw source text via regex (crates/codeprism-analysis/src/security.rs:63-288,
+    complexity.rs:114-131), invoked directly by the MCP server on file content
+    (crates/codeprism-mcp-server/src/server.rs:1746,2171), never touching GraphStore. This directly
+    contradicts D6 (analytics run on projections of the CPG, not raw text) and shows what "graph-based"
+    branding looks like when the analytics never actually query the graph.
+
+q1_graph_construction:
+  pipeline:
+    scan: "RepositoryScanner walks the filesystem and yields DiscoveredFile entries (crates/codeprism-core/src/scanner/mod.rs)"
+    parse: "BulkIndexer runs LanguageParser::parse per file in parallel via rayon, producing per-file Node/Edge sets as AstPatch objects (crates/codeprism-core/src/indexer/mod.rs:143-150,210)"
+    link: "SymbolResolver runs once over the whole assembled graph, adding cross-file Imports/Calls/Extends edges by name lookup (crates/codeprism-core/src/linkers/symbol_resolver.rs:36-56, invoked at crates/codeprism-core/src/indexer/mod.rs:478-479)"
+    store: "Resulting nodes/edges land in an in-process GraphStore (DashMap-indexed by id/file/name/kind) held by the MCP server (crates/codeprism-core/src/graph.rs:16-30, crates/codeprism-mcp-server/src/server.rs:221,248)"
+    watch: "A separate file-watcher pipeline (PipelineEventHandler) regenerates per-file AstPatch objects on change, but does not re-invoke SymbolResolver (crates/codeprism-core/src/pipeline/mod.rs:1-29; grep for SymbolResolver in patch/mod.rs returns nothing)"
+  entry_points:
+    - claim: "CLI binary `codeprism --mcp` is the sole entry point; it parses argv via clap and starts CodePrismMcpServer"
+      evidence: crates/codeprism-mcp-server/src/main.rs:12-51
+      confidence: verified
+    - claim: "The server starts without a repository; the first tool call (e.g. repository_stats) triggers RepositoryManager to scan+index on demand"
+      evidence: README.md:150-152
+      confidence: inferred
+      note: "Manifest/doc claim, not traced through server.rs's tool-dispatch match arms line by line."
+  build_model:
+    verdict: multi_pass_pipeline
+    claim: "Per-file parse+extract runs in parallel (rayon), then one global cross-file linking pass runs over the assembled graph; a third, separate incremental-patch pass exists for the file watcher but skips the linking pass entirely"
+    evidence: crates/codeprism-core/src/indexer/mod.rs:118-150,478-479
+    confidence: verified
+  findings:
+    - claim: "BulkIndexer defaults to enable_cross_file_linking: true and batch_size 30, max_parallel = num_cpus"
+      evidence: crates/codeprism-core/src/indexer/mod.rs:122-134
+      confidence: verified
+    - claim: "The incremental file-watch path (pipeline/mod.rs) builds AstPatch objects (nodes_add/edges_add/nodes_delete/edges_delete) but never calls SymbolResolver — cross-file edges from a changed file are not recomputed after a single-file edit unless a full BulkIndexer run happens again"
+      evidence: crates/codeprism-core/src/pipeline/mod.rs:1-29
+      confidence: verified
+      note: >
+        Confirmed by grep: `grep -n "SymbolResolver\|resolve" crates/codeprism-core/src/patch/mod.rs`
+        returns zero matches. This is the opposite of cpg-me-daddy's D5 bet (SYMBOL indirection so a
+        per-file replace never needs whole-graph relinking) — codeprism needs whole-graph relinking and
+        simply doesn't run it on the incremental path, so it likely goes stale.
+
+q2_ast_to_cpg:
+  mechanism:
+    verdict: direct_ast_walk
+    claim: "AstMapper recursively walks the tree-sitter CST with a manual TreeCursor, dispatching on cursor.node().kind() string literals to per-construct handler methods (handle_function, handle_class, handle_call_expression, ...)"
+    evidence: crates/codeprism-lang-js/src/ast_mapper.rs:76-136
+    confidence: verified
+  walk_strategy:
+    claim: "walk_tree recurses into every child of every node (goto_first_child/goto_next_sibling/goto_parent) regardless of whether that node kind is handled; unhandled kinds fall through a catch-all `_ => {}` arm and produce no graph node"
+    evidence: crates/codeprism-lang-js/src/ast_mapper.rs:77-136
+    confidence: verified
+  resolution:
+    claim: "No target resolution happens at emit time. handle_call_expression creates a Call node carrying only the callee's textual name (function_name) and an edge from the enclosing function to that Call node — no attempt to look up the actual target during the AST walk"
+    evidence: crates/codeprism-lang-js/src/ast_mapper.rs:267-296
+    confidence: verified
+  findings:
+    - claim: "No tree-sitter Query/S-expression DSL is used anywhere in the repo; every extraction is imperative cursor-walk + string match, not `.scm` queries"
+      evidence: "grep -rln \"tree_sitter::Query|QueryCursor\" crates --include=\"*.rs\" (no matches)"
+      confidence: verified
+    - claim: "The same EdgeKind::Calls variant is reused for three semantically different relationships: module→function containment, module→class containment, and caller→call-expression invocation"
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:177,207,291
+      confidence: verified
+      note: >
+        Surprising relative to cpg-me-daddy, which keeps containment (DECLARES/HAS_ENTRY) and invocation
+        (CALLS, with a resolution status enum) strictly separate. Here a query for "what does X call" and
+        "what does X declare" would need to be disambiguated by node kind, not edge kind.
+
+q3_ast_tooling:
+  parser:
+    claim: "tree-sitter 0.24 core crate; each language crate (codeprism-lang-{js,python,java,rust}) wraps its own grammar crate behind a LanguageParser trait implementation"
+    evidence: Cargo.toml:32-38
+    confidence: verified
+  grammars:
+    claim: "tree-sitter-javascript/typescript/python/java 0.23, tree-sitter-rust 0.23, pinned as workspace dependencies"
+    evidence: Cargo.toml:33-38
+    confidence: verified
+  incrementality:
+    verdict: plumbed_but_unused
+    claim: "ParseContext carries an old_tree: Option<Tree> and ParserEngine caches trees per file path, and codeprism-lang-js's parser calls tree_sitter's incremental `parse(content, old_tree)` entry point — but no code anywhere calls Tree::edit()/InputEdit before reusing an old_tree, which tree-sitter's incremental API requires to correctly reuse unchanged subtrees"
+    evidence: crates/codeprism-core/src/parser/mod.rs:10-38,140-150; crates/codeprism-lang-js/src/parser.rs:80
+    confidence: verified
+    note: >
+      Confirmed by `grep -rn "\.edit(" crates --include="*.rs"` returning zero matches repo-wide. The
+      types suggest incremental reparsing was designed for, but the load-bearing tree-sitter call
+      (recording what changed) is missing, so passing old_tree without an edit is either silently
+      ignored or produces undefined reuse — worth flagging since cpg-me-daddy's own web-tree-sitter
+      (D32) incremental path should double-check it calls the equivalent edit step correctly.
+  findings:
+    - claim: "cargo build.rs exists per language crate (e.g. crates/codeprism-lang-js/build.rs) suggesting grammar codegen/build-time setup, consistent with tree-sitter's usual cc-based grammar compilation"
+      evidence: crates/codeprism-lang-js/build.rs
+      confidence: inferred
+      note: "File located but not opened; inferred from filename convention only."
+
+q4_language_server:
+  verdict: no_lsp
+  not_applicable:
+    reason: >
+      No Language Server Protocol client/server code exists anywhere; the only "LSP" hit in the whole
+      codebase is an unrelated acronym collision (Liskov Substitution Principle in a code-smell
+      detector).
+    confirmed_by:
+      - probe: manifest
+        command: "cat Cargo.toml (workspace.dependencies list, full)"
+        result: "No lsp-types, tower-lsp, lsp-server, or similar crate present among ~35 pinned workspace dependencies"
+        evidence: Cargo.toml:24-77
+        confidence: verified
+      - probe: source
+        command: "grep -rIn \"lsp|language_server|LanguageServer\" crates --include=\"*.rs\" -l | grep -v test"
+        result: "One file matched, crates/codeprism-lang-java/src/analysis.rs — both hits are `evaluate_lsp`/Liskov Substitution Principle scoring, not Language Server Protocol"
+        evidence: crates/codeprism-lang-java/src/analysis.rs:2288
+        confidence: verified
+    what_fills_the_gap:
+      - claim: "tree-sitter CST walking (q2/q3) is the entire symbolic front end; cross-file name resolution is a bespoke post-pass (SymbolResolver), not an LSP-backed one"
+        evidence: crates/codeprism-core/src/linkers/symbol_resolver.rs:25-56
+        confidence: verified
+    confidence: verified
+
+q5_graph_representation:
+  storage:
+    claim: >
+      The graph the MCP server actually serves is entirely in-process and ephemeral: GraphStore is a
+      set of DashMap<NodeId,_> indices (nodes, outgoing_edges, incoming_edges, file_index,
+      symbol_index, kind_index) held as `Arc<GraphStore>` inside the server struct, built fresh via
+      GraphStore::new() at startup. A separate codeprism-storage crate implements
+      InMemory/File/SqliteGraphStorage backends, but it is declared as a Cargo dependency of
+      codeprism-mcp-server and never referenced by name anywhere in that crate's source.
+    evidence: "crates/codeprism-core/src/graph.rs:16-43; crates/codeprism-mcp-server/src/server.rs:221,248; crates/codeprism-mcp-server/Cargo.toml:48; grep -rn \"codeprism_storage|GraphStorage\" crates/codeprism-mcp-server/src (zero matches)"
+    confidence: verified
+    note: >
+      No persistence of the graph itself exists on the path a user actually runs — restarting the MCP
+      server means a full re-scan/re-parse/re-link from scratch. Contrast with cpg-me-daddy's FalkorDB
+      backing (persistent, incrementally updated via planDelta()).
+  node_schema:
+    claim: >
+      Node { id: NodeId, kind: NodeKind, name: String, lang: Language, file: PathBuf, span: Span,
+      signature: Option<String>, metadata: serde_json::Value }. NodeKind is a 13-variant enum: Module,
+      Class, Function, Method, Parameter, Variable, Call, Import, Literal, Route, SqlQuery, Event,
+      Unknown.
+    evidence: crates/codeprism-core/src/ast/mod.rs:61-91,269-287
+    confidence: verified
+  edge_schema:
+    claim: "Edge { source: NodeId, target: NodeId, kind: EdgeKind }. EdgeKind is a 9-variant enum: Calls, Reads, Writes, Imports, Emits, RoutesTo, Raises, Extends, Implements. No properties on edges beyond the type."
+    evidence: crates/codeprism-core/src/ast/mod.rs:113-151,440-449
+    confidence: verified
+  identity:
+    claim: >
+      NodeId is a 16-byte BLAKE3 hash of (repo_id, file_path, span.start_byte, span.end_byte,
+      `{kind:?}`) — i.e., identity is file-local and byte-offset-dependent, not name/symbol-keyed.
+      Because the hash includes absolute byte offsets, any edit earlier in the same file (even one that
+      doesn't touch a given construct) shifts that construct's span and therefore changes its NodeId.
+    evidence: crates/codeprism-core/src/ast/mod.rs:16-30
+    confidence: verified
+    note: >
+      This is the inverse of D5/D31's bet: cpg-me-daddy deliberately keys SYMBOL by fqn (stable across
+      unrelated edits) precisely to avoid this fragility. codeprism's own cross-file edges (built by
+      SymbolResolver, which runs after all files are parsed and IDs assigned) would need to be
+      entirely rebuilt any time an earlier node's span shifts, which is consistent with why linking is
+      a separate, whole-graph pass rather than a per-file incremental one (see q1).
+  findings:
+    - claim: "Literal, Route, SqlQuery, and Event node kinds are declared in the enum but never constructed by any of the four language extractors"
+      evidence: "grep -rn \"NodeKind::Parameter|NodeKind::Literal|NodeKind::Route|NodeKind::SqlQuery|NodeKind::Event\" crates/codeprism-lang-*/src/*.rs — only NodeKind::Parameter appears, and only in codeprism-lang-rust/src/ast_mapper.rs:952"
+      evidence_note: crates/codeprism-lang-rust/src/ast_mapper.rs:952
+      confidence: verified
+      note: "Schema vocabulary is aspirationally dense (route/SQL/event awareness suggests a framework-detection ambition) but practically unpopulated — the opposite failure mode from PR1's sparse-by-cardinality rule, which is deliberate rather than accidental here."
+
+q6_presentation_layer:
+  surfaces:
+    - name: "MCP tool server"
+      kind: mcp
+      claim: "20 MCP tools (repository_stats, explain_symbol, search_symbols, analyze_complexity, analyze_security, find_duplicates, batch_analysis, ...) dispatched from one large match statement inside CodePrismMcpServer, in a single >7000-line crate"
+      evidence: crates/codeprism-mcp-server/src/server.rs:2752 (analyze_complexity dispatch arm), README.md:196-227 (tool list)
+      confidence: verified
+    - name: "GraphViz / DOT export"
+      kind: dev-tool-cli
+      claim: "codeprism-dev-tools exposes a GraphVizExporter over the same core Node/Edge types, producing DOT-format diagrams for parser debugging, not for end-user MCP consumers"
+      evidence: crates/codeprism-dev-tools/src/graphviz_export.rs:1-13
+      confidence: verified
+    - name: "moth (Mandrel MCP Test Harness)"
+      kind: cli-testing
+      claim: "A separate crate (mandrel-mcp-th) providing an MCP protocol-compliance test runner with YAML specs (moth test/validate), unrelated to graph presentation"
+      evidence: README.md:103-126
+      confidence: inferred
+      note: "Located the crate (53 .rs files) but did not open its source; classification from README + file count only."
+  findings:
+    - claim: "Tool dispatch logic lives inline in server.rs rather than in the separate tools/ module directory that exists alongside it (tools/{core,search,analysis,workflow}.rs contain zero '\"name\":' tool-registration literals when grepped)"
+      evidence: "grep -c '\"name\":' crates/codeprism-mcp-server/src/tools/*.rs → all zero"
+      confidence: verified
+      note: "The modular tools/ directory appears to be scaffolding; the actual 20-tool surface is one large match in server.rs, making per-tool testing/auditing harder than a registry pattern would."
+
+q7_bad_code_analytics:
+  detectors:
+    - name: analyze_complexity
+      technique: "keyword/substring counting over raw file text (not the graph): cyclomatic = 1 + count of decision keywords like \"if\"/\"while\"/\"&&\"; cognitive = line-by-line brace/keyword heuristic with a manually tracked nesting_level counter"
+      output: "JSON metrics + threshold_warnings (cyclomatic > 10)"
+      evidence: crates/codeprism-analysis/src/complexity.rs:114-166
+      confidence: verified
+    - name: analyze_security
+      technique: "~20+ hand-written regex patterns matched against raw file content (SQL injection, XSS via innerHTML, eval, hardcoded secrets, weak crypto, path traversal, etc.)"
+      output: "JSON list of {type, severity, description, recommendation}"
+      evidence: crates/codeprism-analysis/src/security.rs:4,63-288
+      confidence: verified
+    - name: find_duplicates
+      technique: "Custom lightweight AST built by parse_file_ast(content: &str) via line classification (classify_line_type), then structural hashing/similarity comparison — a second, independent text-to-tree parser, not the tree-sitter-derived GraphStore"
+      output: "duplicate blocks with similarity scores and refactoring suggestions"
+      evidence: crates/codeprism-analysis/src/duplicates.rs:328-352,413,950
+      confidence: verified
+    - name: analyze_specialized_comprehensive
+      technique: "Hardcoded/fabricated JSON — a fixed 'vulnerabilities_found: 3' security analysis with fixed line numbers and descriptions, constructed regardless of the `target` argument passed in"
+      output: "JSON security/concurrency/architecture/performance report with static content"
+      evidence: crates/codeprism-mcp-server/src/server.rs:4169-4211
+      confidence: verified
+      note: >
+        This is not a stub clearly marked as such — it is wired live behind guidance/workflow tools and
+        returns confident, specific-looking findings (line 3, line 14, "SQL Injection", "Race
+        Condition") that are unconditional constants. A user calling this tool on any codebase gets the
+        same fabricated result. Strong cautionary data point for RK8-style "confidently wrong" output.
+  fix_support:
+    verdict: recommendations_only
+    claim: "Every detector emits a textual 'recommendation' string alongside findings (e.g. 'Use parameterized queries'); none of the analyzers examined produce an applicable patch/diff or codemod"
+    evidence: crates/codeprism-analysis/src/security.rs:63-70 (pattern+message pairs), crates/codeprism-analysis/src/complexity.rs:50-56
+    confidence: verified
+  absent:
+    - detector: "centrality / community detection (louvain, leiden, betweenness)"
+      looked_in: "grep -rln \"louvain|leiden|centrality|community_detect|betweenness\" crates --include=\"*.rs\""
+      result: "zero matches across the entire workspace"
+      confidence: verified
+    - detector: "taint tracking (source/sink/sanitizer dataflow)"
+      looked_in: "grep -rln \"taint\" crates --include=\"*.rs\" (source) + Cargo.toml dependency list (manifest)"
+      result: "One hit, a hardcoded 'tainted_inputs: 1' constant inside the fabricated analyze_specialized_comprehensive output (server.rs:4210); no dataflow/reaching-definitions machinery anywhere; no taint-related crate in Cargo.toml"
+      confidence: verified
+      note: "Confirms there is no real taint analysis — the only 'taint' in the codebase is a hardcoded number in the same fabricated-output function noted above."
+  findings:
+    - claim: "None of the three examined detectors (complexity, security, duplicates) query GraphStore; grep for GraphStore/graph_store/codeprism_core inside crates/codeprism-analysis/src/*.rs returns nothing"
+      evidence: "grep -rn \"GraphStore|graph_store|codeprism_core\" crates/codeprism-analysis/src/*.rs (zero matches)"
+      confidence: verified
+      note: "This is the central finding of this study — see study_summary.sharpest_disagreement."
+
+adjacent_findings:
+  - topic: "multi-repository tracking"
+    claim: "RepositoryManager already holds `repositories: HashMap<String, RepositoryInfo>` keyed by repo id, i.e. multiple repositories can be scanned/indexed into the process at once"
+    evidence: crates/codeprism-core/src/repository/mod.rs:160-175
+    confidence: verified
+    ties_to: []
+    note: "No X/D id in our list covers multi-repo workspace handling directly; flagged as prior art if that ever becomes a proposal."
+  - topic: "git-history awareness"
+    claim: "No git2, git-log parsing, or blame-derived features exist anywhere in the codebase"
+    evidence: "grep -rln \"git2|git_log|git blame|GitHistory\" crates --include=\"*.rs\" (zero matches)"
+    confidence: verified
+    ties_to: [X2]
+    note: "X2 (git awareness, proposed not agreed) has no analog or counter-example here — codeprism is a pure filesystem/AST-state snapshot tool."
+  - topic: "MCP-protocol test harness vs. graph-invariant gating"
+    claim: "mandrel-mcp-th (moth) is a generic MCP transport/protocol-compliance test runner (stdio/HTTP/SSE, JSON schema validation against YAML specs) — it validates that responses are well-formed MCP, not that the graph itself satisfies structural invariants"
+    evidence: README.md:103-126
+    confidence: inferred
+    ties_to: [X10]
+    note: "grep -rln \"invariant\" crates/mandrel-mcp-th crates/codeprism-moth-specs returns zero matches — confirms there is nothing analogous to cpg-me-daddy's assertGraphInvariants()/assertSchemaConformance() gates, only protocol-shape testing."
+  - topic: "MCP tool-surface sizing"
+    claim: "20 tools shipped (vs. cpg-me-daddy's AM3 ceiling of ≤12), all dispatched from one file"
+    evidence: README.md:196-227, crates/codeprism-mcp-server/src/server.rs:2752
+    confidence: verified
+    ties_to: [AM3]
+
+schema_mapping:
+  verdicts:
+    joern_aligned:
+      verdict: "no"
+      why: "No reference to Joern, no METHOD_FULL_NAME-style global keys, no Joern node/edge naming conventions anywhere in the schema or docs"
+      evidence: "grep -rin \"joern\" . --include=\"*.rs\" --include=\"*.md\" --include=\"*.toml\" (zero matches, repo-wide)"
+      confidence: verified
+    density:
+      verdict: mixed
+      why: >
+        The walk visits every CST node (q2), but only ~7 constructs actually emit graph nodes
+        (Module/Class/Function/Method/Variable/Call/Import, plus Parameter in the Rust adapter only) —
+        sparse in practice. But the *declared* vocabulary (13 node kinds, including unused
+        Literal/Route/SqlQuery/Event) is denser than what's built, an inconsistency PR1 doesn't have to
+        contend with because cpg-me-daddy's schema is machine-checked against emit sites via test:schema.
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:93-135
+      confidence: verified
+    identity_model:
+      verdict: file_local
+      why: "NodeId hashes repo_id + file_path + byte-offset span + kind; there is no separate stable symbol-keyed identity layer — cross-file edges are computed post hoc by name lookup and point directly at these file-local, offset-fragile ids"
+      evidence: crates/codeprism-core/src/ast/mod.rs:16-30
+      confidence: verified
+    update_model:
+      verdict: hybrid
+      why: >
+        Per-file parsing is incremental in intent (ParseContext.old_tree, ParserEngine tree cache,
+        file-watcher-driven AstPatch generation) but the only cross-file symbol-resolution pass
+        (SymbolResolver.resolve_all) runs solely from BulkIndexer, i.e. a full-repository pass — it is
+        never invoked from the incremental patch path.
+      evidence: crates/codeprism-core/src/indexer/mod.rs:478-479
+      confidence: verified
+  node_vocabulary:
+    - theirs: Module
+      ours: MODULE
+      fit: approx
+      note: "One Module node per file (crates/codeprism-lang-js/src/ast_mapper.rs:51-68); theirs conflates what we split into FILE + MODULE"
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:51-68
+    - theirs: Class
+      ours: TYPE_DECL
+      fit: approx
+      note: "No separate interface/trait distinction observed in the JS adapter"
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:182-208
+    - theirs: "Function / Method"
+      ours: METHOD
+      fit: approx
+      note: "Both variants map to our single METHOD label; theirs splits by AST node kind (method_definition vs function_declaration/arrow_function)"
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:139-150
+    - theirs: Parameter
+      ours: PARAM
+      fit: approx
+      note: "Only emitted by the Rust adapter among the four studied/located; not confirmed for JS/Python/Java"
+      evidence: crates/codeprism-lang-rust/src/ast_mapper.rs:952
+    - theirs: Variable
+      ours: (none)
+      fit: extra
+      note: "cpg-me-daddy's 14 labels have no general local-variable node; theirs creates one per variable_declarator"
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:213-262
+    - theirs: Call
+      ours: CALL
+      fit: exact
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:277-283
+    - theirs: Import
+      ours: IMPORT
+      fit: exact
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:300-325
+    - theirs: "Literal / Route / SqlQuery / Event"
+      ours: (none)
+      fit: extra
+      note: "Declared in the NodeKind enum but never constructed anywhere (see q5 findings) — effectively dead schema, not a real divergence"
+      evidence: crates/codeprism-core/src/ast/mod.rs:81-89
+    - theirs: Unknown
+      ours: UNKNOWN
+      fit: exact
+      evidence: crates/codeprism-core/src/ast/mod.rs:90
+  edge_vocabulary:
+    - theirs: Calls
+      ours: CALLS
+      fit: approx
+      note: "Overloaded for containment (module→function, module→class) AND invocation (caller→Call node); ours keeps these separate"
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:177,207,291
+    - theirs: Imports
+      ours: IMPORTS
+      fit: exact
+      evidence: crates/codeprism-lang-js/src/ast_mapper.rs:325
+    - theirs: Extends
+      ours: INHERITS_FROM
+      fit: exact
+      evidence: crates/codeprism-core/src/ast/mod.rs:131-132
+    - theirs: Implements
+      ours: INHERITS_FROM
+      fit: approx
+      note: "Ours has one INHERITS_FROM edge type for both; theirs distinguishes Extends vs Implements at the type level"
+      evidence: crates/codeprism-core/src/ast/mod.rs:133-134
+    - theirs: "Reads / Writes"
+      ours: REACHING_DEF
+      fit: approx
+      note: "Closest analog is our dataflow edge, but theirs are plain structural read/write pointers with no def-use chain semantics"
+      evidence: crates/codeprism-core/src/ast/mod.rs:119-122
+    - theirs: "Emits / RoutesTo / Raises"
+      ours: (none)
+      fit: extra
+      note: "Declared edge kinds with no construction sites found in the JS adapter read (see q2/q5); event/route/exception modeling is aspirational here"
+      evidence: crates/codeprism-core/src/ast/mod.rs:125-134
+  ours_unmatched:
+    - ours: "DIRECTORY, FILE"
+      why_absent_there: "codeprism stores the file path as a PathBuf property on every Node instead of modeling filesystem hierarchy as graph nodes"
+      evidence: crates/codeprism-core/src/ast/mod.rs:279-280
+    - ours: SYMBOL
+      why_absent_there: "No stable, fqn-keyed cross-file identity node exists; resolution is a name-indexed post-pass that links directly to the byte-offset-based AST node ids (see identity_model)"
+      evidence: crates/codeprism-core/src/linkers/symbol_resolver.rs:58-85
+    - ours: "COMMUNITY, MEMBER_OF, TARGETS, DEPENDS_ON"
+      why_absent_there: "No centrality/community-detection code anywhere (see q7 absent)"
+      evidence: "grep -rln \"louvain|leiden|centrality\" crates (zero matches)"
+    - ours: "TAG, TAGGED_BY"
+      why_absent_there: "No overlay-tagging system; findings are ad hoc regex-scanner JSON, not graph-attached tags"
+      evidence: crates/codeprism-analysis/src/security.rs:63-70
+    - ours: META_DATA
+      why_absent_there: "Graph-level stats are computed on demand (GraphStore::get_stats) rather than persisted as a queryable singleton node"
+      evidence: crates/codeprism-core/src/graph.rs:131-143
+  theirs_unmatched:
+    - theirs: Variable
+      why_we_lack_it: "PR1's sparse-by-cardinality rule deliberately omits a node per local variable/declarator to keep the graph small"
+      would_we_want_it: "no"
+    - theirs: "Literal, Route, SqlQuery, Event node kinds"
+      why_we_lack_it: "We have no framework/protocol-aware node types yet; these are also unused dead schema in codeprism itself, so there's little to learn from the shape, only from the ambition"
+      would_we_want_it: "maybe"
+    - theirs: "Emits, RoutesTo, Raises edge kinds"
+      why_we_lack_it: "No event/HTTP-route/exception modeling in v1; same caveat as above — unconstructed in the source repo, so not battle-tested prior art"
+      would_we_want_it: "maybe"
+
+lessons_for_cpg_me_daddy:
+  - id: L1
+    lesson: "Never let cross-file resolution depend on a single whole-graph pass that only runs during full reindex — every incremental (single-file) update path must either re-run resolution scoped cheaply or must not need to, by construction."
+    stance: reject
+    ties_to: [D5, D26, RK2]
+    why: >
+      codeprism's SymbolResolver.resolve_all() is the only place cross-file Calls/Imports/Extends edges
+      get created, and it is invoked exclusively from BulkIndexer (full reindex). Its own file-watcher
+      incremental pipeline never calls it, so a single-file edit's new/changed calls are simply absent
+      from cross-file query results until the next full reindex. This is precisely the failure mode
+      D5's SYMBOL/fqn indirection is designed to make structurally impossible.
+    cost: "We give up nothing — this confirms the design bet already made; the cost is the ongoing discipline of keeping SYMBOL keys stable so no analog pass is ever needed."
+    evidence: crates/codeprism-core/src/indexer/mod.rs:478-479
+    confidence: verified
+  - id: L2
+    lesson: "Never key a graph-wide stable identity (anything other identity depends on) off byte offsets — an unrelated edit earlier in the same file must not change a node's identity."
+    stance: reject
+    ties_to: [D5, D31, PR5]
+    why: >
+      NodeId::new hashes span.start_byte/end_byte alongside file+kind. Any edit before a construct in
+      the same file shifts every subsequent byte offset, so identity churns even when the construct's
+      own text is untouched. cpg-me-daddy's SYMBOL-by-fqn avoids this by design, but it's worth
+      naming explicitly as a trap: it would be easy to reach for "hash of span" as a shortcut identity
+      scheme for non-SYMBOL nodes (METHOD, CALL, etc.) and this repo shows exactly why that's fragile
+      whenever cross-references (like codeprism's post-hoc edges) get built against those ids.
+    cost: "Reject means: keep D31's node id scheme (path+content-derived, not just byte offsets) disciplined for every node kind that anything else references, not only SYMBOL."
+    evidence: crates/codeprism-core/src/ast/mod.rs:16-30
+    confidence: verified
+  - id: L3
+    lesson: "Keep the schema-to-emit-site machine check (test:schema) as a hard gate — a declared vocabulary silently drifts from what's actually built without one."
+    stance: watch
+    ties_to: []
+    ties_to_none_reason: "General schema-hygiene observation; no single D/PR id names 'enforce emit-site coverage of declared labels' specifically, though D37's machine-checked alignment is adjacent."
+    why: "NodeKind::{Literal,Route,SqlQuery,Event} and EdgeKind::{Emits,RoutesTo,Raises} exist in the type system but are never constructed by any extractor located — dead schema that a reader would reasonably assume is live."
+    cost: "Watch trigger: if test:schema ever starts checking only 'label is declared' rather than 'label is reachable from at least one emit site under a fixture,' add the latter."
+    evidence: crates/codeprism-core/src/ast/mod.rs:81-89
+    confidence: verified
+  - id: L4
+    lesson: "Analytics must query the graph, not re-parse or re-scan raw source text under a different code path — otherwise 'graph-based analysis' is a marketing claim, not an architecture."
+    stance: reject
+    ties_to: [D6]
+    why: >
+      analyze_complexity, analyze_security, and find_duplicates all operate on raw file content via
+      keyword counting, ~20+ hand-rolled regexes, and a second bespoke line-classifying parser,
+      respectively — none of them touch GraphStore. The CPG that codeprism spends significant effort
+      building (tree-sitter walk, cross-file linker, in-memory index) is simply unused by its headline
+      "bad code" tools. This is the sharpest disagreement found in this study.
+    cost: "Reject means: every future analytics tool (complexity metrics, taint, community detection) must be implemented as a query/projection over GraphStore/FalkorDB, never as a parallel text-scanning subsystem, even when text-scanning would ship faster."
+    evidence: crates/codeprism-analysis/src/complexity.rs:114-131
+    confidence: verified
+  - id: L5
+    lesson: "Never let a tool return statically fabricated findings dressed as analysis output, even as a stopgap — mark unimplemented analysis as unimplemented, not as plausible-looking constants."
+    stance: reject
+    ties_to: [RK8, D21]
+    why: >
+      analyze_specialized_comprehensive ignores its own `target` argument and returns a hardcoded JSON
+      block ('vulnerabilities_found: 3', specific line numbers, specific CWE-sounding descriptions) for
+      any input. A caller — human or agent — cannot distinguish this from a real finding without
+      reading the source. D21's "readers never blocked, explicit status" principle is the direct
+      counter-pattern: an explicit "not yet implemented" status is strictly better than a confident
+      fabrication.
+    cost: "Reject means paying the honesty cost of an explicit not-yet-available status for any MCP tool whose backing analysis isn't real, even when a filled-in JSON shape looks more complete to a demo."
+    evidence: crates/codeprism-mcp-server/src/server.rs:4169-4211
+    confidence: verified
+  - id: L6
+    lesson: "If we ever add tree-sitter old-tree reuse as a performance optimization, verify the InputEdit/Tree::edit() call is actually wired before trusting the 'incremental' label."
+    stance: watch
+    ties_to: [D32]
+    why: "codeprism's ParseContext/ParserEngine plumb an old_tree through to tree-sitter's incremental parse() call, but no .edit() call exists anywhere in the repo to inform tree-sitter what changed, which is required for correct incremental reuse per tree-sitter's own API contract."
+    cost: "Watch trigger: before or after adopting any old-tree-reuse optimization in the web-tree-sitter WASM path (D32), add a regression test asserting edit() (or the WASM equivalent) is called with the actual changed byte range prior to reparse."
+    evidence: crates/codeprism-core/src/parser/mod.rs:140-150
+    confidence: verified
+  - id: L7
+    lesson: "Keep the MCP tool surface both small and structurally modular — a large single-file dispatch match for every tool makes the ≤12-tool discipline (AM3) easy to violate unnoticed."
+    stance: adopt
+    ties_to: [AM3]
+    why: "codeprism ships 20 tools, all dispatched inline inside one server.rs file (thousands of lines), while a parallel tools/ module directory exists but contains no actual tool-registration logic (grep for tool-name literals returns zero hits there). The structure invites tool-count creep because there's no single registry to eyeball."
+    cost: "Adopt means keeping MCP tool registration in one small, enumerable place (not scattered across a large server file) so AM3's ≤12 ceiling stays visibly enforceable at a glance, not just by convention."
+    evidence: crates/codeprism-mcp-server/src/server.rs:2752
+    confidence: verified
+  - id: L8
+    lesson: "Persist the graph itself, not just cached analysis results — an in-process-only graph means every server restart pays a full rescan/reparse/relink cost."
+    stance: adopt
+    ties_to: [PR3]
+    why: "codeprism's live graph (GraphStore) is pure in-memory DashMap state with no wiring to its own codeprism-storage crate (which does implement File/Sqlite persistence but is an unused dependency of the MCP server, per Cargo.toml + zero source references). Every server start is a cold full-repo index."
+    cost: "Confirms the value of FalkorDB as durable backing store; the cost we already pay is the planDelta()/incremental-write discipline needed to keep that store fresh without full reindexes."
+    evidence: crates/codeprism-mcp-server/Cargo.toml:48
+    confidence: verified
+
+amendment_candidates: []
+
+open_questions:
+  - q: "Does SymbolResolver.resolve_inheritance (unread, lines 260-418) use the same first-match-by-name heuristic as resolve_call_target, or something more careful for Extends/Implements?"
+    blocked_by: "Time budget; only lines 1-260 of symbol_resolver.rs (418 total) were read"
+    cheap_next_probe: "Read crates/codeprism-core/src/linkers/symbol_resolver.rs:260-418"
+    why_it_matters: "Would sharpen L1's confidence claim from 'calls only' to 'all cross-file resolution'"
+  - q: "Do the Python/Java/Rust language adapters follow the same direct-AST-walk-with-textual-callee-name pattern confirmed for JS/TS, or does any of them attempt real target resolution at emit time?"
+    blocked_by: "Only codeprism-lang-js was opened; the other three lang crates were not read beyond one grep hit"
+    cheap_next_probe: "diff the ast_mapper.rs / adapter.rs files across crates/codeprism-lang-{python,java,rust}/src against crates/codeprism-lang-js/src/ast_mapper.rs"
+    why_it_matters: "L4/L1 are currently strongest for JS/TS; confirming parity across languages would remove the caveat in meta.caveat"
+  - q: "Is codeprism-storage's SqliteGraphStorage ever exercised by any binary target (CLI subcommand, benchmark), or is it purely dead code reachable only from its own crate's tests?"
+    blocked_by: "Only grepped codeprism-mcp-server for references (zero); did not check crates/codeprism-dev-tools or any benches/ for usage"
+    cheap_next_probe: "grep -rn \"SqliteGraphStorage|FileGraphStorage\" crates benches --include=\"*.rs\""
+    why_it_matters: "Would confirm L8's 'unused dependency' claim extends beyond just the MCP server crate"

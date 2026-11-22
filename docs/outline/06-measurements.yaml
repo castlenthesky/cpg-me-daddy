@@ -1,0 +1,339 @@
+# 06 — Measurements
+#
+# Every settled number, with the conditions it was measured under. A number quoted anywhere in this
+# outline points here. A number without a boundary is not a fact. "may_no_longer_argue" items are
+# settled within their stated boundary; reopening one requires a NEW measurement that crosses the boundary.
+#
+# Environment for the R0.5 spikes (S1–S4, SP9), 2026-09-16: Apple Silicon macOS (Darwin 25.5.0),
+# FalkorDB falkordb/falkordb:v4.20.4 (module 42004, Redis 8.6.3) in Docker over loopback, Node 20.20.2.
+# Environment for the database-selection benchmark, 2026-09-11: same image in Docker on Apple Silicon,
+# 8 GB / 18 CPU, TIMEOUT_DEFAULT 30000, CACHE_SIZE 200, NODE_CREATION_BUFFER 65536, RDB off, client
+# falkordb 6.8.0, batch 1000, 4 reader threads, 200 measured cycles.
+
+ids_convention: "M-<AREA>-<name>; referenced from other files as M-…"
+
+latency:
+  M-LATENCY-fsevents:
+    value: "p50 70.37 ms (n=55) and 73.69 ms (n=50); within 5%"
+    what: "T0->T1: filesystem change to watcher callback on macOS FSEvents"
+    boundary: "macOS only; precedes any of our code; may not be argued against or 'optimised'"
+  M-LATENCY-debounce:
+    value: "101.58 ms p50"
+    what: "the 100 ms trailing debounce constant as measured on the declared clock"
+    boundary: "policy, dialable (trailingMs/ceilingMs)"
+  M-LATENCY-pipeline-empty:
+    value: "p95 13.76 ms (p50 11.90, max 15.51, n=60)"
+    what: "T2->T3 pipeline for a 337-LOC TS file, 61-node delta, ~empty graph (S1b)"
+  M-LATENCY-pipeline-488k:
+    value: "p95 70.65 ms (p50 64.78, max 76.41, n=55)"
+    what: "T2->T3 for a 1,068-LOC Python file, 409-node delta, 488,656-node graph (S1a), pre-atomic 16-query write"
+    note: "scaling has NOT plateaued: an identical delta cost 2.2x more at 488k than at 435 nodes; scope-delete 0.94 -> 10.84 ms p50"
+  M-LATENCY-pipeline-3495loc:
+    value: "p95 117.71 ms"
+    what: "size sweep, 3,495-LOC file at 488k nodes"
+  M-LATENCY-user-clock:
+    value: "195.04 ms p95 (S1b), ~141 ms p95 (S1a)"
+    what: "T0->T3 including FSEvents and debounce, idle system, one file, no cascade"
+  M-LATENCY-db-share:
+    value: "66–82% of the save at p50 (S1b: 66/82/75% at 337/638/2,104 LOC; S1a: 79.9%)"
+    what: "the DB write's share of the single-file pipeline BEFORE the atomic rewrite"
+  M-LATENCY-parse:
+    value: "p50 1.45–9.48 ms over 337–2,104 LOC; 5.12 ms @1,068 LOC; p95 15.65 ms @3,495 LOC"
+    what: "tree-sitter parse per file"
+    boundary: "at worst ~18% of the DB cost on the same save; parser choice may not be argued on latency"
+  M-LATENCY-cascade-counterfactual:
+    value: "~46 ms/file, linear, zero batching benefit; k=10 -> 517 ms p95; k=25 -> 1,224 ms p95; ~11 files crosses 500 ms"
+    what: "cascade cost (S1a only, UNREPLICATED) measured against the 16-query write path"
+    boundary: "COUNTERFACTUAL: cascade is zero in the shipped code because the feature is absent. Re-measure after the atomic write (U5) and with the resolver present (U7)."
+  M-LATENCY-cold-index:
+    value: "1,802 files / 887k LOC -> 497k nodes in 43.1 s (23.9 ms/file)"
+    what: "cold bulk index of the Python stdlib fixture"
+    boundary: "excluded from the freshness budget; sizes the cold-index UX and the cost of a full re-index"
+
+budget:
+  M-BUDGET-assembled:
+    what: "one 1,068-LOC Python save, zero cascade, 488k-node graph, after the atomic write and with the U8 resolver; every term measured"
+    legs:
+      - { leg: "FSEvents T0->T1", ms: 74, source: M-LATENCY-fsevents }
+      - { leg: "debounce trailing", ms: 100, source: M-LATENCY-debounce }
+      - { leg: "parse", ms: 5, source: M-LATENCY-parse }
+      - { leg: "extract + seal + link", ms: 8, source: "S1a pipeline p50 less DB less parse" }
+      - { leg: "RESOLVE, 596 sites", ms: 1478, source: "0.5585 sites/LOC x 2.4788 ms/site (M-RESOLVE-density, M-RESOLVE-throughput)" }
+      - { leg: "write, one atomic statement", ms: 8, source: M-FALKOR-atomic }
+      - { leg: "read-back", ms: 1, source: M-FALKOR-visibility }
+    total_p50_ms: 1674
+    against_ms: 2000
+    verdict: "fits at p50 with ~326 ms to spare; FAILS at any p95. One term is 88%. The design previously believed ~405 ms; the gap (1,269 ms) is the entire stated headroom, consumed by the one term that was derived instead of measured (CS-7)."
+    confidence: "high on the arithmetic, medium on the resolver term (it applies full-pass amortisation to a per-save loop; the harness measures the designed pipeline, DQ-04)"
+  M-BUDGET-break-points:
+    values:
+      - "perFileMs 500 starts truncating resolution at ~202 sites ≈ 361 LOC in one file"
+      - "single-file budget exhausted at ~725 sites ≈ 1,300 changed Python LOC"
+      - "cascade at the perFileMs cap, serialized: k <= 3 files"
+      - "cascade at S3a's average file (258 LOC, 144 sites): k <= 5 files"
+      - "with the burst floor (574 ms, not 174) at k=10: 82 changed LOC per file"
+    rule: "the binding constraint is ~725 ref sites per save, however distributed, not a file count. Never quote '~11 files'."
+  M-BUDGET-fixed-floor:
+    value: "≈174 ms = FSEvents 74 + trailing 100; 8.7% of 2,000 ms; the pipeline's share is 1,826 ms"
+    note: "the floor is 574 ms on a burst that hits the 500 ms ceiling"
+
+sparsity:
+  M-SPARSITY-structural:
+    value: "0.361 n/LOC (S2a, 26 files / 7,356 LOC; p50 0.38, p95 0.51, max 0.54) and 0.429 n/LOC (S2b, 44 files / 19,621 LOC; p50 0.373, p95 0.615, max 0.849)"
+    against: "1.5 n/LOC bar"
+    verdict: "met with 3.5–4x headroom; 0 of 70 files exceeded the bar; two lineages, two corpora, two vocabularies within 19%"
+  M-SPARSITY-expression-multiplier:
+    value: "5.55x (S2a; p50 5.23, min 3.78, max 17.93) and 5.88x (S2b; p50 6.36, p95 9.40, min 4.78, max 16.40); conservative floor 2.42x (best file x strictest definition); 43/44 files >= 5x"
+    verdict: "'collect everything now, prune later' is REJECTED; the <2x amendment band is unreachable"
+    boundary: "the expression tier is MODELLED in both replicas, not shipped; read/render cost at ~6x nodes is unmeasured"
+  M-SPARSITY-cst-ceiling:
+    value: "16.6x structural (TS 21.8x, Py 14.9x)"
+    what: "a literal keep-the-whole-CST tier"
+  M-SPARSITY-composition:
+    values: ["IDENTIFIER alone = 3.1–3.3x the whole structural tier", "CALL = 51–55% of the structural tier", "payload multiplier raw 5.32–5.44x, gzip 4.70x; 577 vs 563 B/node (tiers cost the same per node)"]
+  M-SPARSITY-anchor-correction:
+    was: "~450 structural / ~3,000 expression nodes per 300-LOC file"
+    measured: "108 / 602 (S2a) and 112 / 796 (S2b)"
+    rule: "the RATIO (~6.67x) was sound; the absolutes were ~4x too high. Never re-quote 450/3000."
+  M-SPARSITY-language-split:
+    values: ["Python 3.78–5.52x / 0.453 n/LOC", "TypeScript 5.55–6.96x / 0.371 n/LOC"]
+  M-SPARSITY-import-gap:
+    value: "IMPORT declared in the schema but never emitted by the M0.9 extractor: 118 statements uncounted"
+    fix: "C-EXTRACT's total CoverageManifest"
+
+resolution:
+  M-RESOLVE-ceiling:
+    value: "CLI-only reaches 31.0% (1,197 / 3,859 edges, S3a, 63 files / 16,253 Py LOC / 9,077 ref sites) and 32.6% (28 / 86, S3b, 305 sites) of achievable edges"
+    verdict: "<80% band, both replicas: a headless high-precision resolver is a FUNDED, GATED step, not an extra"
+    boundary: "Python only"
+  M-RESOLVE-receiver-gap:
+    value: "RECEIVER/EVAL_TYPE = 59.3% of host edges (2,289 / 3,859); the CLI emits zero by explicit refusal; 57 of 58 missed sites are receiver-unknown"
+    what: "the ENTIRE gap is one capability: receiver type inference"
+  M-RESOLVE-import-ceiling:
+    value: "imports 2/2 = 100% of ceiling with CLI-only resolution; call 26/42 = 61.9%; receiver 0/24; receiver-type 0/18"
+    note: "the most CLI-favourable defensible denominator (call+import edges) is 94.4%; no denominator reaches 95%"
+  M-RESOLVE-no-config-fixture:
+    value: "52.4% (11 / 21) on a flat src/ with no pyproject/venv/config"
+    what: "python-path resolves cross-file imports where a checker would not (nothing puts a bare src/ on its search path); the reason python-path stays in the chain behind the checker"
+  M-RESOLVE-precision:
+    value: "0 disagreements across 305 sites; 28/28 identical target fqns"
+    what: "the headless resolver is a strict correct subset of the host; the deficit is RECALL, not precision"
+    boundary: "Python, 305 sites, one fixture"
+  M-RESOLVE-headless-cost:
+    value: "~313 lines in a 2-hour timebox"
+    what: "a basedpyright-langserver subprocess driver over stdio that obtained the ENTIRE host answer set under plain node with zero vscode import"
+    proof: "require hook: 31 modules, vscode-matching []; Module._load trap: 0 vscode requests across 5 packages"
+  M-RESOLVE-density:
+    value: "0.5585 ref sites/LOC (9,077 / 16,253)"
+    rule: "replaces the derived 0.2 sites/LOC everywhere"
+  M-RESOLVE-throughput:
+    value: "22.5 s / 9,077 sites = 2.4788 ms/site saturated at concurrency 12 (n=27,228, 3 bit-identical runs)"
+    per_site_latency: "p50 9 ms, p95 58 ms, p99 94, max 349 at concurrency 12 (S3a); p50 7.41, p95 396, max 1,423 serialized (S3b) — the 6.8x p95 divergence is concurrency, not the server"
+    rule: "replaces the derived best-case per-site figure; concurrency does not rescue the budget: 2.4788 ms/site IS the saturated throughput"
+    boundary: "full-pass amortisation; a per-save loop against a warm document is UNMEASURED (the harness's first job)"
+  M-RESOLVE-lsp-loss:
+    value: "the VS Code LSP route loses 13.4% of its own resolved statuses before they become edges (1,464 -> 1,268); the CLI loses 0%"
+  M-RESOLVE-model-cap:
+    value: "17 of 21 remaining LSP misses are parameter/with bindings that mint no node; fixing the significance table lifts the ceiling 86 -> ~103 with no resolver work"
+    what: "the ceiling is capped by the GRAPH MODEL, not the resolver"
+  M-RESOLVE-warmup:
+    values: ["MAX_CONCURRENCY = 12 (sequential does not finish on a real workspace; unbounded floods the server into empty answers)", "WARMUP_BUDGET_MS = 4000, retry every 750 ms (no public 'is the language server ready' API)"]
+    boundary: "measured against VS Code's Pylance; re-measure per headless backend"
+  M-RESOLVE-typescript:
+    value: UNMEASURED
+    rule: "both S3 resolvers were .py-gated; no tsserver was driven. Nothing about TS resolution may be inferred from Python numbers (U9 spike first)."
+
+legibility:
+  M-LEGIBILITY-noise:
+    value: "CORRECT re-rendered: 17.90% of pixels differ [17.57–18.18], p50 of 12 jitter seeds"
+    what: "the renderer's own self-noise floor (bare Math.random() in layout.ts:236-237 while :278 documents determinism)"
+  M-LEGIBILITY-defects:
+    C1_dropped_subtree: "52 nodes (a whole directory) removed: pixel-diff 22.18% = 1.24x noise; the hole does NOT exist: largest empty sector 30.20° vs CORRECT's 30.37° (weight-proportional slicing closes the gap); 86.8% of surviving nodes move — 'changed', never 'where'"
+    C2_orphaned_symbol: "7 ghosts: 19.90% = 1.11x; marginally visible at ~7.5x zoom as a 20px grey __root__ dot at dead centre; legend rows sum 665 while 666 points render"
+    C3_duplicated_cluster: "distinct ids: 24.19% = 1.35x (63 normal file pairs are already tighter than the twin); SAME ids: IMPOSSIBLE — layout.ts:108 dedupes: 699 payload nodes render and report as 658, pixel-diff 0.31%"
+    C4_stale_subgraph: "18.21% = 1.02x; 4 of 12 seeds land INSIDE CORRECT's own range; displacement p50 2.7u of a 708u radius; the defect is entirely in node NAMES and nothing draws labels"
+    verdict: "the picture catches NONE of the four. It is a liveness check, not a correctness check."
+    boundary: "seed layout only, one fixture, n=1 per defect class, n=0 human subjects ('a human cannot tell' is inferred from the noise floor)"
+  M-LEGIBILITY-required-checks:
+    what: "the four non-visual checks S4 made mandatory; they became verify's check set (DQ-06)"
+    map: { C1: filesystem-reconciliation, C2: identity-invariants, C3: "id-uniqueness + render-reconciliation", C4: "revision-reconciliation (P-B)" }
+  M-LEGIBILITY-golden-image:
+    value: "impossible today"
+    rule: "golden-image diffing needs a seed threaded through layoutPayload (U2b); no gate is an image diff even after that"
+
+falkordb:
+  M-FALKOR-atomic:
+    value: "450 nodes + 449 edges in ONE query: p50 6.14 / p95 7.91 / max 13.67 ms @99,900 nodes; p50 7.93 / p95 15.77 / max 25.30 ms @499,950 nodes; repeat sessions p50 3.01 / 6.14 / 7.52"
+    honest_band: "p50 ≈ 3–8 ms, p95 <= 16 ms"
+    rule: "the latency band is a LOCAL benchmark, never a CI gate (max 25.30 ms was recorded in the same session; CI runners will flake). CI asserts statementCount === 1 (DQ-10)."
+  M-FALKOR-51x:
+    value: "batched@50 (19 queries) p50 38.27 / p95 46.61 ms; 900 small queries p50 390.46 / p95 477.81 ms = 51x slower than one query; ~90% of that is round-trip overhead (0.43 ms/query implied; PING RTT 0.236 ms; server-side CREATE 0.044 ms)"
+    what: "FalkorDB is not the bottleneck; the write SHAPE is"
+  M-FALKOR-6x:
+    value: "S1a's 16-query commit p50 49.63 ms @488k vs SP9's one-query p50 7.93 ms @500k on equivalent work: ~6x available from rewriting writeDelta as one atomic statement"
+    note: "overturns S1a's own claim that batching recovers only ~8 ms; the win is ~42 ms"
+  M-FALKOR-visibility:
+    value: "write visible on the next round trip: p50 0.425 / p95 0.790 / max 2.693 ms (n=50); S1b saw it first try 190/190"
+    rule: "no settling window exists or may be added"
+  M-FALKOR-rw-concurrency:
+    value: "1,404 reads completed inside one 1,127 ms write; rare ~50–120 ms commit-phase stalls (4 of ~1,400 samples, frequency uncharacterised); under 342 replaces/s: read p95 0.95 -> 2.40 ms, max 6.9 -> 22.5 ms"
+  M-FALKOR-ro-query:
+    values:
+      - "RO_QUERY rejects exactly 2 of 24 procedures (db.idx.fulltext.createNodeIndex, db.idx.fulltext.drop), both mode=WRITE; no hidden third category; all algo.* permitted"
+      - "rejection text: exactly 'graph.RO_QUERY is to be executed only on read-only queries', same for SET/MERGE/DELETE/CREATE INDEX and writes hidden in CALL {}"
+      - "RO_QUERY vs QUERY latency identical (p50 0.38 vs 0.36 ms) — justify RO_QUERY on the guard rail, NOT on concurrency"
+      - "GRAPH.QUERY on a missing key silently CREATES it; RO_QUERY errors 'Invalid graph operation on empty key'"
+  M-FALKOR-timeout:
+    values:
+      - "TIMEOUT <ms> is a trailing COMMAND ARGUMENT on both commands, case-insensitive; TIMEOUT 0 = no limit"
+      - "CYPHER timeout=100 … is ACCEPTED AND SILENTLY DOES NOTHING (it defines a query parameter)"
+      - "effective defaults: TIMEOUT_DEFAULT 30000, TIMEOUT_MAX 60000 — NOT the reported 1000 ms; the bare TIMEOUT config key is deprecated and inert"
+      - "error is raw RESP '-Query timed out\\r\\n' — no code, no prefix; clients must string-match (the store adapter does, once)"
+      - "rollback: fully rolled back in every case (0 of 1000 CREATEs, 0 interleaved, 0 of 5 SETs survived); graph usable immediately"
+      - "rollback cost: writes overshoot ≈1.7x wall (1000 ms budget -> 1699 ms; 2000 -> 3468); reads are exact. Client socket timeouts for writes MUST be >= 2x TIMEOUT"
+    boundary: "v4.20.4 only; re-run every row on image upgrade. DELETE-only and MERGE rollback under timeout UNMEASURED."
+  M-FALKOR-sustained:
+    value: "342 replaces/s for 6 s against a concurrent reader; write p50 2.56 / p95 4.71 / p99 8.27 / max 22.96 ms"
+  M-FALKOR-13x-delete:
+    value: "MATCH (n:CPG {file:$f}) DELETE n: 3.5 ms @structural 1e5, 3.1 ms @1e6, 17.7 ms @full 1e6; by id list 4.4/4.1/34.7; label-less (the old code's shape) 6.8/40.3/56.5 => 13x; EXPLAIN shows Node By Index Scan vs All Node Scan + Filter; growth 1e5->1e6 for the indexed form 0.9x"
+    rule: "`file` stays an indexed PROPERTY on every :CPG node; SOURCE_FILE as one edge per file does not disturb this"
+  M-FALKOR-planner-traps:
+    values:
+      - "a two-node pattern under UNWIND planned as a label scan until a WITH barrier forced the index: 700 ms -> 1 ms"
+      - "OPTIONAL MATCH … count(r) for 'has no inbound edges' is O(degree) on hub symbols; WHERE NOT (s)<-[]-() is an existence check: 36 ms -> 2.7 ms"
+    rule: "always GRAPH.EXPLAIN a new statement shape"
+  M-FALKOR-mechanics:
+    values:
+      - "CREATE INDEX is not idempotent; bootstrap creates only missing indexes"
+      - "db.indexes() returns one merged row per label (so requireIndexes could never have passed as written)"
+      - "GRAPH.CONSTRAINT CREATE replies the literal string PENDING; poll db.constraints() to OPERATIONAL/FAILED; UNIQUE needs a supporting index (SYMBOL(fqn) is in SCHEMA_INDEXES for that reason)"
+      - "the label/relationship-type registry is STICKY: deleting every node of a label leaves it in db.labels(); live conformance counts nodes"
+      - "a graph key does not exist until written; bootstrap runs RETURN 1 first"
+      - "GRAPH.EXPLAIN has no param channel; params go as a CYPHER k=v prefix"
+      - "with a memory cap and the default policy FalkorDB silently DELETES graph data under pressure: maxmemory-policy noeviction on the dev instance"
+      - "a downloaded .so lands 0644 and redis-server refuses it (spawned mode; deferred)"
+      - "FalkorDB publishes NO standalone server binary (every asset is a Redis module) — why spawned mode is deferred (ND-2)"
+
+benchmark_1e6:
+  environment: "database-selection benchmark, 2026-09-11 (see header); synthetic graph with calibrated histograms, Zipf cross-file calls, random tree shapes; per-file replace as the worst case"
+  M-BENCH-thresholds:
+    structural: { replace_p50_p95_p99_ms: "80/150/300", reader_p95_under_writes_ms: 150, delete_growth_1e5_to_1e6: "<=1.5x", churn_drift_p50: "+<=20%", memory_growth: "+<=10%", graph_memory_gb: "<=2" }
+    full:       { replace_p50_p95_p99_ms: "250/500/800", reader_p95_under_writes_ms: 300, graph_memory_gb: "<=4" }
+    fallback: "LadybugDB, if any threshold failed. Never hit."
+  M-BENCH-replace-23-query:
+    structural_1e5: "99,794 nodes (259 files x 387): 26.7 / 32.3 / 34.6 / max 39.4 ms"
+    structural_1e6: "995,520 nodes (2,584 x 387): 68.4 / 111.9 / 138.6 / 149.7 ms — PASS"
+    full_1.8e5: "178,526 (60 x 2,987): 91.7 / 115.0 / 137.9 ms"
+    full_1e6: "996,729 (335 x 2,987): 116.0 / 155.6 / 198.2 / 198.9 ms — PASS"
+    writer_alone: "~21 ms structural, ~100 ms full"
+    per_phase_p50_structural_1e6: "status 9.7 · delete 5.4 · nodes 15.5 · edges 17.4 · symbols 3.7 · GC 2.7 · status 1.2"
+  M-BENCH-replace-single-query:
+    structural_1e6: "24.2 p50 / 43.6 p95 / 49.2 p99 with 4 readers (14.8 writer-alone)"
+    full_1e6: "87.2 / 122.4 / 136.6 (97.9 writer-alone)"
+    verdict: "~3x faster than the 23-query path under load (24 vs 68 ms p50) and removes FILE status markers from the read side -> adopted; no limit hit at ~3,000 nodes / ~10,000 edges per query"
+  M-BENCH-readers-under-writes:
+    structural_1e6_idle_p95_to_under_write_p95_p99_ms: { point_read: "1.0 -> 4.8/16.3", callers_2_hops: "2.0 -> 14.3/18.5", "AST*1..3": "1.1 -> 4.5/16.3", file_scoped_projection: "1.7 -> 14.4/17.6", pathological_unindexed_filter: "17.3 -> 30.5/47.1" }
+    at_1e5: "2,882 qps point / 2,270 qps callers; p95 ≈ 1.0–1.7 ms idle"
+  M-BENCH-churn:
+    what: "2,000 replaces on 10 hot files @1e6"
+    structural: "p50 19.8 -> 22.0 ms, p95 40.5 -> 42.1; RSS 1,187 -> 1,103 MB; graph 587 -> 589 MB"
+    full: "p50 95.7 -> 98.2, p95 140.2 -> 134.4; RSS 1,453 -> 1,330 MB; graph 546 -> 546 MB"
+    verdict: "no latency drift, no memory growth"
+  M-BENCH-capacity:
+    structural_1e6: "3.05 M edges, seeded in 49 s at 20.5k nodes/s; 1.3 GB RSS; 584 MB graph"
+    full_1e6: "3.04 M edges, 21 s, 48k nodes/s; 1.3 GB RSS; 540 MB graph"
+    note: "a cold full re-index of a 1e6-node workspace is under a minute"
+  M-BENCH-correctness:
+    value: "zero failures in ~9,000 verified cycles across four runs: counts, DEFINES/CALLS counts, inbound cross-file CALLS unchanged across the replace, no orphan SYMBOLs, FILE marker ready, no duplicate SYMBOL.fqn"
+  M-BENCH-verdict: "GO. Every threshold met at 1e6 for both profiles; structural leaves 2–3x headroom. Threats to validity: synthetic graph, Docker-on-Apple-silicon, a saturating 4-thread reader loop."
+
+research:
+  M-RESEARCH-tree-sitter:
+    values:
+      - "1000-line/32 KB TS file: full parse 4.2 ms (wasm) vs 2.7 ms (native) — a 1.6x native win that buys nothing against 2000 ms; incremental reparse 0.05 ms; 8-pattern query 1.4 ms (655 matches); query compile 4.6 ms; cursor walk 2.6–3.9 ms"
+      - "5000-line file: 21.0 ms full / 0.17 ms incremental / 7.2 ms query"
+      - "native REJECTED: hard segfault at require('tree-sitter') 0.25.1 darwin-arm64 under Node 20.20.2; nine platform VSIXs; stale peer-dep chain"
+      - "~1.6 MB RSS per cached 1000-line tree; 500 trees -> +789 MB; a bench that never freed trees ballooned to 843 MB; the wasm heap (ALLOW_MEMORY_GROWTH) never shrinks -> cache only open documents + LRU(100), tree.delete() on eviction"
+      - "web-tree-sitter 0.27.0 accepts grammar ABI 13–15; CLI-0.20-built wasm fails with an EMPTY Error; @vscode/tree-sitter-wasm@0.3.1 is the day-one grammar source"
+      - "removing one } from the 1000-line file: 0 ERROR + 1 MISSING and the query still returned all 655 matches; getChangedRanges returned a 16,266-char span for a missing brace (a hint, not a bound); a mis-computed tree.edit yields a wrong tree with no error"
+      - "TS grammar fails on JSX; TSX grammar fails on <number>x; TS 5.9 import defer errors; Python 0.25 handles match / PEP 695 / PEP 701 / except*"
+  M-RESEARCH-watcher:
+    values:
+      - "@parcel/watcher 2.6.0 (MIT; the engine VS Code itself uses): internal debounce MIN 50 / MAX 500 ms; writeSnapshot/getEventsSince for catch-up; no rename events; no dropped-event signal"
+      - "VS Code onDidCreate/Delete/RenameFiles fire only for user gestures inside VS Code; files.watcherExclude defaults do NOT exclude node_modules; createFileSystemWatcher never fires for directories"
+      - "prior art: Nx IDLE_WINDOW 100 / MAX_WAIT 500 / RESCAN 2000 ms; Turborepo 10 ms + .git/index change = full rescan; Watchman settle 20 ms + defer_vcs on .git/index.lock; VS Code's chain ≈130–800 ms disk-to-extension"
+      - "bulk-mode entry: >=200 paths OR >=50 dirs OR .git/index.lock present OR HEAD changed <2 s ago OR >=500 events/s; exit on 750 ms quiet AND lock gone, cap 10 s; reconciliation walk every 10 min idle"
+      - "Linux max_user_watches default 1% of RAM clamped [8192, 1048576]; warn within 20%, degrade to polling on ENOSPC"
+      - "editor save shapes: VS Code truncate-then-write (real zero-byte window; issue #98063 open since 2020), vim backupcopy rename mode, JetBrains safe-write temp + rename -> zero-byte re-read after 100 ms"
+  M-RESEARCH-resolvers:
+    values:
+      - "no SCIP indexer is incremental: scip-typescript builds one ts.createProgram per tsconfig at 1k–5k LOC/s (~5 min on Sourcegraph's repo), pins typescript ^4.5.4; scip-python is a pyright fork synced to a 2022-07-07 commit -> SCIP is a golden oracle and CI pass, never a live resolver (AM-4)"
+      - "tsserver updateOpen averaged 74.29 ms on a ~10k-project monorepo at TS 5.4.2 and regressed to >50 s when structureIsReused was Not (Program reuse is the TS live path)"
+      - "headless basedpyright full check: pandas 144 s, numpy 70.9 s, ~1.7 GB RSS on Django; Pyrefly (sub-10 ms rechecks) is the watch item"
+      - "stack-graphs archived 2025-09-09; Kùzu archived 2025-10-10 (Apple acquisition)"
+      - "only the type-checker family is file-incremental and every member gates cascade on an exported-interface signature (TypeScript BuilderState hashes per-file .d.ts and cascades via referencedMap only while dependents' own hashes keep changing) — the existence proof for ND-9"
+  M-RESEARCH-mcp:
+    values:
+      - "MCP spec 2026-07-28 removed initialize/sessions; server/discover mandatory; HTTP+SSE deprecated; no host shipped a modern client as of 2026-09-11 -> dual-era shim via @modelcontextprotocol/server v2 serveStdio (RE-VERIFY before U10)"
+      - "host caps: Cursor ~40 active tools across ALL servers with silent loss; Windsurf 100; VS Code 128/request hard cap; Claude Code defers schemas past ~10% of context and caps output at 25k tokens (warn 10k); Codex 10 s startup timeout; OpenAI guidance <20; degradation ~30–50 -> <=12 tools (AM-3); a competitor's 7 sufficed and 28 was noise"
+      - "stdio hygiene: only the transport writes stdout; logs to stderr; exit 0 within 500 ms of stdin EOF; never process.exit on engine errors (Claude Code does not restart dead stdio servers); answer discover/initialize/tools/list from a static manifest before engine attach"
+      - "unix socket path <=80 chars (macOS sun_path is 104 bytes) if IPC is ever added"
+  M-RESEARCH-vscode:
+    values:
+      - "webview views relocate primary sidebar / panel / secondary sidebar only; editor area needs a separate WebviewPanel + serializer; viewsWelcome does not render in webviews (AM-2)"
+      - "breadcrumb debounce 150 ms (VS Code's own)"
+      - "rust-analyzer ships 7 platform VSIXs; clangd downloads with no checksum; ZLS verifies with minisign (copy ZLS if spawned mode ever returns); no Marketplace policy forbids runtime downloads"
+      - "gopls -remote=auto is the one shared-daemon precedent (shuts down after 1 min with no clients)"
+      - "@vscode/test-cli for extension-host tests; registerMcpServerDefinitionProvider finalized in 1.101"
+  M-RESEARCH-competitors:
+    values:
+      - "5 tools studied: 4 of 5 resolve cross-file identity with a whole-corpus relink; the 5th implemented resolve_bare_call_targets() and never called it"
+      - "0 of 5 parse with a language server; LSP appears only as optional post-hoc enrichment"
+      - "4 of 5 (+1 partial) are not incremental at the graph-write level regardless of marketing -> per-file incremental replace is unoccupied ground"
+      - "MCP surfaces 7–28 tools with no correlation to sophistication"
+      - "amendment_candidates: [] across all five: the study validated rather than challenged the schema"
+
+may_no_longer_argue:
+  # settled only within the stated boundary
+  - "1. Single-file save latency does not threaten 2 s (one file, zero cascade, <= ~500k nodes, this machine, loopback DB)."
+  - "2. Cascade is zero because the feature is ABSENT, not because the design avoids it. Verdict 1 is conditional on that absence."
+  - "3. The DB write dominates the save budget (66–82% at p50) before the atomic rewrite."
+  - "4. Tree-sitter is not a cost. Parser choice may not be argued on latency."
+  - "5. FalkorDB is not the bottleneck; the write shape is (~6x available). Boundary: <= 500k nodes, loopback, arm64 Docker."
+  - "6. Structural sparsity is met with 3.5–4x headroom (0.361 / 0.429 vs 1.5)."
+  - "7. 'Collect everything now, prune later' is REJECTED (5.55x / 5.88x; the <2x band is unreachable)."
+  - "8. The corpus anchor's absolutes (~450 / ~3000 @300 LOC) are wrong by ~4x; the ratio is sound."
+  - "9. Host-invariance is NOT nearly free in resolution quality (31.0% / 32.6% of achievable edges); a headless resolver is a funded, gated step."
+  - "10. That step is not 'reimplement Pylance': ~313 lines of basedpyright-langserver over stdio reached the full host answer set with zero vscode import."
+  - "11. The whole resolution gap is one capability: receiver type inference (59.3%); imports are at 100% of ceiling."
+  - "12. The headless resolver is never wrong where it answers (0/305). Boundary: Python, one fixture."
+  - "13. The visual channel cannot verify correctness (17.9% self-noise, best signal 1.35x). It is a liveness check."
+  - "14. Four non-visual checks are required, not optional; a freshness SLA with no staleness assertion is unfalsifiable."
+  - "15. layoutPayload is non-deterministic despite documenting itself as deterministic; golden-image diffing is impossible until a seed is threaded."
+  - "16. FalkorDB v4.20.4 semantics are as tabulated (RO_QUERY set, TIMEOUT syntax and 30000/60000 defaults, full rollback with ~1.7x overshoot, atomic replace p50 ≈3–8 ms, 51x over many-small, no settling window). Boundary: this image tag."
+  - "17. The unit ORDER U0..U10 (real data at U2, cross-file edges at U6) — endorsed by every reviewer."
+
+still_unmeasured:
+  - { id: SU-1, gap: "cascade cost is a counterfactual measured against the 16-query path", when: "U7, after the atomic write and with the resolver present" }
+  - { id: SU-2, gap: "behaviour above ~500k nodes; scaling has not plateaued (2.2x at 488k on an identical delta); SP9 stops at 500k", when: "U7 scale fixture; the one place a COMFORTABLE verdict could flip; DQ-10's reopen trigger" }
+  - { id: SU-3, gap: "TypeScript resolution (both resolvers .py-gated); Pylance vs basedpyright", when: "U9 spike (TS); Pylance only if the parity decision is contested" }
+  - { id: SU-4, gap: "a pipelined/batched per-save LSP loop against a warm document (S3a used c=12 full pass; S3b serialized)", when: "U6c/U8 harness — sizes perFileMs" }
+  - { id: SU-5, gap: "a human observer trial on the S4 images (n=0 subjects)", when: "optional; can only weaken the verdict" }
+  - { id: SU-6, gap: "the expression tier as built rather than modelled", when: "only if the tier is ever enabled" }
+  - { id: SU-7, gap: "storage/memory per tier (GRAPH.MEMORY USAGE reports at MB granularity and returned 1 for every spike graph)", when: "U7 with INFO memory deltas at scale" }
+  - { id: SU-8, gap: "query-side cost of an expression-tier graph (read latency, layout/WebGL at ~6x nodes)", when: "only if the tier is ever enabled" }
+  - { id: SU-9, gap: "postMessage structured-clone cost of a large GraphPayload; delta size above which to snapshot", when: "U3 spike" }
+  - { id: SU-10, gap: "@parcel/watcher overflow signalling; case-insensitive volume key folding", when: "U4 spikes" }
+  - { id: SU-11, gap: "DELETE-only and MERGE rollback under FalkorDB timeout; pipelined many-small writes", when: "U5" }
+  - { id: SU-12, gap: "MemoryStore RSS at 488k nodes in the extension host", when: "U7" }
+  - { id: SU-13, gap: "whether any MCP host ships a 2026-07-28-spec client yet", when: "before U10 (AM-6 is time-sensitive)" }
+
+never_requote:
+  - { figure: "~450 structural / ~3,000 expression nodes per 300-LOC file", replaced_by: "108–112 / 602–796 (M-SPARSITY-anchor-correction)" }
+  - { figure: "~11 files is where the 2 s budget breaks", replaced_by: "~725 ref sites ≈ ~1,300 changed Python LOC per save; cascade breaks at 3–5 files (M-BUDGET-break-points)" }
+  - { figure: "the save budget is ~405 ms / headroom ~1,595 ms", replaced_by: "~1,674 ms p50 with the resolver at 88% (M-BUDGET-assembled)" }
+  - { figure: "0.2 ref sites/LOC; ~200 call sites per 1,000 LOC; ~17 waves", replaced_by: "0.5585 sites/LOC and 2.4788 ms/site saturated (M-RESOLVE-density, M-RESOLVE-throughput)" }
+  - { figure: "FalkorDB TIMEOUT default 1000 ms", replaced_by: "30000 default / 60000 max on v4.20.4 (M-FALKOR-timeout)" }
+  - { figure: "batching recovers only ~8 ms", replaced_by: "~42 ms / ~6x from one atomic statement (M-FALKOR-6x)" }
+  - { figure: "p95 16 ms as a CI gate for the atomic replace", replaced_by: "statementCount === 1 in CI; the band is a local benchmark (M-FALKOR-atomic)" }
+  - { figure: "24 ms single-file replace under concurrent readers as a structural argument", replaced_by: "still true (M-BENCH-replace-single-query) but it is a benchmark number, not a design constant" }

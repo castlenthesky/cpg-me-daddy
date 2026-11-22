@@ -1,20 +1,15 @@
 {
-  "//": [
-    "Typechecks the trees `tsc --build` cannot: test files and the tools/ scripts.",
-    "They import engine sources by explicit .ts path so bun runs them without a prior build,",
-    "which needs allowImportingTsExtensions, which needs noEmit, which is incompatible with the",
-    "composite projects in the solution file. So they get their own no-emit pass instead of",
-    "going unchecked — the harness under test/support is real code and deserves a compiler."
-  ],
+  // The ONE type-check for all test code (*.test.ts and *.test-d.ts), run by `bun run
+  // typecheck:tests`. vitest strips types and `tsc -b` deliberately excludes tests from build
+  // output, so without this a type error in a test (or a failed expectTypeOf) goes unseen.
+  // noEmit: checking only, never produces output.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2023"],
     "composite": false,
+    "noEmit": true,
     "declaration": false,
     "declarationMap": false,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "types": ["bun", "node"]
+    "sourceMap": false
   },
-  "include": ["packages/*/test/**/*.ts", "tools/**/*.ts"]
+  "include": ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.test-d.ts", "src/**/*.test.ts"]
 }

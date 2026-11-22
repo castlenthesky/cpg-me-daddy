@@ -1,28 +1,38 @@
-# Standing gates, fired before a commit exists rather than after a push (F1).
-# Install with `lefthook install` (the root `prepare` script does this on `bun install`).
+# Git hooks. `bun install` runs the lefthook package's postinstall, which installs the hooks.
+# It skips itself when CI is set, so CI never needs .git.
+# Emergency bypass: `LEFTHOOK=0 git commit ...` / `LEFTHOOK=0 git push ...` (CI still runs every gate).
 
+# Pre-commit stays fast (staged files only) and cannot replace `bun run check`: that full gate
+# runs on pre-push and in CI.
 pre-commit:
   parallel: true
   jobs:
-    - name: oxlint
-      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"
-      run: bunx oxlint {staged_files}
-
+    # Write-then-restage: formatting is mechanical, so fix it instead of rejecting the commit.
     - name: oxfmt
-      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,json,jsonc,yml,yaml,css}"
-      run: bunx oxfmt --check --no-error-on-unmatched-pattern {staged_files}
+      run: bun run --silent oxfmt -- --write --no-error-on-unmatched-pattern {staged_files}
+      glob: '*.{ts,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml}'
+      stage_fixed: true
+    # Fails the commit: lint findings need a human decision. Only ts/js (type-aware rules
+    # still resolve through tsconfig).
+    - name: oxlint
+      run: bun run --silent oxlint -- --deny-warnings {staged_files}
+      glob: '*.{ts,mts,cts,js,mjs,cjs}'
+    # Whole-repo (cheap, ~50ms): dependency direction is a global property, not per-file.
+    - name: check-deps
+      run: bun run --silent check:deps
 
+# Full gate; turbo makes an unchanged tree a cache hit.
+#
+# This job must NEVER be skipped. lefthook (v2.2.2) skips any pre-push job whose `run` has no
+# file template when `git diff --name-only HEAD @{push}` is empty ("(skip) no matching push
+# files"): an up-to-date upstream, a no-upstream branch already on origin, and the detached HEAD
+# that actions/checkout leaves in CI all hit it, so the push would go out ungated. There is no
+# config key to opt out (`skip_empty` is not in this version's schema; `--force` is CLI-only and
+# git invokes the hook without it). `{all_files}` (every tracked file, never empty) is the one
+# file template that does not depend on push history, so passing it keeps the job from being
+# skipped. It must be a real argument (a template inside a shell comment does not count). The
+# check ignores the file list; it is only there as the anti-skip. Do not remove it.
 pre-push:
-  parallel: false
   jobs:
-    # Both delegate to the root scripts rather than repeating their commands.
-    # The unit-test job used to list the package paths itself, which silently
-    # stopped covering a package the moment a fourth one was added.
-    - name: typecheck
-      run: bun run typecheck
-
-    - name: unit tests
-      run: bun run test:unit
-
-    - name: schema gate
-      run: bun run test:schema
+    - name: check
+      run: sh -c 'exec bun run --silent check' check {all_files}
