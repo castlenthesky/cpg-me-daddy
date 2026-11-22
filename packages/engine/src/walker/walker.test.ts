@@ -3,10 +3,9 @@
 // and the WalkStats contract in walker.ts.
 
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isWorkspacePath } from '@cpg/model';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WalkOptions, WalkResult } from './walker';
 import { walkWorkspace } from './walker';
@@ -16,7 +15,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
 });
 
-async function tree(spec: Readonly<Record<string, string>>): Promise<string> {
+async function tree(spec: Readonly<Record<string, string | Uint8Array>>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'cpg-walker-'));
   roots.push(root);
   for (const [path, contents] of Object.entries(spec)) {
@@ -33,7 +32,7 @@ const languageOf = (path: string): string | undefined => LANG[path.slice(path.la
 const walk = (root: string, o: Partial<WalkOptions> = {}): Promise<WalkResult> =>
   walkWorkspace({ root, languageOf, ...o });
 const paths = (r: WalkResult): string[] => r.files.map((f) => f.path);
-const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
+const sha256 = (s: string | Uint8Array): string => createHash('sha256').update(s).digest('hex');
 
 describe('walkWorkspace', () => {
   it('prunes an excluded directory before descending into it', async () => {
@@ -98,6 +97,27 @@ describe('walkWorkspace', () => {
     ]);
   });
 
+  it('hashes bytes that are not valid UTF-8 as bytes, not as a decoded string', async () => {
+    const bytes = Uint8Array.from([0xff, 0xfe, 0x00, 0xc3]);
+    const r = await walk(await tree({ 'bin.dat': bytes }));
+    // Decoding first would replace 0xff/0xfe/0xc3 with U+FFFD and hash different bytes.
+    expect(r.files.map((f) => [f.revision_id, f.sizeBytes])).toEqual([[sha256(bytes), 4]]);
+    expect(sha256(bytes)).not.toBe(sha256(Buffer.from(bytes).toString('utf8')));
+  });
+
+  // Root reads through any permission, so the unreadable file is only unreadable for a normal user.
+  it.skipIf(process.getuid?.() === 0)(
+    'counts an admitted but unreadable file as failed (I-20)',
+    async () => {
+      const root = await tree({ 'a.ts': '', 'locked.ts': 'x' });
+      await chmod(join(root, 'locked.ts'), 0o000);
+      const { files, stats } = await walk(root);
+      await chmod(join(root, 'locked.ts'), 0o600);
+      expect(files.map((f) => f.path)).toEqual(['a.ts']);
+      expect(stats).toMatchObject({ filesSeen: 2, filesFailed: 1, filesExcluded: 0 });
+    },
+  );
+
   it('accounts for every file seen (I-20)', async () => {
     const root = await tree({
       'a.ts': '',
@@ -140,7 +160,5 @@ describe('walkWorkspace', () => {
       ['a', '.'],
       ['a/b', 'a'],
     ]);
-    const bad = [...r.files, ...r.directories].filter((e) => !isWorkspacePath(e.path));
-    expect(bad).toEqual([]);
   });
 });

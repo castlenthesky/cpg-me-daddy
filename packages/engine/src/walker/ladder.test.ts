@@ -53,6 +53,7 @@ describe('the walker reproduces every ladder rung [filesystem] section', () => {
     const byId = new Map(tier.nodes.map((n) => [n.id, n]));
 
     const want = new Set(nodeFacts.map((f) => f[1]));
+    if (byId.size !== tier.nodes.length) problems.push('duplicate node id');
     for (const n of tier.nodes) if (!want.has(n.id)) problems.push(`extra node ${n.id}`);
     for (const [label = '', id = '', ...props] of nodeFacts) {
       const node = byId.get(id);

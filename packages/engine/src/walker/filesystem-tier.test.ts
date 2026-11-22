@@ -1,5 +1,6 @@
 // filesystemTier on hand-built walks. The ladder covers real trees; this pins the shapes the ladder
-// cannot: the root has no name and no parent edge, and the node data carries both hashes.
+// cannot: the root is named '.' with no parent edge, every DIRECTORY carries its required status
+// (04-schema.yaml: name and status are cardinality one), and FILE data carries both hashes.
 
 import type { WorkspacePath } from '@cpg/model';
 import { isWorkspacePath } from '@cpg/model';
@@ -29,8 +30,18 @@ describe('filesystemTier', () => {
       ],
     });
     expect(tier.nodes).toEqual([
-      { id: 'dir:.', type: 'DIRECTORY', data: { path: '.' } },
-      { id: 'dir:pkg', type: 'DIRECTORY', name: 'pkg', data: { path: 'pkg', name: 'pkg' } },
+      {
+        id: 'dir:.',
+        type: 'DIRECTORY',
+        name: '.',
+        data: { path: '.', name: '.', status: 'ready' },
+      },
+      {
+        id: 'dir:pkg',
+        type: 'DIRECTORY',
+        name: 'pkg',
+        data: { path: 'pkg', name: 'pkg', status: 'ready' },
+      },
       {
         id: 'file:pkg/m.py',
         type: 'FILE',
