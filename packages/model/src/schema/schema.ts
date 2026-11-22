@@ -6,6 +6,7 @@
  */
 import { EDGE_TYPES } from './edges';
 import { NODE_LABELS } from './nodes';
+import { RESERVED_EDGES } from './reserved';
 import type { EdgeTypeSpec, NodeLabelSpec, SchemaConstraintSpec, SchemaIndexSpec } from './types';
 
 /**
@@ -47,6 +48,8 @@ export const CPG_SCHEMA = {
   idRule: ID_RULE,
   nodes: NODE_LABELS,
   edges: EDGE_TYPES,
+  /** Reserved by name and shape, not admitted (DQ-09). Not rendered into 04-schema.yaml's generated region. */
+  reservedEdges: RESERVED_EDGES,
   indexes: SCHEMA_INDEXES,
   constraints: SCHEMA_CONSTRAINTS,
 } as const;

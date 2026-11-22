@@ -7,8 +7,9 @@
  * FalkorDB connection. A `RowDelta` is the store's write shape: it is not
  * the `GraphDelta` that producers send to hosts.
  */
+import { reservedEdgeSpec } from './reserved';
 import { edgeSpec, nodeSpec } from './schema';
-import type { PropertySpec } from './types';
+import type { PropertySpec, ReservedEdgeSpec } from './types';
 
 export interface NodeRow {
   /** All labels this node carries, e.g. `["CPG", "METHOD"]` or `["SYMBOL"]`. */
@@ -207,6 +208,16 @@ function buildNodeKeyIndex(nodes: readonly NodeRow[]): ReadonlySet<string> {
   return index;
 }
 
+/**
+ * The write gate's message for a reserved (not admitted) edge type, built from `spec.type`,
+ * `spec.producer`, `spec.admittedAt` and `spec.decision`, e.g.
+ * `edge '<type>': reserved edge type (producer: none-yet, admitted at U8, DQ-09)`. Never names the
+ * type by literal: the no-emitter scan allows that only in reserved.ts.
+ */
+function reservedEdgeProblem(spec: ReservedEdgeSpec): string {
+  return `edge '${spec.type}': reserved edge type (producer: ${spec.producer}, admitted at ${spec.admittedAt}, ${spec.decision})`;
+}
+
 function validateEdge(
   row: EdgeRow,
   delta: RowDelta,
@@ -215,6 +226,11 @@ function validateEdge(
 ): void {
   const spec = edgeSpec(row.type);
   if (!spec) {
+    const reserved = reservedEdgeSpec(row.type);
+    if (reserved) {
+      problems.push(reservedEdgeProblem(reserved));
+      return;
+    }
     problems.push(`edge '${row.type}': undeclared edge type`);
     return;
   }

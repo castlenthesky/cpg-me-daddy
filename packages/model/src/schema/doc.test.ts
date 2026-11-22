@@ -16,6 +16,7 @@ import {
   GENERATED_BEGIN,
   GENERATED_END,
   NODE_LABELS,
+  RESERVED_EDGES,
   renderSchemaRegion,
   spliceGeneratedRegion,
   type EdgeTypeSpec,
@@ -79,6 +80,7 @@ const ENUM_BY_NAME: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['type_decl_kind', enums.TYPE_DECL_KIND],
   ['method_kind', enums.METHOD_KIND],
   ['call_kind', enums.CALL_KIND],
+  ['eval_type_relation', enums.EVAL_TYPE_RELATION],
 ];
 const enumName = (values: readonly string[] | undefined): string | undefined =>
   ENUM_BY_NAME.find(([, v]) => v === values)?.[0];
@@ -509,6 +511,22 @@ describe('docs/outline/04-schema.yaml stays valid and honest about the relocatio
     const outside = spliceGeneratedRegion(text, '');
     expect(outside).toContain('joern_alignment:');
     expect(outside).toContain('reserved_edges');
+  });
+
+  it('reserved_edges agrees with RESERVED_EDGES: types, producer, admitted_at, decision, shape (INV-RE-8)', () => {
+    const yamlEdges: Array<Record<string, string>> = doc.reserved_edges;
+    expect(yamlEdges.map((r) => r.type)).toEqual(['EVAL_TYPE']);
+    const [y] = yamlEdges;
+    expect([y?.producer, y?.admitted_at, y?.decision]).toEqual(['none-yet', 'U8', 'DQ-09']);
+    expect(y?.shape).toBe('CALL -> SYMBOL {relation: receiver-type}');
+    // and the code side says the same thing
+    const [c] = RESERVED_EDGES;
+    expect([c?.producer, c?.admittedAt, c?.decision]).toEqual(['none-yet', 'U8', 'DQ-09']);
+    expect([c?.from.join('|'), c?.to.join('|')]).toEqual(['CALL', 'SYMBOL']);
+  });
+
+  it('declares eval_type_relation in the hand enums block (INV-RE-10)', () => {
+    expect(doc.enums.eval_type_relation.values).toEqual(['receiver-type']);
   });
 
   it('documents the id encoding next to the id rule, with DIRECTORY examples (U1.1.3 leftover)', () => {

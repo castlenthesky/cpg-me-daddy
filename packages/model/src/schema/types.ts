@@ -109,6 +109,22 @@ export interface EdgeTypeSpec {
   readonly doc: string;
 }
 
+/** Who emits a reserved edge today. One value until something is admitted; admission removes the entry. */
+export type ReservedProducer = 'none-yet';
+
+/**
+ * An edge type reserved by name AND shape but not admitted (DQ-09). Same shape as an admitted
+ * EdgeTypeSpec except `firstWrittenIn`, which it lacks. Admission moves the object into EDGE_TYPES,
+ * adds `firstWrittenIn`, and bumps CPG_SCHEMA.version (migration_policy).
+ */
+export interface ReservedEdgeSpec extends Omit<EdgeTypeSpec, 'firstWrittenIn'> {
+  readonly producer: ReservedProducer;
+  /** The milestone unit whose gate admits it, e.g. 'U8'. */
+  readonly admittedAt: string;
+  /** The decision id that reserves it, e.g. 'DQ-09'. */
+  readonly decision: string;
+}
+
 /** One Cypher index the schema bootstrap (M0.4) must create. */
 export interface SchemaIndexSpec {
   readonly label: string;

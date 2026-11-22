@@ -108,6 +108,7 @@ enums:
   type_decl_kind:    { values: [class, interface, enum, type_alias, protocol, dataclass] }
   method_kind:       { values: [function, method, constructor, getter, setter, lambda_named] }
   call_kind:         { values: [call, new, decorator, await] }
+  eval_type_relation: { values: [receiver-type], reserved: true, decision: DQ-09, admitted_at: U8, doc: "`relation` on the reserved receiver-type edge (reserved_edges). Declared in enums.ts now; no property references it until U8 admits the edge." }
 
 # ---------------------------------------------------------------------------------------------
 # Ownership classes and write mechanisms
