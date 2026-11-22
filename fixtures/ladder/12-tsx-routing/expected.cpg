@@ -1,0 +1,14 @@
+# Rung 12. The same JSX source under two extensions. Routing is by extension only (C-PARSE I5), so
+# view.tsx goes to the tsx grammar and parses clean, while misrouted.ts goes to the typescript
+# grammar, which has no JSX, and must come back hasError=true (I23), never silently accepted.
+
+[parse]
+PARSE misrouted.ts language=typescript root=program hasError=true
+PARSE view.tsx language=tsx root=program hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:misrouted.ts name=misrouted.ts language=typescript
+FILE file:view.tsx name=view.tsx language=tsx
+HAS_ENTRY dir:. -> file:misrouted.ts
+HAS_ENTRY dir:. -> file:view.tsx

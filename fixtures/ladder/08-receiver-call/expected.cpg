@@ -1,0 +1,37 @@
+# Rung 08. A method called through a local variable. The receiver's type is not written at the
+# call site, so only a type-aware resolver (U8, a language server) can answer CALL main:1.
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-9:0
+TYPE_DECL file:main.py:TYPE_DECL:Greeter name=Greeter kind=class range=1:0-3:12
+METHOD file:main.py:METHOD:Greeter.greet name=greet kind=method params_count=1 range=2:4-3:12
+PARAM file:main.py:PARAM:Greeter.greet.self name=self ordinal=0
+METHOD file:main.py:METHOD:main name=main kind=function params_count=0 range=6:0-8:13
+CALL file:main.py:CALL:main:0 callee_name=Greeter args_count=0 kind=call range=7:8-7:17
+CALL file:main.py:CALL:main:1 callee_name=greet receiver_text=g args_count=0 kind=call range=8:4-8:13
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:TYPE_DECL:Greeter
+DECLARES file:main.py:TYPE_DECL:Greeter -> file:main.py:METHOD:Greeter.greet
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:main
+HAS_PARAM file:main.py:METHOD:Greeter.greet -> file:main.py:PARAM:Greeter.greet.self
+IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
+IN_SCOPE file:main.py:CALL:main:1 -> file:main.py:METHOD:main
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:TYPE_DECL:Greeter -> `main.py`/Greeter#
+DEFINES file:main.py:METHOD:Greeter.greet -> `main.py`/Greeter#greet().
+DEFINES file:main.py:PARAM:Greeter.greet.self -> `main.py`/Greeter#greet().(self)    # ?Q2
+DEFINES file:main.py:METHOD:main -> `main.py`/main().
+
+[resolution]
+CALLS file:main.py:CALL:main:0 -> `main.py`/Greeter# status=resolved    # ?Q4
+CALLS file:main.py:CALL:main:1 -> `main.py`/Greeter#greet(). status=resolved
