@@ -1,0 +1,37 @@
+# Rung 06. Two files; main.py imports a function from util.py and calls it.
+# The first cross-file edges. Both point at util.py's SYMBOL, never at util.py's nodes (L-03).
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+PARSE util.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+FILE file:util.py name=util.py language=python
+HAS_ENTRY dir:. -> file:main.py
+HAS_ENTRY dir:. -> file:util.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-6:0
+IMPORT file:main.py:IMPORT:$root:0 source_text=util imported_names=[helper] is_type_only=false range=1:0-1:23
+METHOD file:main.py:METHOD:main name=main kind=function params_count=0 range=4:0-5:12
+CALL file:main.py:CALL:main:0 callee_name=helper args_count=0 kind=call range=5:4-5:12
+MODULE file:util.py:MODULE:$root name=util range=1:0-3:0
+METHOD file:util.py:METHOD:helper name=helper kind=function params_count=0 range=1:0-2:8
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+SOURCE_FILE file:util.py:MODULE:$root -> file:util.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:IMPORT:$root:0
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:main
+DECLARES file:util.py:MODULE:$root -> file:util.py:METHOD:helper
+IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:METHOD:main -> `main.py`/main().
+DEFINES file:util.py:MODULE:$root -> `util.py`/    # ?Q1
+DEFINES file:util.py:METHOD:helper -> `util.py`/helper().
+
+[resolution]
+IMPORTS file:main.py:IMPORT:$root:0 -> `util.py`/helper(). status=resolved
+CALLS file:main.py:CALL:main:0 -> `util.py`/helper(). status=resolved

@@ -1,0 +1,33 @@
+# Rung 11. Rung 08 in TypeScript. `new` is its own call kind here; the receiver call needs U9.
+
+[parse]
+PARSE main.ts language=typescript root=program hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.ts name=main.ts language=typescript
+HAS_ENTRY dir:. -> file:main.ts
+
+[structural]
+MODULE file:main.ts:MODULE:$root name=main range=1:0-9:0
+TYPE_DECL file:main.ts:TYPE_DECL:Greeter name=Greeter kind=class exported=false range=1:0-3:1
+METHOD file:main.ts:METHOD:Greeter.greet name=greet kind=method params_count=0 exported=false range=2:2-2:18
+METHOD file:main.ts:METHOD:main name=main kind=function params_count=0 exported=true
+CALL file:main.ts:CALL:main:0 callee_name=Greeter args_count=0 kind=new range=6:12-6:25
+CALL file:main.ts:CALL:main:1 callee_name=greet receiver_text=g args_count=0 kind=call range=7:2-7:11
+SOURCE_FILE file:main.ts:MODULE:$root -> file:main.ts
+DECLARES file:main.ts:MODULE:$root -> file:main.ts:TYPE_DECL:Greeter
+DECLARES file:main.ts:TYPE_DECL:Greeter -> file:main.ts:METHOD:Greeter.greet
+DECLARES file:main.ts:MODULE:$root -> file:main.ts:METHOD:main
+IN_SCOPE file:main.ts:CALL:main:0 -> file:main.ts:METHOD:main
+IN_SCOPE file:main.ts:CALL:main:1 -> file:main.ts:METHOD:main
+
+[symbols]
+DEFINES file:main.ts:MODULE:$root -> `main.ts`/    # ?Q1
+DEFINES file:main.ts:TYPE_DECL:Greeter -> `main.ts`/Greeter#
+DEFINES file:main.ts:METHOD:Greeter.greet -> `main.ts`/Greeter#greet().
+DEFINES file:main.ts:METHOD:main -> `main.ts`/main().
+
+[resolution]
+CALLS file:main.ts:CALL:main:0 -> `main.ts`/Greeter# status=resolved    # ?Q4
+CALLS file:main.ts:CALL:main:1 -> `main.ts`/Greeter#greet(). status=resolved

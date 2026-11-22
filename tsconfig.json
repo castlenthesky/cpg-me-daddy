@@ -3,6 +3,7 @@
   "files": [],
   "references": [
     { "path": "packages/model" },
+    { "path": "packages/parse" },
     { "path": "packages/resolve" },
     { "path": "packages/watch" },
     { "path": "apps/vscode" },
