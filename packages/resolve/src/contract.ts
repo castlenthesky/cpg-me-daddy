@@ -1,5 +1,6 @@
 // C-RESOLVE: the resolver seam. SEAT (types only): implementations land in U3 (the VS Code host
-// accelerator), U6c (chain, null, python-path, applyResolutions), U8 (LSP driver) and U9.
+// accelerator), U6c (chain, null, python-path, applyResolutions), U8 (LSP driver) and U9. The LSP
+// transport (src/lsp/) is REAL and lives outside this file.
 //
 // Types only, enforced by check-deps rule `contract-types-only`: the only imports are statement-level
 // `import type` from @cpg/model, and the emitted JS is empty. The precise resolver calls the host's
@@ -251,4 +252,24 @@ export interface ExtractedFileSet {
   readonly [SEALED]: true;
   readonly files: ReadonlyMap<WorkspacePath, ExtractedFileRefs>;
   readonly refSites: readonly RefSite[];
+}
+
+// ── The process seam (C-RESOLVE INV-18): a resolver spawns nothing except through it ──
+
+/** The composition root implements this with node:child_process; tests script it in memory. */
+export interface ProcessHost {
+  spawn(
+    command: string,
+    args: readonly string[],
+    options?: { readonly cwd?: string },
+  ): SubprocessHandle;
+}
+
+/** One running child: bytes in on stdin, bytes out on stdout, one exit. */
+export interface SubprocessHandle {
+  write(chunk: Uint8Array): void;
+  onStdout(listener: (chunk: Uint8Array) => void): void;
+  /** Called once. `code` is null when a signal ended the process. */
+  onExit(listener: (code: number | null) => void): void;
+  kill(): void;
 }

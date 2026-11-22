@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import * as contract from './contract';
 import * as api from './index';
 
-// SEAT package, types only until its implementation unit: neither the front door nor contract.ts may
-// carry a runtime export (check-deps rule 7 limits imports only, so this is the export-side guard).
-describe('@cpg/resolve is types only', () => {
-  it.each([
-    ['index', api],
-    ['contract', contract],
-  ])('%s has no runtime exports', (_name, ns) => {
-    expect(Object.keys(ns)).toEqual([]);
+// contract.ts stays types only (check-deps rule 7 limits its imports; this guards its exports). The
+// front door exports exactly the runtime values that are REAL today: the LSP transport.
+describe('@cpg/resolve front door', () => {
+  it('contract.ts has no runtime exports', () => {
+    expect(Object.keys(contract)).toEqual([]);
+  });
+
+  it('index exports the LSP transport and nothing else at runtime', () => {
+    expect(new Set(Object.keys(api))).toEqual(
+      new Set(['createLspConnection', 'createFrameDecoder', 'encodeMessage']),
+    );
   });
 });
