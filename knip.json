@@ -20,6 +20,9 @@
     "packages/model": {
       "project": ["src/**/*.ts"]
     },
+    "packages/parse": {
+      "project": ["src/**/*.ts"]
+    },
     "packages/resolve": {
       "project": ["src/**/*.ts"]
     },

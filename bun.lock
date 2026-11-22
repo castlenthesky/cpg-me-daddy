@@ -50,6 +50,13 @@
       "name": "@cpg/model",
       "version": "0.0.1",
     },
+    "packages/parse": {
+      "name": "@cpg/parse",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
+      },
+    },
     "packages/resolve": {
       "name": "@cpg/resolve",
       "version": "0.0.1",
@@ -179,6 +186,8 @@
     "@cpg/cli": ["@cpg/cli@workspace:apps/cli"],
 
     "@cpg/model": ["@cpg/model@workspace:packages/model"],
+
+    "@cpg/parse": ["@cpg/parse@workspace:packages/parse"],
 
     "@cpg/resolve": ["@cpg/resolve@workspace:packages/resolve"],
 
