@@ -5,6 +5,8 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createEngine } from '@cpg/engine';
+import { createMemoryStore } from '@cpg/sink';
 import type { Io, Manifest } from './io';
 import { run } from './run';
 
@@ -38,7 +40,13 @@ const io: Io = {
 const controller = new AbortController();
 process.once('SIGINT', () => controller.abort());
 
-// No engine yet (U2a.2): every engine-backed verb reports 'not built yet'.
-void run(process.argv.slice(2), io, { manifest, signal: controller.signal }).then((code) => {
+// Composition root (03-architecture §2 rule 3): wire the engine with the MemoryStore sink.
+const engine = createEngine({ version: manifest.version }, { sinks: [createMemoryStore()] });
+void run(process.argv.slice(2), io, {
+  manifest,
+  engine,
+  cwd: process.cwd(),
+  signal: controller.signal,
+}).then((code) => {
   process.exitCode = code;
 });

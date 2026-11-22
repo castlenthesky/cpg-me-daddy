@@ -17,5 +17,9 @@
     "@cpg/model": "*",
     "@cpg/resolve": "*",
     "@cpg/watch": "*"
+  },
+  "dependencies": {
+    "@cpg/engine": "*",
+    "@cpg/sink": "*"
   }
 }
