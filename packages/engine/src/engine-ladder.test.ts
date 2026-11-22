@@ -33,7 +33,9 @@ function idOf(label: string, key: string): string {
   return makeNodeId({ form: label === 'DIRECTORY' ? 'directory' : 'file', path: key });
 }
 
-async function opFor(root: string): Promise<WriteOp & { kind: 'merge-filesystem' }> {
+// No return annotation: inference narrows to the merge-filesystem arm, and an annotation naming
+// WriteOp lints as an error type when lint runs before the build (CI).
+async function opFor(root: string) {
   const memory = createMemoryStore();
   const ops: WriteOp[] = [];
   const sink = {
