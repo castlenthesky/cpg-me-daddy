@@ -135,8 +135,15 @@ describe('MemoryStore as a GraphStore', () => {
     const before = [await rejection(store.write(TREE)), await rejection(store.fileStates())];
     await store.open();
     await store.close();
-    const after = [await rejection(store.write(TREE)), await rejection(store.nodeKeys('FILE'))];
-    expect([...before, ...after]).toEqual(Array(4).fill('STORE_NOT_OPEN'));
+    const after = await Promise.all([
+      rejection(store.write(TREE)),
+      rejection(store.nodeKeys('FILE')),
+      rejection(store.fileStates()),
+      rejection(store.stats()),
+      rejection(store.readFile(wp('a.py'))),
+      rejection(store.staleNodes()),
+    ]);
+    expect([...before, ...after]).toEqual(Array(8).fill('STORE_NOT_OPEN'));
   });
 
   it('writes the filesystem tier as one merge-filesystem statement', async () => {
@@ -158,8 +165,14 @@ describe('MemoryStore as a GraphStore', () => {
     await store.write(
       mergeFs({
         directories: [dirRow('.')],
-        files: [fileRow('notes.txt', 'r0', null)],
-        links: [link('.', 'FILE', 'notes.txt')],
+        files: [
+          fileRow('notes.txt', 'r0', null),
+          {
+            ...fileRow('a:b.txt', 'r1'),
+            properties: { ...fileRow('a:b.txt', 'r1').properties, loc: undefined },
+          },
+        ],
+        links: [link('.', 'FILE', 'notes.txt'), link('.', 'FILE', 'a:b.txt')],
       }),
     );
     const expected = {
@@ -172,8 +185,16 @@ describe('MemoryStore as a GraphStore', () => {
           content_hash: 'r0',
           revision_id: 'r0',
         }),
+        // `:` in a path is escaped by makeNodeId; a hand-built `file:${path}` would not be.
+        fsNode('file:a%3Ab.txt', 'FILE', {
+          path: 'a:b.txt',
+          name: 'a:b.txt',
+          language: 'python',
+          content_hash: 'r1',
+          revision_id: 'r1',
+        }),
       ],
-      edges: [hasEntry('dir:.', 'file:notes.txt')],
+      edges: [hasEntry('dir:.', 'file:notes.txt'), hasEntry('dir:.', 'file:a%3Ab.txt')],
     };
     expect((await store.inspect()).digest).toBe(graphDigest(expected));
   });
@@ -186,6 +207,9 @@ describe('MemoryStore as a GraphStore', () => {
       ['.', 'pkg'],
       ['a.py', 'pkg/m.py'],
     ]);
+    // A :CPG label is keyed by its id.
+    await codeDelta(store, 0, [method('file:a.py:METHOD:f', 'a.py', 'r1')]);
+    expect(await store.nodeKeys('METHOD')).toEqual(['file:a.py:METHOD:f']);
   });
 
   it('merges on key: a re-merge updates in place and never nulls an existing property', async () => {
@@ -206,6 +230,27 @@ describe('MemoryStore as a GraphStore', () => {
       language: 'python',
       revision_id: 'r9',
     });
+    // A DIRECTORY re-merges in place too.
+    await store.write(
+      mergeFs({
+        directories: [
+          { ...dirRow('pkg'), properties: { path: 'pkg', name: 'pkg', status: 'stale' } },
+        ],
+      }),
+    );
+    expect(await store.stats()).toMatchObject({ nodeCount: 4, edgeCount: 3 });
+    expect((await store.nodeKeys('DIRECTORY')).toSorted()).toEqual(['.', 'pkg']);
+  });
+
+  it('retains nothing of the op it was given', async () => {
+    const store = await opened();
+    const row = fileRow('a.py', 'r1');
+    const props: Record<string, unknown> = { ...row.properties };
+    await store.write(
+      mergeFs({ directories: [dirRow('.')], files: [{ ...row, properties: props }] }),
+    );
+    props['revision_id'] = 'mutated';
+    expect((await store.fileStates()).map((f) => f.revision_id)).toEqual(['r1']);
   });
 
   it('keeps the code tier keys on a FILE when the filesystem tier re-merges it', async () => {
@@ -222,7 +267,8 @@ describe('MemoryStore as a GraphStore', () => {
 
   it('reports fileStates sorted by file, counting the nodes each file owns', async () => {
     const store = await opened();
-    await store.write(TREE);
+    // Written in reverse order: the sort is the store's job.
+    await store.write(mergeFs({ files: [fileRow('pkg/m.py', 'r2'), fileRow('a.py', 'r1')] }));
     await codeDelta(store, 0, [method('file:a.py:METHOD:f', 'a.py', 'r1')]);
     expect(await store.fileStates()).toEqual([
       { file: 'a.py', seq: -1, revision_id: 'r1', nodeCount: 1 },
@@ -245,13 +291,40 @@ describe('MemoryStore as a GraphStore', () => {
   it('readFile returns the FILE row and the rows the file owns', async () => {
     const store = await opened();
     await store.write(TREE);
-    await codeDelta(store, 0, [method('file:a.py:METHOD:f', 'a.py', 'r1')]);
+    const f = 'file:a.py:METHOD:f';
+    const g = 'file:pkg/m.py:METHOD:g';
+    await store.onDelta(
+      {
+        seq: 0,
+        file: wp('a.py'),
+        revision_id: 'r1',
+        producer: 'code',
+        addedNodes: [method(f, 'a.py', 'r1'), method(g, 'pkg/m.py', 'r2')],
+        addedEdges: [
+          { source: f, target: g, type: 'CALLS', data: { status: 'resolved' } },
+          { source: g, target: f, type: 'CALLS' },
+        ],
+        removedNodeIds: [],
+      },
+      { seq: 0, cause: 'live' },
+    );
     const { nodes, edges } = await store.readFile(wp('a.py'));
     expect(nodes.map((n) => `${n.label} ${n.key}`).toSorted()).toEqual([
       'FILE a.py',
-      'METHOD file:a.py:METHOD:f',
+      `METHOD ${f}`,
     ]);
-    expect(edges).toEqual([]);
+    // Only the edges leaving a.py's nodes; the incoming CALLS and HAS_ENTRY are other owners'.
+    expect(edges).toEqual([
+      {
+        type: 'CALLS',
+        fromLabel: 'METHOD',
+        fromKey: f,
+        toLabel: 'METHOD',
+        toKey: g,
+        properties: { status: 'resolved' },
+      },
+    ]);
+    expect(await store.readFile(wp('absent.py'))).toEqual({ nodes: [], edges: [] });
   });
 
   it('a removed file takes its FILE node and its HAS_ENTRY edge, and is audited', async () => {
@@ -268,6 +341,28 @@ describe('MemoryStore as a GraphStore', () => {
         calledBy: 'merge-filesystem',
       },
     ]);
+  });
+
+  it('audits each removal of one op', async () => {
+    const store = await opened();
+    await store.write(TREE);
+    await store.write(mergeFs({ removals: ['a.py', 'pkg'] }));
+    expect(store.auditLog().map((a) => [a.scope.kind, a.nodesDeleted])).toEqual([
+      ['file', 1],
+      ['subtree', 2],
+    ]);
+    expect(await store.nodeKeys('DIRECTORY')).toEqual(['.']);
+  });
+
+  it('refuses to remove the workspace root: that is a whole-graph drop (INV-7)', async () => {
+    const store = await opened();
+    await store.write(TREE);
+    const before = await store.inspect();
+    expect(await rejection(store.write(mergeFs({ removals: ['.'] })))).toBe(
+      'UNSAFE_DELETE_REFUSED',
+    );
+    expect(await store.inspect()).toEqual(before);
+    expect(store.auditLog()).toEqual([]);
   });
 
   it('a removed directory takes its subtree on a segment boundary', async () => {
@@ -289,7 +384,10 @@ describe('MemoryStore as a GraphStore', () => {
     expect(receipt.nodesDeleted).toBe(3);
     expect((await store.nodeKeys('DIRECTORY')).toSorted()).toEqual(['.', 'application']);
     expect(await store.nodeKeys('FILE')).toEqual(['application/y.py']);
-    expect(store.auditLog().map((a) => a.scope)).toEqual([{ kind: 'subtree', directory: 'app' }]);
+    expect(await store.stats()).toMatchObject({ nodeCount: 3, edgeCount: 2 });
+    expect(store.auditLog().map((a) => [a.scope, a.nodesDeleted])).toEqual([
+      [{ kind: 'subtree', directory: 'app' }, 3],
+    ]);
   });
 
   it.each([
@@ -309,8 +407,17 @@ describe('MemoryStore as a GraphStore', () => {
       }),
     ],
     [
-      'a link onto a missing node',
-      mergeFs({ directories: [dirRow('.')], links: [link('.', 'FILE', 'zz.py')] }),
+      'a link onto a missing node, alongside a new row',
+      mergeFs({ directories: [dirRow('fresh')], links: [link('.', 'FILE', 'zz.py')] }),
+    ],
+    [
+      'a bad row after a good one',
+      mergeFs({
+        files: [
+          fileRow('new.py', 'n'),
+          { label: 'DIRECTORY', key: 'x', properties: { path: 'x' } },
+        ],
+      }),
     ],
   ])('rejects %s with WRITE_SHAPE_VIOLATION and changes nothing', async (_label, op) => {
     const store = await opened();
