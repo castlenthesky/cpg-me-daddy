@@ -34,7 +34,7 @@ const lines = readdirSync(LADDER)
     const section = /\[parse\]\n([\s\S]*?)(?:\n\[|$)/.exec(text)?.[1] ?? '';
     return section
       .split('\n')
-      .map((l) => l.replace(/#.*$/, '').trim())
+      .map((l) => l.replace(/(^|\s)#.*$/, '').trim())
       .filter((l) => l !== '')
       .map((l) => ({ rung, words: l.split(/\s+/) }));
   });
