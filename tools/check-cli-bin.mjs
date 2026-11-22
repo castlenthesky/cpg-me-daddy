@@ -22,9 +22,17 @@ if (build.status !== 0) {
   process.exit(1);
 }
 
+// The bin's workspace root falls back to CPG_WORKSPACE before cwd: a value in the caller's shell
+// would redirect the cases below that rely on cwd.
+const env = { ...process.env };
+delete env.CPG_WORKSPACE;
 const errors = [];
 function expectRun(args, status, stream, pattern, cwd = ROOT) {
-  const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], { cwd, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], {
+    cwd,
+    env,
+    encoding: 'utf8',
+  });
   const text = r[stream];
   if (r.status !== status || !pattern.test(text))
     errors.push(

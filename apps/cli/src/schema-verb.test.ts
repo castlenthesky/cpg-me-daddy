@@ -146,8 +146,8 @@ describe('cpg schema: exactly one mode', () => {
     },
   );
 
-  it('--check with no engine is still a SEAT: exit 2 "not built yet"', async () => {
-    const root = await workspace(docFor(CPG_SCHEMA));
+  it('--check with no engine is still a SEAT: exit 2 "not built yet", before any read', async () => {
+    const root = await workspace();
     const r = await cli(['schema', '--check', '--workspace', root], undefined);
     expect(r).toEqual({ code: EXIT.USAGE, stdout: [], stderr: "cpg: 'schema' is not built yet" });
   });
@@ -161,6 +161,20 @@ describe('cpg schema --check: drift of docs/outline/04-schema.yaml', () => {
     expect(r.stdout).toEqual([]);
     expect(r.stderr).toContain('up to date');
     expect(r.stderr).toContain(join(root, DOC));
+  });
+
+  it.each([
+    ['--format json', ['--format', 'json'], false],
+    ['--format=json', ['--format=json'], false],
+    ['isTty', [], true],
+  ])('--check with %s: the same exit, stdout and stderr (I-9)', async (_n, extra, isTty) => {
+    const root = await workspace(docFor(CPG_SCHEMA));
+    const base = await cli(['schema', '--check', '--workspace', root], realEngine());
+    const r = await cli(['schema', '--check', '--workspace', root, ...extra], realEngine(), {
+      isTty,
+    });
+    expect(r).toEqual(base);
+    expect(r.code).toBe(EXIT.OK);
   });
 
   it('a hand edit outside the generated region is not drift: exit 0', async () => {
@@ -211,8 +225,12 @@ describe('cpg schema --check: drift of docs/outline/04-schema.yaml', () => {
     );
   });
 
-  it('a workspace with no docs/outline/04-schema.yaml exits 1: cannot read, naming the path', async () => {
+  it.each([
+    ['is absent', false],
+    ['is a directory (EISDIR, not ENOENT)', true],
+  ])('docs/outline/04-schema.yaml %s: exit 1, cannot read, naming the path', async (_n, dir) => {
     const root = await workspace();
+    if (dir) await mkdir(join(root, DOC), { recursive: true });
     const r = await cli(['schema', '--check', '--workspace', root], realEngine());
     expect(r.code).toBe(EXIT.FAILED);
     expect(r.stdout).toEqual([]);
@@ -231,5 +249,24 @@ describe('cpg schema --check: drift of docs/outline/04-schema.yaml', () => {
     expect(await check([], { cwd: good })).toBe(EXIT.OK);
     expect(await check([], { cwd: empty })).toBe(EXIT.FAILED);
     expect(await check(['--workspace', basename(good)], { cwd: dirname(good) })).toBe(EXIT.OK);
+    expect(await check([], { env: { CPG_WORKSPACE: basename(good) }, cwd: dirname(good) })).toBe(
+      EXIT.OK,
+    );
+  });
+
+  it('the root is never found by ascending: a subdirectory of a workspace with the doc exits 1', async () => {
+    const good = await workspace(docFor(CPG_SCHEMA));
+    await mkdir(join(good, 'sub'));
+    expect(await check(['--workspace', join(good, 'sub')], {})).toBe(EXIT.FAILED);
+    expect(await check([], { cwd: join(good, 'sub') })).toBe(EXIT.FAILED);
+  });
+
+  it('no root from any source is a usage error, exit 2, and engine.schema() is never called', async () => {
+    const f = fakeEngine(SMALL);
+    const r = await cli(['schema', '--check'], f.engine);
+    expect(r.code).toBe(EXIT.USAGE);
+    expect(r.stdout).toEqual([]);
+    expect(r.stderr).toContain('no workspace root');
+    expect(f.calls()).toBe(0);
   });
 });

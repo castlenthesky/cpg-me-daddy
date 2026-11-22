@@ -633,6 +633,13 @@ describe('checkSchemaDoc: the drift verdict (U2a.4)', () => {
     expect(checkSchemaDoc(doc, small).firstDifferentLine).toBe(lineOf(doc, 'extra: 1'));
   });
 
+  it('CRLF inside the region is drift at its first line: lines split on \\n only, never normalised', () => {
+    const good = docFor(small);
+    const region = renderSchemaRegion(small);
+    const doc = good.replace(region, region.replaceAll('\n', '\r\n'));
+    expect(checkSchemaDoc(doc, small)).toEqual({ expected: good, firstDifferentLine: 3 });
+  });
+
   it('expected is exactly what schema:doc writes: splice(existing, render(schema))', () => {
     const doc = docFor(small).replace('nodes: []', 'nodes: [X]');
     expect(checkSchemaDoc(doc, CPG_SCHEMA).expected).toBe(
