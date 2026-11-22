@@ -149,11 +149,15 @@ function consume(known: Set<string>, events: readonly NormalizedChange[]): strin
 describe('coalesce + flushBatch against a consumer', () => {
   it('a consumer that knew the disk and applies the batch in order knows the disk again', () => {
     fc.assert(
-      fc.property(fc.subarray(FILES), fc.array(fsOp, { maxLength: 12 }), (initial, ops) => {
-        const disk = new Set(initial);
-        const events = run(disk, ops);
-        expect(consume(new Set(initial), events)).toEqual([...disk].toSorted());
-      }),
+      fc.property(
+        fc.subarray(FILES),
+        fc.array(fsOp, { minLength: 4, maxLength: 16 }),
+        (initial, ops) => {
+          const disk = new Set(initial);
+          const events = run(disk, ops);
+          expect(consume(new Set(initial), events)).toEqual([...disk].toSorted());
+        },
+      ),
       { numRuns: 2000 },
     );
   });
