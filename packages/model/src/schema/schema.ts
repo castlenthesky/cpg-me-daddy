@@ -14,6 +14,7 @@ import type { EdgeTypeSpec, NodeLabelSpec, SchemaConstraintSpec, SchemaIndexSpec
  * reverses planning README design rule 1's original hash-based formula).
  * `CALL` ordinals are parent-scope-relative, not file-relative, so
  * "insert above -> 0 id changes" holds for two identical calls in one method.
+ * Mint and read ids only with `makeNodeId` / `parseNodeId` (`./ids`); never concatenate one by hand.
  */
 export const ID_RULE = 'path:kind:qualifiedScopePath[:ordinal|:bodyHash]';
 
