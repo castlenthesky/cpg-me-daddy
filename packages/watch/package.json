@@ -2,7 +2,7 @@
   "name": "@cpg/watch",
   "version": "0.0.1",
   "private": true,
-  "description": "The C-WATCH seam and the @parcel/watcher backend; layer B lands in U4.",
+  "description": "The C-WATCH seam, the @parcel/watcher backend, and coalesce/flushBatch; the session lands in U4.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
