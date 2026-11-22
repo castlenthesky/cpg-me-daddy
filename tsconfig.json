@@ -7,6 +7,7 @@
     { "path": "packages/resolve" },
     { "path": "packages/watch" },
     { "path": "packages/engine" },
+    { "path": "packages/store" },
     { "path": "packages/sink" },
     { "path": "apps/vscode" },
     { "path": "apps/cli" }

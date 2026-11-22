@@ -35,6 +35,9 @@
     "packages/sink": {
       "project": ["src/**/*.ts"]
     },
+    "packages/store": {
+      "project": ["src/**/*.ts"]
+    },
     "apps/cli": {
       "project": ["src/**/*.ts"]
     }

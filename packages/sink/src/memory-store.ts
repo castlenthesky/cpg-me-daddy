@@ -1,5 +1,5 @@
-// MemoryStore: the always-on, durable, in-memory graph. This file is its GraphSink half; the
-// GraphStore half (C-STORE write/fileStates/nodeKeys/staleNodes) lands in U2a.2c.
+// MemoryStore: the always-on, durable, in-memory graph. One graph, two doors: this file is the
+// GraphSink half (C-SINK); memory-graph-store.ts is the GraphStore half (C-STORE).
 
 import type { GraphDelta, GraphPayload } from '@cpg/model';
 import { applyGraphDelta, graphDigest } from '@cpg/model';
@@ -11,14 +11,19 @@ import type {
   SinkState,
   SnapshotMeta,
 } from './contract';
+import type { GraphStore } from '@cpg/store';
 import { assertDeltaWellFormed, sinkError } from './delta';
+import { createStoreHalf, MEMORY_TIER_CAPABILITIES } from './memory-graph-store';
 
 export interface MemoryStoreOptions {
   /** Default 'memory'. */
   readonly id?: string;
+  /** Stamps audit entries. Default Date.now. */
+  readonly now?: () => number;
 }
 
-export type MemoryStore = GraphSink;
+/** C-SINK's and C-STORE's capabilities share a name but no field, so one object carries both. */
+export type MemoryStore = GraphSink & GraphStore;
 
 const MEMORY_STORE_CAPABILITIES: SinkCapabilities = {
   durability: 'durable',
@@ -38,8 +43,17 @@ export function createMemoryStore(options: MemoryStoreOptions = {}): MemoryStore
   let disposed = false;
 
   return {
+    ...createStoreHalf(
+      {
+        get: () => state,
+        set: (next) => {
+          state = next;
+        },
+      },
+      options.now ?? Date.now,
+    ),
     id,
-    capabilities: MEMORY_STORE_CAPABILITIES,
+    capabilities: { ...MEMORY_STORE_CAPABILITIES, ...MEMORY_TIER_CAPABILITIES },
 
     async onSnapshot(payload: GraphPayload, meta: SnapshotMeta): Promise<void> {
       if (disposed) {
