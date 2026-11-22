@@ -4,3 +4,4 @@ Status (U2a.1): REAL: `run(argv, io, opts)`, `Io`/`captureIo`, `EXIT`/`exitCodeF
 Layout and rules: `docs/outline/03-architecture.md` §2. Root `AGENTS.md` applies.
 
 - Imports node builtins and `@cpg/*` front doors only. No host SDK.
+- `src/contracts-agree.test-d.ts` is the cross-package contract-agreement test (model/resolve/watch today). Add each pair in the PR that creates its second side.

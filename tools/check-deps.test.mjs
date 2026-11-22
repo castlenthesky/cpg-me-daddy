@@ -146,3 +146,111 @@ describe('check-deps rejects every planted violation', () => {
     expect(out).toContain(`[${rule}]`);
   });
 });
+
+const contract = (text) => ({ ...CLEAN, 'packages/resolve/src/contract.ts': text });
+
+describe('rule 7: seam contract.ts imports types only', () => {
+  const MODEL = "import type { WorkspacePath } from '@cpg/model';\n";
+
+  it.each([
+    ['multi-line import type', "import type {\n  A,\n  B,\n} from '@cpg/model';\n"],
+    ['import type * as N', "import type * as M from '@cpg/model';\n"],
+    ['export type { } from', "export type { A } from '@cpg/model';\n"],
+    ['export type * from', "export type * from '@cpg/model';\n"],
+    [
+      'two consecutive import types with no semicolons',
+      "import type { A } from '@cpg/model'\nimport type { B } from '@cpg/model'\nexport type R = A | B\n",
+    ],
+    ['export type * as N from', "export type * as N from '@cpg/model';\n"],
+    ['import type with no semicolon', "import type { A } from '@cpg/model'\nexport type R = A\n"],
+  ])('accepts %s', (_name, text) => {
+    const { status, out } = run(contract(text));
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it('applies rule 7 to packages/watch/src/contract.ts too (not scoped to resolve)', () => {
+    const { status, out } = run({
+      ...CLEAN,
+      'packages/watch/src/contract.ts':
+        "import { x } from '@cpg/model';\nexport type R = typeof x;\n",
+    });
+    expect(status).toBe(1);
+    expect(out).toContain('[contract-types-only]');
+  });
+
+  it('exempts apps/**/contract.ts from rule 7 (apps may load anything their tier allows)', () => {
+    const { status } = run({
+      ...CLEAN,
+      'apps/cli/src/contract.ts': "import { x } from '@cpg/model';\nexport const y = x;\n",
+    });
+    expect(status).toBe(0);
+  });
+
+  it('accepts a value import of @cpg/model in a NON-contract file (scoped by basename)', () => {
+    const { status } = run({
+      ...CLEAN,
+      'packages/resolve/src/chain.ts':
+        "import { WORKSPACE_ROOT } from '@cpg/model';\nexport const r = WORKSPACE_ROOT;\n",
+    });
+    expect(status).toBe(0);
+  });
+
+  it.each([
+    [
+      'a value import',
+      "import { WORKSPACE_ROOT } from '@cpg/model';\nexport type R = typeof WORKSPACE_ROOT;\n",
+    ],
+    ['an inline { type X }', "import { type WorkspacePath } from '@cpg/model';\n"],
+    ['require()', "const m = require('@cpg/model');\n"],
+    ['import()', "export type T = Promise<unknown>;\nconst m = import('@cpg/model');\n"],
+    ['a bare side-effect import', "import '@cpg/model';\n"],
+    ['a braced value re-export', "export { X } from '@cpg/model';\n"],
+    ['a namespace value import', "import * as M from '@cpg/model';\nexport type R = typeof M;\n"],
+    ['a default value import', "import M from '@cpg/model';\nexport type R = typeof M;\n"],
+    ['export * (a value re-export)', "export * from '@cpg/model';\n"],
+    ['import type from a disallowed package', "import type { X } from '@cpg/sink';\n"],
+    ['import type from a relative path', "import type { X } from './local';\n"],
+    // documented false positive: a quoted specifier inside a comment is flagged; pinned so nobody "fixes" it silently
+    [
+      'a quoted specifier inside a comment',
+      "// see import { x } from '@cpg/model'\nexport type R = 1;\n",
+    ],
+  ])('rejects %s', (_name, text) => {
+    const { status, out } = run(contract(text));
+    expect(status).toBe(1);
+    expect(out).toContain('[contract-types-only]');
+  });
+
+  it.each([
+    ['a disallowed package', "import type { X } from '@cpg/sink';\n", /imports "@cpg\/sink"/],
+    ['a relative path', "import type { X } from './local';\n", /imports ".\/local"/],
+    ['a value import', "import { X } from '@cpg/model';\n", /loads "@cpg\/model" at runtime/],
+  ])('names the right violation for %s', (_name, text, message) => {
+    const { out } = run(contract(text));
+    expect(out).toMatch(message);
+  });
+
+  it.each([
+    ["export type R = Foo\nimport { WORKSPACE_ROOT } from '@cpg/model'\n"],
+    ["interface I { a: string }\nimport { X } from '@cpg/model'\n"],
+  ])('rejects the semicolon-less bypass on line 2: %j', (text) => {
+    const { status, out } = run(contract(text));
+    expect(status).toBe(1);
+    expect(out).toMatch(/contract\.ts:2 +\[contract-types-only\]/);
+  });
+
+  it('pins the line of a disallowed multi-line import type to its statement start', () => {
+    const { out } = run(contract(MODEL + "import type {\n  A,\n  B,\n} from '@cpg/sink';\n"));
+    expect(out).toMatch(/contract\.ts:2 +\[contract-types-only\].*@cpg\/sink/);
+  });
+
+  it('reports a runtime import after a multi-line type import on its true line', () => {
+    const { out } = run(
+      contract(
+        "import type {\n  A,\n  B,\n} from '@cpg/model';\nimport { X } from '@cpg/model';\n",
+      ),
+    );
+    expect(out).toMatch(/contract\.ts:5 +\[contract-types-only\]/);
+  });
+});
