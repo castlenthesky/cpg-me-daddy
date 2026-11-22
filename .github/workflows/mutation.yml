@@ -27,11 +27,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-          cache: npm
-      - run: npm ci
-      - run: npm run test:mutation
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run test:mutation
       # The slow prove-gates cases (skipped on every PR) run here: proves the mutation gate fails.
-      - run: npm run check:gates -- --only-slow
+      - run: bun run check:gates -- --only-slow
       # Upload even when the score is under the threshold: the report shows the survivors.
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}

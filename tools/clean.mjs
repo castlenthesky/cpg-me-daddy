@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `npm run clean`: full reset of everything generated (build output, caches, reports).
+// `bun run clean`: full reset of everything generated (build output, caches, reports).
 // A node script rather than `rm -rf` in package.json so it works on every OS.
 
 import { readdirSync, rmSync } from 'node:fs';

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// THE one gate command (`npm run check`): every fast gate through turbo, so repeat runs are cached.
-// A wrapper rather than an inline npm script only so telemetry can be disabled cross-platform:
+// THE one gate command (`bun run check`): every fast gate through turbo, so repeat runs are cached.
+// A wrapper rather than an inline package script only so telemetry can be disabled cross-platform:
 // this repo's privacy principle is no telemetry from tooling.
 
 import { spawnSync } from 'node:child_process';
@@ -19,9 +19,10 @@ const GATES = [
 ];
 
 const r = spawnSync(
-  'npx',
+  'bun',
   [
-    '--no-install',
+    'run',
+    '--silent',
     'turbo',
     'run',
     ...GATES.map((g) => `//#${g}`),

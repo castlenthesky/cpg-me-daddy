@@ -15,3 +15,6 @@ coverage/
 # stryker mutation reports, incremental state and sandbox
 reports/
 .stryker-tmp/
+
+# Claude linked checkouts. Not this tree's source; oxlint treats a nested config here as a second root.
+.claude/worktrees/

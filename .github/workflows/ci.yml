@@ -1,6 +1,6 @@
 name: CI
 
-# CI runs the same commands as a laptop, a git hook and an agent: `npm run check` is THE gate.
+# CI runs the same commands as a laptop, a git hook and an agent: `bun run check` is THE gate.
 # Nothing here re-implements a check; jobs only choose where each command runs.
 
 on:
@@ -33,26 +33,29 @@ jobs:
       - uses: actions/checkout@v7
 
       # Node version comes from .node-version, the single source also hashed by turbo.
+      # Bun version comes from package.json "packageManager".
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
 
-      # `npm ci` runs lefthook's postinstall, which skips itself when CI=true (set by Actions),
+      # `bun install` runs lefthook's postinstall, which skips itself when CI=true (set by Actions),
       # so no hooks are installed on the runner.
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
       # Turbo local cache only (no remote cache). The sha suffix makes every run save a fresh
       # entry; restore-keys then fall back to the newest cache for the same lockfile.
       - uses: actions/cache@v6
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          key: turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
             turbo-${{ runner.os }}-
 
-      - run: npm run check
+      - run: bun run check
 
       # coverage/** is a turbo output of //#test:coverage, so it exists on a cache hit too: no
       # second test run is needed. Ubuntu only: one copy is enough.
@@ -73,9 +76,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-          cache: npm
-      - run: npm ci
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
       # The Stryker case is slow: skipped here (and logged by name), run weekly by mutation.yml.
-      - run: npm run check:gates
+      - run: bun run check:gates
         env:
           PROVE_GATES_SKIP_SLOW: '1'

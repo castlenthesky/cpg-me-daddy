@@ -183,10 +183,10 @@ units:
     - id: F1
       name: Monorepo skeleton + CI
       delivers: >
-        packages/engine (pure TS, zero vscode imports), packages/cli, packages/vscode. npm workspaces,
+        packages/engine (pure TS, zero vscode imports), packages/cli, packages/vscode. bun workspaces,
         tsconfig project references. oxlint + oxfmt + lefthook; bun test for engine unit and integration;
-        @vscode/test-cli for the host (R5 packaging recommendation). Resolve the duplicate bun.lock /
-        package-lock.json — pick one, delete the other. Retire eslint.config.mjs and typescript-eslint.
+        @vscode/test-cli for the host (R5 packaging recommendation). The lockfile is bun.lock.
+        Retire eslint.config.mjs and typescript-eslint.
         Stand up .github/workflows/ci.yml: lint, format check, typecheck, unit tests on ubuntu + macos.
       gate: >
         CI green on a trivial passing test in each package; `lefthook install` wires pre-commit and the hook

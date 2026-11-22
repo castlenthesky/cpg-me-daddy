@@ -1,18 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run check)",
-      "Bash(npm run check:gates)",
-      "Bash(npm run check:deps)",
-      "Bash(npm run format:check)",
-      "Bash(npm run lint)",
-      "Bash(npm run typecheck)",
-      "Bash(npm run knip)",
-      "Bash(npm run test)",
-      "Bash(npm run test:coverage)",
-      "Bash(npm test)",
-      "Bash(npm run format)",
-      "Bash(npm run lint:fix)"
+      "Bash(bun run check)",
+      "Bash(bun run check:gates)",
+      "Bash(bun run check:deps)",
+      "Bash(bun run format:check)",
+      "Bash(bun run lint)",
+      "Bash(bun run typecheck)",
+      "Bash(bun run knip)",
+      "Bash(bun run test)",
+      "Bash(bun run test:coverage)",
+      "Bash(bun run format)",
+      "Bash(bun run lint:fix)",
+      "Bash(bun install)"
     ]
   },
   "hooks": {
@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR\"/tools/claude-post-edit.mjs"
+            "command": "bun \"$CLAUDE_PROJECT_DIR\"/tools/claude-post-edit.mjs"
           }
         ]
       }

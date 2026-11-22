@@ -331,7 +331,7 @@ development"*), so this is a build + manual + scripted check.
 
 **1. Build**
 ```
-npm run compile
+bun run compile
 ```
 
 **2. Collision regression — the original defect.** From the repo root, with a scratch

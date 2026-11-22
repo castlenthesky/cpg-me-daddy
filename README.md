@@ -1,14 +1,7 @@
 # cpg-me-daddy
 
-`cpg` is a command-line tool that maintains a live, sparse, structural code graph of a codebase:
-_a fresh, sparse, structural cross-file call-and-import graph, visible and queryable within 2 seconds
-of a save._ It is aligned to Joern's vocabulary so the flow tiers can be added later without renaming
-anything, but it is not a code property graph in Joern's sense today. Until the headless Python
-resolver lands (U8), it also cannot claim full call recall.
-
-**Start here:** [`docs/outline/README.md`](docs/outline/README.md) is the whole plan — what is being
-built, why, and how "done" is decided. Work is picked from
-[`docs/outline/07-milestones.yaml`](docs/outline/07-milestones.yaml).
+Code Property Graph for TypeScript/JavaScript/Python. The plan is
+[`docs/outline/README.md`](docs/outline/README.md).
 
 ## Layout
 
@@ -21,8 +14,31 @@ built, why, and how "done" is decided. Work is picked from
 ## Running
 
 ```
-npm ci
-npm run check   # every fast gate via turbo (`verify` is an alias)
+bun install
+bun run compile
 ```
 
 Then press F5 in VS Code to launch the Extension Development Host and run **CPG: Hello World**.
+
+## Commands
+
+| Command                     | What it does                                                                |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `bun run check`             | THE gate: every fast check via turbo (cached). `verify` is an alias         |
+| `bun run check:gates`       | Proves each gate fails on a planted violation (`-- --only-slow`: slow only) |
+| `bun run format`            | oxfmt write                                                                 |
+| `bun run format:check`      | oxfmt check                                                                 |
+| `bun run lint`              | oxlint, type-aware, warnings denied (owns unused vars/params)               |
+| `bun run lint:fix`          | oxlint autofix                                                              |
+| `bun run typecheck`         | `tsc -b`                                                                    |
+| `bun run typecheck:tests`   | `tsc` over all test files (incl. type tests)                                |
+| `bun run check:deps`        | dependency-direction rules (`tools/check-deps.mjs`)                         |
+| `bun run check:pack`        | asserts what `bun pm pack` would ship                                       |
+| `bun run knip`              | unused files/exports/deps                                                   |
+| `bun run test`              | vitest (unit, property, type tests)                                         |
+| `bun run test:coverage`     | vitest with coverage thresholds                                             |
+| `bun run test:mutation`     | Stryker mutation testing (slow, not in `check`)                             |
+| `bun run clean`             | SAFE FULL RESET: out, dist, tsbuildinfo, turbo, coverage, reports, stryker  |
+| `bun run compile` / `watch` | `tsc -b` / `tsc -b -w`                                                      |
+| `bun run changeset`         | record a semver change for a package                                        |
+| `bun run version-packages`  | apply changesets (`changeset version`)                                      |

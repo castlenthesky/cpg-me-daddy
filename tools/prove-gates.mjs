@@ -3,7 +3,7 @@
 //
 // Each case plants a violation, runs the gate command, and asserts a NON-ZERO
 // exit AND that the output names the violation (`expectOutput`: string or RegExp, normally the
-// planted file or the rule id). The second half matters: a crashed script, a typo'd npm script or a
+// planted file or the rule id). The second half matters: a crashed script, a typo'd package script or a
 // missing binary also exits non-zero, and must not be mistaken for the gate rejecting the probe.
 // A case without `expectOutput` is allowed only when impossible, and is listed in a warning.
 // cleanup() always runs (finally), even when the plant or the gate throws.
@@ -12,10 +12,11 @@
 // Slow cases carry `slow: true`. PROVE_GATES_SKIP_SLOW=1 skips them (and logs which, never
 // silently); `--only-slow` runs only them. Default (no flag, no env): everything runs.
 //
-// Run: npm run check:gates [-- --only-slow]
+// Run: bun run check:gates [-- --only-slow]
 
 import { spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -89,7 +90,7 @@ const depsCase = (name, file, body, expectOutput) => {
   let made;
   return {
     name,
-    command: ['npm', 'run', '--silent', 'check:deps'],
+    command: ['bun', 'run', '--silent', 'check:deps'],
     expectOutput,
     plant() {
       made = mkdirSync(at(dirname(file)), { recursive: true });
@@ -102,8 +103,8 @@ const depsCase = (name, file, body, expectOutput) => {
   };
 };
 
-const npmCheck = () =>
-  spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8', env: PLAIN_ENV });
+const runCheck = () =>
+  spawnSync('bun', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8', env: PLAIN_ENV });
 
 // Config-driven cache invalidation. Turbo must never replay a cached pass after a CONFIG-only
 // edit: warm the cache on a tree that is legal under the current config, change ONLY the config so
@@ -121,14 +122,14 @@ function configCase({ name, task, file, from, to, expectOutput, plant }) {
       if (!original.includes(from)) throw new Error(`${file} no longer contains: ${from}`);
       try {
         plant?.();
-        const warm = npmCheck();
+        const warm = runCheck();
         if (warm.status !== 0)
-          throw new Error(`baseline \`npm run check\` must pass first: ${tail(outputOf(warm))}`);
+          throw new Error(`baseline \`bun run check\` must pass first: ${tail(outputOf(warm))}`);
         writeFileSync(
           path,
           original.replace(from, () => to),
         );
-        const r = npmCheck();
+        const r = runCheck();
         const problem = verdict(r, { expectOutput });
         if (problem) throw new Error(problem);
         if (!new RegExp(`^//:${task}: cache miss`, 'm').test(outputOf(r)))
@@ -155,7 +156,7 @@ const CASES = [
     // oxlint is the single owner of unused-variable checks (tsc's noUnused* flags are off).
     name: 'lint rejects an unused local variable (no-unused-vars)',
     expectOutput: /no-unused-vars/,
-    command: ['npm', 'run', '--silent', 'lint'],
+    command: ['bun', 'run', '--silent', 'lint'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -170,7 +171,7 @@ const CASES = [
     // `before` is unused but sits BEFORE a used parameter: needs args "all" (default is after-used).
     name: 'lint rejects an unused function parameter (no-unused-vars, args: all)',
     expectOutput: /no-unused-vars/,
-    command: ['npm', 'run', '--silent', 'lint'],
+    command: ['bun', 'run', '--silent', 'lint'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -184,7 +185,7 @@ const CASES = [
   {
     name: 'format:check rejects a mis-formatted .ts file',
     expectOutput: /__gate_probe\.ts/,
-    command: ['npm', 'run', '--silent', 'format:check'],
+    command: ['bun', 'run', '--silent', 'format:check'],
     plant() {
       // Double quotes, no semicolon, extra spaces: violates every non-default format choice.
       writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const   probe = "x"\n');
@@ -196,7 +197,7 @@ const CASES = [
   {
     name: 'lint rejects a floating promise (type-aware rule)',
     expectOutput: /no-floating-promises/,
-    command: ['npm', 'run', '--silent', 'lint'],
+    command: ['bun', 'run', '--silent', 'lint'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -210,7 +211,7 @@ const CASES = [
   {
     name: 'lint rejects a debugger statement (correctness)',
     expectOutput: /no-debugger/,
-    command: ['npm', 'run', '--silent', 'lint'],
+    command: ['bun', 'run', '--silent', 'lint'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -224,7 +225,7 @@ const CASES = [
   {
     name: 'knip rejects an unreferenced file with an unused export',
     expectOutput: /__gate_probe\.ts/,
-    command: ['npm', 'run', '--silent', 'knip'],
+    command: ['bun', 'run', '--silent', 'knip'],
     plant() {
       writeFileSync(at('packages/model/src/__gate_probe.ts'), 'export const probe = 1;\n');
     },
@@ -234,7 +235,7 @@ const CASES = [
   },
   // check:deps on the real tree: the three tier violations U0.2.2 names, one per rule. Every other
   // rule and specifier form is planted on fixtures in tools/check-deps.test.mjs; the case after
-  // these proves `npm test` runs that file.
+  // these proves `bun run test` runs that file.
   depsCase(
     'check:deps rejects a vscode import in packages/model (host-sdk)',
     'packages/model/src/__gate_probe.ts',
@@ -255,10 +256,10 @@ const CASES = [
   ),
   {
     // The check-deps rules are proven by fixtures in tools/check-deps.test.mjs. If the vitest
-    // include stopped matching tools/, that proof would vanish while `npm test` stayed green.
-    name: 'npm test runs tools/*.test.mjs (the check-deps rule fixtures run under the check)',
+    // include stopped matching tools/, that proof would vanish while `bun run test` stayed green.
+    name: 'bun run test runs tools/*.test.mjs (the check-deps rule fixtures run under the check)',
     expectOutput: /__gate_probe\.test\.mjs/,
-    command: ['npm', 'run', '--silent', 'test'],
+    command: ['bun', 'run', '--silent', 'test'],
     plant() {
       writeFileSync(
         at('tools/__gate_probe.test.mjs'),
@@ -274,7 +275,7 @@ const CASES = [
     // Plants the dist files directly (what `tsc -b` would emit) and runs the tarball gate.
     name: 'check:pack rejects a test file and a runtime require in the model tarball',
     expectOutput: /__gate_probe\.test-d\.js/,
-    command: ['npm', 'run', '--silent', 'check:pack'],
+    command: ['bun', 'run', '--silent', 'check:pack'],
     plant() {
       // dist is gitignored: a fresh checkout (CI) has none until a build runs.
       mkdirSync(at('packages/model/dist'), { recursive: true });
@@ -287,7 +288,7 @@ const CASES = [
   {
     name: 'check:pack rejects a non-relative require in a non-test shipped .js',
     expectOutput: /__gate_probe\.js/,
-    command: ['npm', 'run', '--silent', 'check:pack'],
+    command: ['bun', 'run', '--silent', 'check:pack'],
     plant() {
       // dist is gitignored: a fresh checkout (CI) has none until a build runs.
       mkdirSync(at('packages/model/dist'), { recursive: true });
@@ -300,7 +301,7 @@ const CASES = [
   {
     name: 'typecheck rejects a type error',
     expectOutput: /TS2322/,
-    command: ['npm', 'run', '--silent', 'typecheck'],
+    command: ['bun', 'run', '--silent', 'typecheck'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -317,9 +318,9 @@ const CASES = [
     },
   },
   {
-    name: 'npm test fails on a failing test (and a glob matching nothing is not a pass)',
+    name: 'bun run test fails on a failing test (and a glob matching nothing is not a pass)',
     expectOutput: /__gate_probe\.test\.ts/,
-    command: ['npm', 'run', '--silent', 'test'],
+    command: ['bun', 'run', '--silent', 'test'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.test.ts'),
@@ -333,14 +334,14 @@ const CASES = [
   {
     name: 'vitest with an include glob matching no files exits non-zero (passWithNoTests: false)',
     expectOutput: /No test files found/i,
-    command: ['npx', 'vitest', 'run', '--typecheck.enabled=false', 'no-such-dir-probe'],
+    command: ['bun', 'run', 'vitest', 'run', '--typecheck.enabled=false', 'no-such-dir-probe'],
     plant() {},
     cleanup() {},
   },
   {
     name: 'test:coverage rejects an untested source file (threshold)',
     expectOutput: /does not meet global threshold/,
-    command: ['npm', 'run', '--silent', 'test:coverage'],
+    command: ['bun', 'run', '--silent', 'test:coverage'],
     plant() {
       const body = Array.from(
         { length: 40 },
@@ -356,7 +357,7 @@ const CASES = [
     // Runtime-valid (the body never fails at runtime), so only the type check can reject it.
     name: 'typecheck:tests rejects a type error in a .test.ts',
     expectOutput: /__gate_probe\.test\.ts.*TS2322/,
-    command: ['npm', 'run', '--silent', 'typecheck:tests'],
+    command: ['bun', 'run', '--silent', 'typecheck:tests'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.test.ts'),
@@ -370,7 +371,7 @@ const CASES = [
   {
     name: 'type test (*.test-d.ts) fails on a wrong type assertion',
     expectOutput: /__gate_probe\.test-d\.ts/,
-    command: ['npm', 'run', '--silent', 'typecheck:tests'],
+    command: ['bun', 'run', '--silent', 'typecheck:tests'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.test-d.ts'),
@@ -383,19 +384,19 @@ const CASES = [
   },
   {
     // Turbo must never mask a failure via its cache: warm the cache on the clean tree, plant a
-    // lint violation, and run the FULL `npm run check` twice (a failed run must not be cached
+    // lint violation, and run the FULL `bun run check` twice (a failed run must not be cached
     // either). The asserted run is the second one; the first only has to have been attempted.
-    name: 'npm run check fails on a planted lint error even with a warm turbo cache',
+    name: 'bun run check fails on a planted lint error even with a warm turbo cache',
     expectOutput: /no-debugger/,
-    command: ['npm', 'run', '--silent', 'check'],
+    command: ['bun', 'run', '--silent', 'check'],
     plant() {
-      const warm = spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
-      if (warm.status !== 0) throw new Error('baseline `npm run check` must pass before this case');
+      const warm = spawnSync('bun', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
+      if (warm.status !== 0) throw new Error('baseline `bun run check` must pass before this case');
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
         'export function probe(): void {\n  debugger;\n}\n',
       );
-      spawnSync('npm', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
+      spawnSync('bun', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8' });
     },
     cleanup() {
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
@@ -408,7 +409,7 @@ const CASES = [
     // The hook must reject, not just exist: stage a lint violation and run the real pre-commit job.
     name: 'lefthook pre-commit rejects a staged lint violation',
     expectOutput: /no-debugger/,
-    command: ['npx', '--no-install', 'lefthook', 'run', 'pre-commit'],
+    command: ['bun', 'run', 'lefthook', 'run', 'pre-commit'],
     plant() {
       writeFileSync(
         at('packages/model/src/__gate_probe.ts'),
@@ -419,9 +420,9 @@ const CASES = [
     cleanup: unstageProbe,
   },
   {
-    name: 'lefthook pre-push rejects a lint violation (runs the full npm run check)',
+    name: 'lefthook pre-push rejects a lint violation (runs the full bun run check)',
     expectOutput: /no-debugger/,
-    command: ['npx', '--no-install', 'lefthook', 'run', 'pre-push'],
+    command: ['bun', 'run', 'lefthook', 'run', 'pre-push'],
     // lefthook exits 0 with "(skip)" when it thinks there is nothing to push (up-to-date upstream,
     // detached CI checkout): that must never pass for a rejection.
     forbidOutput: /\(skip\)/,
@@ -441,7 +442,8 @@ const CASES = [
     // Regression: lefthook skipped the pre-push job ("no matching push files") whenever HEAD had no
     // unpushed commits, so a push of nothing new, or any CI checkout, ran no gate. Build throwaway
     // clones where there is nothing to push and assert the hook still runs the full check and
-    // rejects a planted lint violation. Uses the committed lefthook.yml (HEAD), not the worktree.
+    // rejects a planted lint violation. The clone is HEAD plus the worktree's bun hook,
+    // lockfile, and check runner, so the job under test is the one this tree ships.
     name: 'lefthook pre-push never skips when there is nothing new to push (upstream up to date, detached HEAD + CI)',
     expectOutput: 'no-debugger', // asserted per run inside run()
     run() {
@@ -453,16 +455,11 @@ const CASES = [
         must(sh(dir, 'git', ['init', '-q', '--bare', bare]), 'init bare');
         must(git(['push', '-q', bare, `${sha}:refs/heads/probe`]), 'push to throwaway origin');
         must(sh(dir, 'git', ['clone', '-q', '-b', 'probe', bare, clone]), 'clone');
-        must(
-          sh(clone, 'npm', [
-            'ci',
-            '--prefer-offline',
-            '--ignore-scripts',
-            '--no-audit',
-            '--no-fund',
-          ]),
-          'npm ci',
-        );
+        // The clone is HEAD. Overlay the worktree hook, lockfile, and check runner so the
+        // installed tree matches the bun commands this file tests, then install from bun.lock.
+        for (const rel of ['lefthook.yml', 'package.json', 'bun.lock', 'tools/check.mjs'])
+          copyFileSync(at(rel), `${clone}/${rel}`);
+        must(sh(clone, 'bun', ['install', '--frozen-lockfile']), 'bun install --frozen-lockfile');
         // Precondition: nothing to push, i.e. exactly the state that triggered the skip.
         const ahead = must(sh(clone, 'git', ['rev-list', '--count', '@{push}..HEAD']), 'ahead');
         if (ahead.stdout.trim() !== '0') throw new Error('clone is not up to date with upstream');
@@ -473,7 +470,7 @@ const CASES = [
         // What git feeds the pre-push hook: <local ref> <local sha> <remote ref> <remote sha>.
         const stdin = `refs/heads/probe ${sha} refs/heads/probe ${sha}\n`;
         const push = (env) =>
-          sh(clone, 'npx', ['--no-install', 'lefthook', 'run', 'pre-push', 'origin', bare], {
+          sh(clone, 'bun', ['run', 'lefthook', 'run', 'pre-push', 'origin', bare], {
             input: stdin,
             env: { ...process.env, ...env },
           });
@@ -499,7 +496,7 @@ const CASES = [
     slow: true,
     name: 'test:mutation rejects an untested source file (break threshold)',
     expectOutput: /threshold|break/i,
-    command: ['npm', 'run', '--silent', 'test:mutation'],
+    command: ['bun', 'run', '--silent', 'test:mutation'],
     plant() {
       const body = Array.from(
         { length: 40 },
@@ -514,7 +511,7 @@ const CASES = [
     },
   },
   {
-    // Not part of `npm run check`, but it is the agent feedback loop: it must exit 2 on a lint error.
+    // Not part of `bun run check`, but it is the agent feedback loop: it must exit 2 on a lint error.
     name: 'claude post-edit hook exits exactly 2 on a lint violation',
     expectOutput: /no-debugger/,
     expectStatus: 2,

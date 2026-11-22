@@ -1,5 +1,5 @@
 {
-  // The ONE type-check for all test code (*.test.ts and *.test-d.ts), run by `npm run
+  // The ONE type-check for all test code (*.test.ts and *.test-d.ts), run by `bun run
   // typecheck:tests`. vitest strips types and `tsc -b` deliberately excludes tests from build
   // output, so without this a type error in a test (or a failed expectTypeOf) goes unseen.
   // noEmit: checking only, never produces output.

@@ -406,9 +406,9 @@ Amendments to the corpus, in its own `was / now / why` style. Each needs your co
   supersedes the F/M0 ordering; the units themselves (their `delivers` and `gate` text) are reused
   where cited.
 
-- **Tooling.** npm + tsc + vitest now. oxlint/oxfmt/lefthook return at step 4 when there is a CLI
-  to gate (per memory `bun-oxlint-tooling-reverted`: the revert was about process, not the tools).
-  Bun is not required by anything in this plan; revisit if install/test speed becomes the bottleneck.
+- **Tooling.** bun + tsc + vitest + oxlint + oxfmt + lefthook. The lockfile is `bun.lock`.
+  An earlier revert of this stack was about process, not the tools; it is in force again as of
+  2026-11-21 (T-1). Invoke scripts with `bun run`.
 
 - **Vocabulary.** `50-schema.md` normative; `discovery` labels mapped per §3.3.
 
@@ -441,7 +441,7 @@ re-planned.
 
 **Inspector gate:** dump the graph the extension shows today; `cpg inspect graph.json` shows the
 same picture in a browser with VS Code closed.
-**Test gate:** `npm test` green; the direction check fails on a deliberately wrong edge, then passes.
+**Test gate:** `bun run test` green; the direction check fails on a deliberately wrong edge, then passes.
 
 ### Step 1 — `@cpg/scan` and `@cpg/watch` *(2 units)*
 
