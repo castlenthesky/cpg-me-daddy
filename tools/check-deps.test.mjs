@@ -62,6 +62,10 @@ describe('check-deps passes a clean two-tier tree', () => {
       'packages/engine/src/engine.test.ts':
         "import { createEngine } from './engine';\ncreateEngine({});\n",
       'apps/cli/src/main.ts': "import { createEngine } from '@cpg/engine';\ncreateEngine({});\n",
+      // a re-export and comments of every form name it without calling it
+      'packages/engine/src/index.ts': "export { createEngine } from './engine';\n",
+      'packages/sink/src/notes.ts':
+        "import type { createEngine } from '@cpg/engine';\n// see createEngine() in apps/cli\n/* createEngine() wires\n * createEngine(config, deps) here\n */\nexport type E = typeof createEngine;\n",
     });
     expect(out).toContain('check-deps: ok');
     expect(status).toBe(0);
@@ -143,6 +147,12 @@ describe('check-deps rejects every planted violation', () => {
       'a createEngine() call in packages/foo',
       'packages/foo/src/probe.ts',
       "import { createEngine } from '@cpg/engine';\nexport const e = createEngine({}, { sinks: [] });\n",
+      'engine-call-site',
+    ],
+    [
+      'a createEngine() call next to its definition in packages/engine/src/engine.ts',
+      'packages/engine/src/engine.ts',
+      'export function createEngine(c) {\n  return c;\n}\nexport const e = createEngine({});\n',
       'engine-call-site',
     ],
     [

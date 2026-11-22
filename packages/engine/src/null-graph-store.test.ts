@@ -18,11 +18,11 @@ const row = (label: 'DIRECTORY' | 'FILE', path: string): NodeRow => ({
   key: path,
   properties: { path },
 });
-const link = (from: string, to: string): EdgeRow => ({
+const link = (from: string, to: string, toLabel: 'DIRECTORY' | 'FILE' = 'FILE'): EdgeRow => ({
   type: 'HAS_ENTRY',
   fromLabel: 'DIRECTORY',
   fromKey: from,
-  toLabel: 'FILE',
+  toLabel,
   toKey: to,
   properties: {},
 });
@@ -32,7 +32,12 @@ const MERGE: WriteOp = {
   kind: 'merge-filesystem',
   directories: [row('DIRECTORY', '.'), row('DIRECTORY', 'src')],
   files: [row('FILE', 'a.py'), row('FILE', 'src/b.ts'), row('FILE', 'src/c.ts')],
-  links: [link('.', 'a.py'), link('src', 'src/b.ts'), link('src', 'src/c.ts'), link('.', 'src')],
+  links: [
+    link('.', 'a.py'),
+    link('src', 'src/b.ts'),
+    link('src', 'src/c.ts'),
+    link('.', 'src', 'DIRECTORY'),
+  ],
   moves: [],
   removals: [wp('old.py')],
 };
@@ -93,8 +98,22 @@ describe('NullGraphStore', () => {
       file: wp('a.py'),
       seq: 3,
       revision_id: 'ab',
-      nodes: [row('FILE', 'a.py'), row('FILE', 'a.py'), row('FILE', 'a.py')],
-      edges: [link('.', 'a.py')],
+      // file-owned code-tier rows (C-STORE: replace-file never carries filesystem rows)
+      nodes: ['a.py:MODULE', 'a.py:METHOD:f', 'a.py:METHOD:g'].map((id): NodeRow => ({
+        label: id.includes('METHOD') ? 'METHOD' : 'MODULE',
+        key: id,
+        properties: { id, file: 'a.py' },
+      })),
+      edges: [
+        {
+          type: 'DECLARES',
+          fromLabel: 'MODULE',
+          fromKey: 'a.py:MODULE',
+          toLabel: 'METHOD',
+          toKey: 'a.py:METHOD:f',
+          properties: {},
+        },
+      ],
     };
     expect(await store.write(replace)).toEqual(receipt(3, 1));
     expect(await store.write({ kind: 'delete-file', file: wp('a.py'), seq: 4 })).toEqual(
