@@ -175,3 +175,26 @@ export function spliceGeneratedRegion(existing: string, region: string): string 
   const nl = existing.indexOf('\n', begin);
   return existing.slice(0, nl + 1) + region + existing.slice(end);
 }
+
+/** The drift verdict `check:schema` and `cpg schema --check` both take from one function (U2a.4). */
+export interface SchemaDocCheck {
+  /** `existing` with its generated region re-rendered from the schema: the bytes `schema:doc` writes. */
+  readonly expected: string;
+  /** 1-based number of the first line where `existing` and `expected` differ; null when they are equal. */
+  readonly firstDifferentLine: number | null;
+}
+
+/**
+ * Whether `existing` (the text of docs/outline/04-schema.yaml) holds `schema`'s generated region
+ * byte-for-byte. Pure. Throws what renderSchemaRegion and spliceGeneratedRegion throw.
+ * REAL.
+ */
+export function checkSchemaDoc(existing: string, schema: SchemaDocInput): SchemaDocCheck {
+  const expected = spliceGeneratedRegion(existing, renderSchemaRegion(schema));
+  if (expected === existing) return { expected, firstDifferentLine: null };
+  const a = existing.split('\n');
+  const b = expected.split('\n');
+  let line = 0;
+  while (line < a.length && line < b.length && a[line] === b[line]) line++;
+  return { expected, firstDifferentLine: line + 1 };
+}

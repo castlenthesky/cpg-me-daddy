@@ -105,7 +105,18 @@ export const COMMANDS: readonly CommandSpec[] = [
     workspace,
     format('text', 'json'),
   ]),
-  cmd('schema', 'print the graph schema', 'none', [format('json')], { positionals: [] }),
+  cmd(
+    'schema',
+    'print the graph schema, or check docs/outline/04-schema.yaml for drift',
+    'none',
+    [
+      bool('print', 'print the schema as one cpg.schema document'),
+      bool('check', 'exit 1 when the generated region of docs/outline/04-schema.yaml is stale'),
+      workspace,
+      format('json'),
+    ],
+    { positionals: [] },
+  ),
 ];
 
 export const flagsOf = (spec: CommandSpec): readonly FlagSpec[] => [...spec.flags, HELP];

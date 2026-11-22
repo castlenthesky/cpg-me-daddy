@@ -1,7 +1,8 @@
 // run(argv, io, opts): everything between argv and the first engine call, and between the last
 // engine return and stdout. Pure w.r.t. ambient state: no process.*, no clock outside io.now (I-30).
 
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type {
   CheckResult,
@@ -11,6 +12,7 @@ import type {
   StoreTarget,
   VerifyReport,
 } from '@cpg/engine';
+import { checkSchemaDoc } from '@cpg/model';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -18,12 +20,14 @@ export const EXIT = { OK: 0, FAILED: 1, USAGE: 2, VERIFY_FAILED: 3, INTERRUPTED:
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 
 // The C-CLI CliError kinds this skeleton can raise, plus 'not-built' for reserved verbs and SEAT
-// handlers (exit 2; its message tells it apart from the 'unknown command' error).
+// handlers (exit 2; its message tells it apart from the 'unknown command' error) and 'schema-check'
+// for `cpg schema --check` failures (CLI-local like 'not-built', exit 1).
 export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
   | { kind: 'not-built'; verb: string; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
   | { kind: 'verification'; failures: readonly CheckResult[] }
+  | { kind: 'schema-check'; message: string }
   | { kind: 'interrupted'; committed: number; pending: number };
 
 // Total (the compiler rejects a kind with no row); the ONLY exit-code decision site.
@@ -32,6 +36,7 @@ const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   'not-built': EXIT.USAGE,
   'engine-unavailable': EXIT.FAILED,
   verification: EXIT.VERIFY_FAILED,
+  'schema-check': EXIT.FAILED,
   interrupted: EXIT.INTERRUPTED,
 };
 export const exitCodeFor = (error: CliError): ExitCode => EXIT_FOR[error.kind];
@@ -89,6 +94,7 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   }
   // Every flag is validated before anything touches the engine (I-12).
   const target = storeTarget(spec, values);
+  if (spec.verb === 'schema') return runSchema(opts.engine, values, io, opts);
   // SEAT: no verb has a handler until the engine exists (U2a.2+). Until then every verb stops here.
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (!opts.engine) throw seat;
@@ -189,6 +195,59 @@ async function runVerify(
   }
 
   return EXIT.OK;
+}
+
+async function runSchema(
+  engine: CpgEngine | undefined,
+  values: Values,
+  io: Io,
+  opts: RunOptions,
+): Promise<ExitCode> {
+  // REAL
+  const print = values['print'] === true;
+  const check = values['check'] === true;
+  if (print === check) {
+    throw new Fail({
+      kind: 'usage',
+      verb: 'schema',
+      message: 'pass exactly one of --print or --check',
+    });
+  }
+  if (!engine) {
+    throw new Fail({ kind: 'not-built', verb: 'schema', message: "'schema' is not built yet" });
+  }
+  if (print) {
+    io.out(formatDocument('cpg.schema', engine.schema(), io, opts.manifest));
+    return EXIT.OK;
+  }
+
+  const root = resolveWorkspaceRoot('schema', values, [], io, opts);
+  const file = join(root, 'docs', 'outline', '04-schema.yaml');
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    throw new Fail({ kind: 'schema-check', message: `schema: cannot read ${file}` });
+  }
+
+  let firstDifferentLine: number | null;
+  try {
+    firstDifferentLine = checkSchemaDoc(text, engine.schema()).firstDifferentLine;
+  } catch (e: unknown) {
+    throw new Fail({
+      kind: 'schema-check',
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  if (firstDifferentLine === null) {
+    io.err(`cpg: schema: ${file} is up to date`);
+    return EXIT.OK;
+  }
+  throw new Fail({
+    kind: 'schema-check',
+    message: `schema: ${file} generated region is stale (first difference at line ${firstDifferentLine})`,
+  });
 }
 
 async function runIndexDryRun(

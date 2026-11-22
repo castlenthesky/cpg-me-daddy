@@ -1,8 +1,8 @@
 // The CpgEngine port (C-CLI): the one surface a front door sees. C-CLI Q1 puts the contract types in
 // @cpg/engine's public surface. Types only. This is the slice U2a needs (identity, connect, index,
-// verify); watch, read, inspect, doctor and schema arrive with their units.
+// verify, schema); watch, read, inspect and doctor arrive with their units.
 
-import type { WorkspacePath } from '@cpg/model';
+import type { SchemaDocInput, WorkspacePath } from '@cpg/model';
 
 export interface StoreTarget {
   readonly host: string;
@@ -134,4 +134,9 @@ export interface CpgEngine {
     config: VerifyConfig,
     expected: IndexReport | null,
   ): Promise<VerifyReport>;
+  /**
+   * The graph schema (CPG_SCHEMA). C-CLI types it `unknown`; the port narrows it to the part the CLI
+   * reads: `cpg schema --check` renders its doc region, and `--print` serialises the whole object.
+   */
+  schema(): SchemaDocInput;
 }

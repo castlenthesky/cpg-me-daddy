@@ -12,6 +12,7 @@ import { parse } from 'yaml';
 
 import {
   CPG_SCHEMA,
+  checkSchemaDoc,
   EDGE_TYPES,
   GENERATED_BEGIN,
   GENERATED_END,
@@ -22,6 +23,7 @@ import {
   type EdgeTypeSpec,
   type NodeLabelSpec,
   type PropertySpec,
+  type SchemaDocInput,
 } from '../index';
 import * as enums from './enums';
 
@@ -570,5 +572,93 @@ describe('docs/outline/04-schema.yaml stays valid and honest about the relocatio
       expect(enc[key]).toContain(needle);
     expect(doc.id_rule.examples.DIRECTORY).toBe('dir:src');
     expect(doc.id_rule.examples.DIRECTORY_ROOT).toBe('dir:.');
+  });
+});
+
+/** The 1-based number of the line in `text` that equals `line`. */
+const lineOf = (text: string, line: string): number => {
+  const at = text.split('\n').indexOf(line);
+  if (at === -1) throw new Error(`fixture has no line ${line}`);
+  return at + 1;
+};
+
+// U2a.4: the one drift verdict `check:schema` (tools/schema-doc.mjs) and `cpg schema --check` share.
+// The doc is built here around the already-tested renderer; line numbers are found in the input text.
+describe('checkSchemaDoc: the drift verdict (U2a.4)', () => {
+  const small: SchemaDocInput = { version: 1, nodes: [], edges: [] };
+  const docFor = (s: SchemaDocInput): string =>
+    `top: 1\n${BEGIN_LINE}${renderSchemaRegion(s)}${END_LINE}tail: 2\n`;
+
+  it.each([
+    ['the small schema', small],
+    ['CPG_SCHEMA', CPG_SCHEMA],
+  ])('an up-to-date doc (%s): expected is the input, no differing line', (_name, s) => {
+    const doc = docFor(s);
+    expect(checkSchemaDoc(doc, s)).toEqual({ expected: doc, firstDifferentLine: null });
+  });
+
+  it('a hand edit outside the generated region is not drift (the markers bound what it owns)', () => {
+    const doc = docFor(small).replace('tail: 2', 'tail: 3').replace('top: 1', 'top: 0');
+    expect(checkSchemaDoc(doc, small)).toEqual({ expected: doc, firstDifferentLine: null });
+  });
+
+  it('a hand edit inside the region: the edited line, and expected is the regenerated doc', () => {
+    const good = docFor(small);
+    const doc = good.replace('# Node labels (0)', '# Node label (0)');
+    expect(checkSchemaDoc(doc, small)).toEqual({
+      expected: good,
+      firstDifferentLine: lineOf(good, '# Node labels (0)'),
+    });
+  });
+
+  it('a version bump with the doc unregenerated differs at the header line (line 3 here)', () => {
+    const doc = docFor(small);
+    const r = checkSchemaDoc(doc, { ...small, version: 2 });
+    expect(r.firstDifferentLine).toBe(3);
+    expect(r.expected).toBe(docFor({ ...small, version: 2 }));
+  });
+
+  it('a deleted last region line differs where the END marker moved up to', () => {
+    const good = docFor(small);
+    const doc = good.replace('edges: []\n', '');
+    expect(checkSchemaDoc(doc, small)).toEqual({
+      expected: good,
+      firstDifferentLine: lineOf(good, 'edges: []'),
+    });
+  });
+
+  it('an extra line before END differs at the extra line', () => {
+    const good = docFor(small);
+    const doc = good.replace(END_LINE, `extra: 1\n${END_LINE}`);
+    expect(checkSchemaDoc(doc, small).firstDifferentLine).toBe(lineOf(doc, 'extra: 1'));
+  });
+
+  it('CRLF inside the region is drift at its first line: lines split on \\n only, never normalised', () => {
+    const good = docFor(small);
+    const region = renderSchemaRegion(small);
+    const doc = good.replace(region, region.replaceAll('\n', '\r\n'));
+    expect(checkSchemaDoc(doc, small)).toEqual({ expected: good, firstDifferentLine: 3 });
+  });
+
+  it('expected is exactly what schema:doc writes: splice(existing, render(schema))', () => {
+    const doc = docFor(small).replace('nodes: []', 'nodes: [X]');
+    expect(checkSchemaDoc(doc, CPG_SCHEMA).expected).toBe(
+      spliceGeneratedRegion(doc, renderSchemaRegion(CPG_SCHEMA)),
+    );
+  });
+
+  it.each([
+    [
+      'no END marker',
+      `top\n${BEGIN_LINE}x\n`,
+      'schema-doc: expected exactly one line starting with "# END GENERATED", found 0',
+    ],
+    [
+      'two BEGIN markers',
+      `${BEGIN_LINE}${BEGIN_LINE}${END_LINE}`,
+      'schema-doc: expected exactly one line starting with "# BEGIN GENERATED", found 2',
+    ],
+  ])('malformed markers (%s) throw the splicer error', (_name, doc, message) => {
+    expect(() => checkSchemaDoc(doc, small)).toThrow(message);
   });
 });

@@ -4,6 +4,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,9 +22,17 @@ if (build.status !== 0) {
   process.exit(1);
 }
 
+// The bin's workspace root falls back to CPG_WORKSPACE before cwd: a value in the caller's shell
+// would redirect the cases below that rely on cwd.
+const env = { ...process.env };
+delete env.CPG_WORKSPACE;
 const errors = [];
 function expectRun(args, status, stream, pattern, cwd = ROOT) {
-  const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], { cwd, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], {
+    cwd,
+    env,
+    encoding: 'utf8',
+  });
   const text = r[stream];
   if (r.status !== status || !pattern.test(text))
     errors.push(
@@ -58,6 +67,20 @@ try {
       `cpg verify --format=json: stdout is not one JSON document (${String(e)}): ${v.stdout}`,
     );
   }
+  // cpg schema (U2a.4): --print is CPG_SCHEMA as one cpg.schema document, and --check on this
+  // repository gives check:schema's verdict (both decide drift with @cpg/model's checkSchemaDoc).
+  const s = expectRun(['schema', '--print'], 0, 'stdout', /^\{.*\}\n$/);
+  try {
+    const doc = JSON.parse(s.stdout);
+    // The model is built by the apps/cli build above (a project reference).
+    const { CPG_SCHEMA } = createRequire(import.meta.url)(join(ROOT, 'packages/model'));
+    if (doc.kind !== 'cpg.schema' || JSON.stringify(doc.body) !== JSON.stringify(CPG_SCHEMA))
+      errors.push(`cpg schema --print: the document is not CPG_SCHEMA: ${s.stdout.slice(0, 200)}`);
+  } catch (e) {
+    errors.push(`cpg schema --print: stdout is not one JSON document (${String(e)})`);
+  }
+  expectRun(['schema', '--check'], 0, 'stderr', /up to date/);
+  expectRun(['schema', '--check', '--workspace', ws], 1, 'stderr', /cannot read/);
 } finally {
   rmSync(ws, { recursive: true, force: true });
 }
