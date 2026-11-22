@@ -112,6 +112,8 @@ describe('watch -> resolve -> model flow', () => {
 describe('C-RESOLVE amendments (U1.3.1)', () => {
   it('resolve is async and returns a ResolveBatch, with an optional ResolveContext', () => {
     expectTypeOf<ReturnType<Resolver['resolve']>>().toEqualTypeOf<Promise<ResolveBatch>>();
+    // Type-aware lint runs before the build, when workspace types are unresolved (error types).
+    // oxlint-disable-next-line typescript/no-redundant-type-constituents
     expectTypeOf<Parameters<Resolver['resolve']>[2]>().toEqualTypeOf<ResolveContext | undefined>();
   });
 
