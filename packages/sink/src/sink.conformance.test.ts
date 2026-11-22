@@ -203,16 +203,19 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
 
     it('INV-9: a garbage delivery rejects; the sink never throws synchronously', async () => {
       const sink = await seeded(make);
+      // The same sink seen by a buggy, untyped producer (method parameters are bivariant).
+      const untyped: {
+        onDelta(delta: unknown, meta: DeltaMeta): Promise<void>;
+        onSnapshot(payload: unknown, meta: { seq: number; cause: 'resync' }): Promise<void>;
+      } = sink;
       let pending: Promise<void> | undefined;
       expect(() => {
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- deliberately garbage: what a buggy producer could send.
-        pending = sink.onDelta(null as unknown as DeliverableDelta, live(1));
+        pending = untyped.onDelta(null, live(1));
       }).not.toThrow();
       expect(await rejectionKind(pending ?? Promise.resolve())).not.toBe('resolved');
       let snap: Promise<void> | undefined;
       expect(() => {
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- deliberately garbage.
-        snap = sink.onSnapshot(null as unknown as GraphPayload, { seq: 1, cause: 'resync' });
+        snap = untyped.onSnapshot(null, { seq: 1, cause: 'resync' });
       }).not.toThrow();
       expect(await rejectionKind(snap ?? Promise.resolve())).not.toBe('resolved');
     });
