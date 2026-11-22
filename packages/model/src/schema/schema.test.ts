@@ -14,6 +14,7 @@ import {
   type EdgeTypeSpec,
   type NodeLabelSpec,
 } from '../index';
+import { ownedBy } from './owner';
 
 describe('v1 schema shape', () => {
   test('declares exactly the 14 R6-approved node labels', () => {
@@ -268,5 +269,82 @@ describe('bootstrap data for M0.4', () => {
       properties: ['fqn'],
       entityType: 'NODE',
     });
+  });
+});
+
+const ownersOf = (label: string): Record<string, string> =>
+  Object.fromEntries((nodeSpec(label)?.properties ?? []).map((p) => [p.name, p.owner]));
+
+describe('per-property owner (DQ-01c, D3, D4)', () => {
+  test('every property of every node label and edge type declares owner filesystem|code', () => {
+    const all = [
+      ...NODE_LABELS.flatMap((n) => n.properties.map((p) => [n.label, p] as const)),
+      ...EDGE_TYPES.flatMap((e) => e.properties.map((p) => [e.type, p] as const)),
+    ];
+    expect(all.length).toBeGreaterThan(0);
+    for (const [, property] of all) {
+      expect(['filesystem', 'code']).toContain(property.owner);
+    }
+  });
+
+  test('FILE is split: the walker owns identity and hashes, the code tier owns the rest', () => {
+    const owners = ownersOf('FILE');
+    expect(owners).toEqual({
+      path: 'filesystem',
+      name: 'filesystem',
+      language: 'filesystem',
+      content_hash: 'filesystem',
+      revision_id: 'filesystem',
+      interface_hash: 'code',
+      status: 'code',
+      version: 'code',
+      indexed_at: 'code',
+      loc: 'code',
+    });
+  });
+
+  test('DIRECTORY is entirely filesystem-owned', () => {
+    expect(new Set(Object.values(ownersOf('DIRECTORY')))).toEqual(new Set(['filesystem']));
+    expect(Object.keys(ownersOf('DIRECTORY'))).toEqual(['path', 'name', 'status']);
+  });
+
+  test('every other label, including revision_id on :CPG labels, is code-owned', () => {
+    for (const n of NODE_LABELS) {
+      if (n.label === 'FILE' || n.label === 'DIRECTORY') continue;
+      for (const p of n.properties)
+        expect([n.label, p.name, p.owner]).toEqual([n.label, p.name, 'code']);
+    }
+    expect(ownersOf('METHOD')['revision_id']).toBe('code');
+  });
+
+  test('every edge property is code-owned', () => {
+    for (const e of EDGE_TYPES) {
+      for (const p of e.properties)
+        expect([e.type, p.name, p.owner]).toEqual([e.type, p.name, 'code']);
+    }
+  });
+});
+
+describe('ownedBy', () => {
+  test('stamps owner on each property and leaves every other field unchanged', () => {
+    const enumValues = ['x', 'y'] as const;
+    const input = [
+      { name: 'a', type: 'string', cardinality: 'one', golden: 'include' },
+      { name: 'b', type: 'string', cardinality: 'one', golden: 'redact', enumValues },
+    ] as const;
+    const out = ownedBy('code', input);
+    expect(out).toEqual([
+      { name: 'a', type: 'string', cardinality: 'one', golden: 'include', owner: 'code' },
+      {
+        name: 'b',
+        type: 'string',
+        cardinality: 'one',
+        golden: 'redact',
+        enumValues,
+        owner: 'code',
+      },
+    ]);
+    // enumValues keeps its identity (R6: shared vocabulary compared by ===).
+    expect(out[1]?.enumValues).toBe(enumValues);
   });
 });

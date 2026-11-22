@@ -15,6 +15,9 @@
 // anything here would pull that dependency's runtime into whichever side merely
 // wants the types.
 
+import type { WorkspacePath } from './paths';
+import type { PropertyOwner } from './schema';
+
 /**
  * A range in a source file, in exactly the coordinate system
  * `vscode.Position` uses: zero-based rows, and columns counted in UTF-16 code
@@ -66,14 +69,14 @@ export interface NodeLocation {
  */
 export interface GraphNode {
   /** Unique across the whole payload. A file path today. */
-  id: string;
-  type: string;
+  readonly id: string;
+  readonly type: string;
   /**
    * Short display name — the basename for files/directories, never a full
    * path (that's `id`). Falls back to `id` if omitted.
    */
-  name?: string;
-  data?: Record<string, unknown>;
+  readonly name?: string;
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -82,9 +85,9 @@ export interface GraphNode {
  * hierarchy edge type additionally seed the radial layout.
  */
 export interface GraphEdge {
-  source: string;
-  target: string;
-  type?: string;
+  readonly source: string;
+  readonly target: string;
+  readonly type?: string;
   /**
    * Open property bag, same contract as `GraphNode.data` — read back through a
    * typed accessor (`edgeResolution`) rather than by indexing, so only one
@@ -97,7 +100,7 @@ export interface GraphEdge {
    * provenance a *producer* needs to keep and a *host* may want to surface —
    * not a rendering channel.
    */
-  data?: Record<string, unknown>;
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -154,31 +157,41 @@ function readResolution(candidate: unknown): EdgeResolution | undefined {
   };
 }
 
+/**
+ * A full snapshot. `seq` is the seq of the last delta folded in; a payload that has applied nothing
+ * has seq -1 (the same as a fresh `SinkState.highWaterSeq`).
+ */
 export interface GraphPayload {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+  readonly seq: number;
+  readonly nodes: readonly GraphNode[];
+  readonly edges: readonly GraphEdge[];
 }
 
 /**
- * The minimal add/remove needed to bring a previously-sent `GraphPayload` up
- * to date, instead of resending the whole workspace on every change.
+ * The F-1 envelope: the minimal add/remove that brings a `GraphPayload` at `seq - 1` up to `seq`,
+ * instead of resending the whole workspace on every change.
  *
- * Removed edges are never listed explicitly — `removedNodeIds` implies them,
- * since an edge touching a removed node can't meaningfully remain (see
- * `applyGraphDelta`, which drops such edges rather than requiring the producer
- * to enumerate them).
+ * Removed edges are never listed explicitly — `removedNodeIds` implies them, since an edge touching
+ * a removed node can't meaningfully remain (`applyGraphDelta` drops such edges).
  *
- * CONFORMANCE HAZARD, and the reason `applyGraphDelta` has a characterization
- * test: an *update* to an existing node must be expressed as a removal plus an
- * addition. Putting a changed node in `addedNodes` alone appends a second copy
- * with the same id. This is the delta-protocol shape of the historical
- * reconciler bug where real files kept looking "missing" and duplicate nodes
- * accumulated on every pass.
+ * Re-adding an id that is already present MERGES in place, by per-property owner: the `producer`
+ * tier's keys are replaced and the other tier's keys are kept (DQ-01c). That is how a FILE carries
+ * both the walker's `content_hash` and the code tier's `interface_hash` without the historical
+ * duplicate-node bug (L-01). A same-tier re-add of a delete-create label without removing it first
+ * is malformed; remove-then-add is the whole-replace form.
  */
 export interface GraphDelta {
-  addedNodes: GraphNode[];
-  addedEdges: GraphEdge[];
-  removedNodeIds: string[];
+  /** Per-workspace, allocated by SINK (F-1). */
+  readonly seq: number;
+  /** The owning file. */
+  readonly file: WorkspacePath;
+  /** The owning file's content hash; also on each added node (not checked by `applyGraphDelta`). */
+  readonly revision_id: string;
+  /** The tier that produced this delta: the discriminant of the owner merge. */
+  readonly producer: PropertyOwner;
+  readonly addedNodes: readonly GraphNode[];
+  readonly addedEdges: readonly GraphEdge[];
+  readonly removedNodeIds: readonly string[];
 }
 
 /** Producer/engine → host. */
@@ -235,23 +248,6 @@ export function nodeLocation(node: GraphNode): NodeLocation | undefined {
   };
 }
 
-/**
- * Merges a `GraphDelta` into a `GraphPayload`, dropping any edge that touches a
- * removed node. Shared by every host that keeps a full-snapshot state to
- * re-send on reconnect, and available to any other consumer that needs the
- * merged shape rather than the delta itself.
- *
- * Pure: neither argument is mutated.
- */
-export function applyGraphDelta(payload: GraphPayload, delta: GraphDelta): GraphPayload {
-  const removed = new Set(delta.removedNodeIds);
-  return {
-    nodes: payload.nodes.filter((node) => !removed.has(node.id)).concat(delta.addedNodes),
-    edges: payload.edges
-      .filter((edge) => !removed.has(edge.source) && !removed.has(edge.target))
-      .concat(delta.addedEdges),
-  };
-}
-
+export * from './delta';
 export * from './schema';
 export * from './paths';
