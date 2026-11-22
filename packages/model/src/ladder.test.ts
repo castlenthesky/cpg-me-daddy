@@ -13,6 +13,15 @@ const SECTIONS = ['parse', 'filesystem', 'structural', 'symbols', 'resolution'] 
 type Section = (typeof SECTIONS)[number];
 const isSection = (name: string): name is Section => (SECTIONS as readonly string[]).includes(name);
 
+/** The SCIP descriptor each declaring label's SYMBOL ends with (04-schema.yaml SYMBOL.fqn). */
+const DESCRIPTOR_END: Readonly<Record<string, string>> = {
+  MODULE: '/',
+  TYPE_DECL: '#',
+  METHOD: ').',
+  MEMBER: '.',
+  PARAM: ')',
+};
+
 /** The section that owns each label or edge type; anything not listed is `structural`. */
 const OWNER: Readonly<Record<string, Section>> = {
   DIRECTORY: 'filesystem',
@@ -35,7 +44,8 @@ function readFacts(rung: string, problems: string[]): Fact[] {
   const lines = readFileSync(join(LADDER, rung, 'expected.cpg'), 'utf8').split('\n');
   lines.forEach((raw, index) => {
     const at = `${rung}/expected.cpg:${String(index + 1)}`;
-    const text = raw.replace(/#.*$/, '').trim();
+    // A comment starts at a `#` that begins the line or follows whitespace; SCIP fqns hold `#` too.
+    const text = raw.replace(/(^|\s)#.*$/, '').trim();
     if (text === '') return;
     const header = /^\[(\w+)\]$/.exec(text)?.[1];
     if (header !== undefined) {
@@ -161,6 +171,19 @@ describe('fixtures/ladder', () => {
         if (spec !== undefined && !spec.to.includes(labels[1] ?? ''))
           problems.push(`${f.at} ${type} may not end at ${String(labels[1])}`);
         checkProperties(f, type, spec?.properties ?? [], pairs, problems);
+      }
+      expect(problems).toEqual([]);
+    });
+
+    it("every DEFINES target is a SCIP fqn in its source's file, ending as its label requires", () => {
+      const problems: string[] = [];
+      for (const f of edgeFacts.filter((x) => x.words[0] === 'DEFINES')) {
+        const [, from = '', , to = ''] = f.words;
+        const label = declared.get(from) ?? '';
+        const prefix = `\`${parseNodeId(from)?.path ?? ''}\`/`;
+        const end = DESCRIPTOR_END[label] ?? '';
+        if (!to.startsWith(prefix)) problems.push(`${f.at} ${to} is not under ${prefix}`);
+        if (!to.endsWith(end)) problems.push(`${f.at} a ${label} symbol ends with "${end}": ${to}`);
       }
       expect(problems).toEqual([]);
     });

@@ -23,7 +23,7 @@ NN-name/
 
 ## expected.cpg
 
-One fact per line. `#` starts a comment. A section header names the pipeline stage that owns the facts under it, so a stage is checked against its own sections only.
+One fact per line. A `#` that begins a line or follows a space starts a comment. A `#` inside a word is part of it, as in the SCIP fqn `` `main.py`/Greeter#greet(). ``. A section header names the pipeline stage that owns the facts under it, so a stage is checked against its own sections only.
 
 | section        | owner                                      | holds                                                                                                                   |
 | -------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
