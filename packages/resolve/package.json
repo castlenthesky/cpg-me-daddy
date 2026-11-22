@@ -2,7 +2,7 @@
   "name": "@cpg/resolve",
   "version": "0.0.1",
   "private": true,
-  "description": "The C-RESOLVE seam: types only until the resolver chain lands (U6c).",
+  "description": "The C-RESOLVE seam and the LSP stdio transport; resolvers land in U6c/U8.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
