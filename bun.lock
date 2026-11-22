@@ -15,6 +15,7 @@
         "@types/node": "^24.19.2",
         "@types/vscode": "^1.146.0",
         "@vitest/coverage-v8": "^5.1.1",
+        "basedpyright": "^1.40.2",
         "fast-check": "^4.11.0",
         "knip": "^6.47.0",
         "lefthook": "^2.2.2",
@@ -23,6 +24,7 @@
         "oxlint-tsgolint": "^7.0.2008",
         "turbo": "^2.11.13",
         "typescript": "^5.9.3",
+        "typescript-language-server": "^6.1.0",
         "vitest": "^5.1.1",
         "yaml": "2.9.1",
       },
@@ -506,6 +508,8 @@
 
     "balanced-match": ["balanced-match@4.0.4", "", {}, "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA=="],
 
+    "basedpyright": ["basedpyright@1.40.2", "", { "optionalDependencies": { "fsevents": "~2.3.3" }, "bin": { "pyright": "index.js", "basedpyright": "index.js", "pyright-langserver": "langserver.index.js", "basedpyright-langserver": "langserver.index.js" } }, "sha512-9uld8+5tZC2Gxf8nIynyunK0N4xn01W1ApzLMXDAcuA8uJq2QSfldYn9gSbxn9MWR8wmHDo7GaEHLhlnLFHaJA=="],
+
     "baseline-browser-mapping": ["baseline-browser-mapping@2.11.39", "", { "bin": "dist/cli.cjs" }, "sha512-Q9buOYhr2ggrEZpImICecZTJHCCd8yXkRUokFlUEQ8uiD6oP82F4W4jWnhOHZYV+wlvrC51V7Wy0ULyWjil5Wg=="],
 
     "brace-expansion": ["brace-expansion@5.0.13", "", { "dependencies": { "balanced-match": "^4.0.2" } }, "sha512-Vh3dmFbc4wZeox7M9I/0L9GfFd83Su4+yCck/OF9Gi/P/dAHn0RT7X4K9R7gMNMhDck3DvhR6QXsnQdjjgwNvQ=="],
@@ -821,6 +825,8 @@
     "typed-rest-client": ["typed-rest-client@2.3.1", "", { "dependencies": { "des.js": "^1.1.0", "js-md4": "^0.3.2", "qs": "6.15.1", "tunnel": "0.0.6", "underscore": "^1.13.8" } }, "sha512-k4kX5Up6qA68D0Cby2AK+6+vM5k3qTxe+/3FqhnHRExjY5cfbOnzjQZbP/LXleF8hVoDvDqxlgk9KK83HoBZlQ=="],
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, ""],
+
+    "typescript-language-server": ["typescript-language-server@6.1.0", "", { "bin": { "typescript-language-server": "lib/cli.mjs" } }, "sha512-/O/dr2CbvDS1W9jKJcBQxk4WagUQ97oBb8k/eq9cOslsbtAuC2BDPpkcULxE2SEZiPIJvVNLeNjLZe9hQl1zCQ=="],
 
     "unbash": ["unbash@6.0.4", "", {}, "sha512-t3OptUArewg9OpYGDskTSlxhyLDahfmZ4d36hE44Efb1y3HRLLpzsVqwH+AwBVymP4t7pP71xN+nnduudn2awA=="],
 

@@ -60,7 +60,7 @@ Ranges are `startLine:startCol-endLine:endCol`, with 1-based lines, 0-based UTF-
 
 Every line states what is true of the source, including facts no stage produces yet. Rung 08's receiver call needs a type-aware resolver (U8), so a resolver that declines it is incomplete, not wrong. A stage that emits a line the file does not hold is wrong. Precision is checked against every line, and recall is reported per stage.
 
-A language server is the independent oracle for `[resolution]`. In the 2026-11-22 spike, basedpyright answered every Python call and import site in rungs 04, 06, 07 and 08 at the definition `expected.cpg` names. tsserver did the same for rungs 10 and 11, but only after its project load finished. Before that it named the local import binding, a plausible wrong answer.
+A language server is the independent oracle for `[resolution]`. `bun run ladder:oracle [rung...]` asks basedpyright and tsserver about every CALL and IMPORT, maps each answer to the SYMBOL its declaration DEFINES, and reports agree, DISAGREE, unanswered or missing per site. It exits 1 on DISAGREE or missing. It spawns two servers, so `bun run check` does not run it. Run it whenever a rung's `[resolution]` changes. In the 2026-11-22 spike, basedpyright answered every Python call and import site in rungs 04, 06, 07 and 08 at the definition `expected.cpg` names. tsserver did the same for rungs 10 and 11, but only after its project load finished. Before that it named the local import binding, a plausible wrong answer.
 
 ## Open questions
 
