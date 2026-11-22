@@ -18,6 +18,8 @@
     ".claude/settings.local.json",
     // docs/** is hand-written prose/YAML with intentional layout (long folded scalars, flow lists);
     // oxfmt rewrites ~7k lines of it, which is churn with no value. Benchmark JSON is generated data.
-    "docs/**"
+    "docs/**",
+    // Ladder workspaces are parser input, kept byte-exact; one is invalid TypeScript on purpose.
+    "fixtures/**/ws/**"
   ]
 }

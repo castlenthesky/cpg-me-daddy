@@ -1,0 +1,25 @@
+# Rung 03. One function with two parameters, one with a default. PARAM and HAS_PARAM.
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-3:0
+METHOD file:main.py:METHOD:greet name=greet kind=function params_count=2 range=1:0-2:8
+PARAM file:main.py:PARAM:greet.name name=name ordinal=0
+PARAM file:main.py:PARAM:greet.times name=times ordinal=1 default=1
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:greet
+HAS_PARAM file:main.py:METHOD:greet -> file:main.py:PARAM:greet.name
+HAS_PARAM file:main.py:METHOD:greet -> file:main.py:PARAM:greet.times
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:METHOD:greet -> `main.py`/greet().
+DEFINES file:main.py:PARAM:greet.name -> `main.py`/greet().(name)    # ?Q2
+DEFINES file:main.py:PARAM:greet.times -> `main.py`/greet().(times)    # ?Q2

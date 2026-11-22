@@ -36,5 +36,14 @@
     "unicorn/no-new-array": "error",
     "unicorn/throw-new-error": "error"
   },
-  "ignorePatterns": ["dist", "out", "node_modules", "docs/**", ".vscode-test", ".debate"]
+  // fixtures/**/ws/** is parser input for the ladder; one file is invalid TypeScript on purpose.
+  "ignorePatterns": [
+    "dist",
+    "out",
+    "node_modules",
+    "docs/**",
+    ".vscode-test",
+    ".debate",
+    "fixtures/**/ws/**"
+  ]
 }

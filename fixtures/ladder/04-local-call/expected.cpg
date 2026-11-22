@@ -1,0 +1,31 @@
+# Rung 04. Two identical calls to a function in the same file. First CALL, IN_SCOPE and CALLS.
+# The calls differ only by their scope-relative ordinal (0 and 1).
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-8:0
+METHOD file:main.py:METHOD:helper name=helper kind=function params_count=0 range=1:0-2:8
+METHOD file:main.py:METHOD:main name=main kind=function params_count=0 range=5:0-7:12
+CALL file:main.py:CALL:main:0 callee_name=helper args_count=0 kind=call range=6:4-6:12
+CALL file:main.py:CALL:main:1 callee_name=helper args_count=0 kind=call range=7:4-7:12
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:helper
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:main
+IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
+IN_SCOPE file:main.py:CALL:main:1 -> file:main.py:METHOD:main
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:METHOD:helper -> `main.py`/helper().
+DEFINES file:main.py:METHOD:main -> `main.py`/main().
+
+[resolution]
+CALLS file:main.py:CALL:main:0 -> `main.py`/helper(). status=resolved
+CALLS file:main.py:CALL:main:1 -> `main.py`/helper(). status=resolved

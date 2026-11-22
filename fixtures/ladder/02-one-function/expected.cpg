@@ -1,0 +1,19 @@
+# Rung 02. One function, no parameters, no body worth naming. First DECLARES edge, first SYMBOL.
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-3:0
+METHOD file:main.py:METHOD:greet name=greet kind=function params_count=0 range=1:0-2:8
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:greet
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:METHOD:greet -> `main.py`/greet().
