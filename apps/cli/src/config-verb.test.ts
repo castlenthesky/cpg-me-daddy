@@ -336,6 +336,17 @@ describe('cpg config: finding cpg.config.yaml', () => {
     });
   });
 
+  // Post-implementation (sabotage): a search starting at cwd passed every case above.
+  it('the search starts at the root, not at cwd', async () => {
+    const top = await tree({
+      '.git/': '',
+      [`cwdside/${FILE}`]: 'version: 1\ninclude: [cwd]\n',
+      'rootside/.git/': '',
+    });
+    const d = await configJson([join(top, 'rootside')], { cwd: join(top, 'cwdside') });
+    expect(leaf(d['body'], 'include')).toEqual(builtIn(['**/*']));
+  });
+
   it('the nearest one wins', async () => {
     const top = await tree({
       '.git/': '',

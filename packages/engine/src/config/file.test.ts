@@ -146,6 +146,12 @@ describe('parseConfigFile', () => {
     ['a misspelt key', 'version: 1\nincludes: [src]\n', 'includes'],
     ['a misspelt nested key', 'version: 1\nwatch: { debounce: 5 }\n', 'watch.debounce'],
     ['consumers set whole', 'version: 1\nconsumers: { store: memory }\n', 'consumers.inspect'],
+    // Post-implementation (sabotage): a schema with an optional vscode passed every case above.
+    [
+      'consumers without vscode',
+      'version: 1\nconsumers: { inspect: true, store: memory }\n',
+      'consumers.vscode',
+    ],
     ['host lives under store.falkor', 'version: 1\nstore: { host: x }\n', 'store.host'],
     [
       'a quoted port is a string',
@@ -186,6 +192,8 @@ describe('parseConfigFile', () => {
     ['a list, not a mapping', '- a\n- b\n'],
     ['a YAML syntax error', 'version: 1\ninclude: [src\n'],
     ['a duplicate key', 'version: 1\nversion: 1\n'],
+    // Post-implementation (sabotage): yaml reports an unresolved tag as a warning, not an error.
+    ['an unresolved tag (a YAML warning)', 'version: 1\ninclude: [!foo src]\n'],
   ])('%s is a ConfigError on the document', (_name, text) => {
     const e = configError(() => parseConfigFile(text, SRC));
     expect([e.key, e.layer, e.source]).toEqual(['', 'file', SRC]);
