@@ -2,7 +2,12 @@
 // The cold walk is the WATCH stage's first batch, so it mints `revision_id` here: the sha256 of the
 // raw bytes (a CRLF -> LF edit IS a change).
 
-import type { WorkspacePath } from '@cpg/model';
+import { createHash } from 'node:crypto';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { isWorkspacePath, WORKSPACE_ROOT, type WorkspacePath } from '@cpg/model';
+import { DEFAULT_EXCLUDES, DEFAULT_INCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from './defaults';
+import { compileMatcher } from './glob';
 
 export interface WalkOptions {
   /** Absolute path to the workspace root. */
@@ -53,7 +58,117 @@ export interface WalkResult {
   readonly stats: WalkStats;
 }
 
-export async function walkWorkspace(_options: WalkOptions): Promise<WalkResult> {
-  // SEAT: U2a.2a
-  throw new Error('SEAT: walkWorkspace is not built yet (U2a.2a)');
+export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
+  // REAL
+  const include = compileMatcher(options.include ?? DEFAULT_INCLUDES);
+  const exclude = compileMatcher(options.exclude ?? DEFAULT_EXCLUDES);
+  const maxFileSizeBytes = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES;
+
+  const files: WalkedFile[] = [];
+  const directories: WalkedDirectory[] = [];
+  const stats = {
+    directoriesVisited: 0,
+    directoriesSkipped: 0,
+    filesSeen: 0,
+    filesExcluded: 0,
+    filesUnsupported: 0,
+    filesTooLarge: 0,
+    filesFailed: 0,
+    symlinksSkipped: 0,
+  };
+
+  async function visitDir(
+    absDir: string,
+    relDir: WorkspacePath,
+    parent: WorkspacePath | undefined,
+  ): Promise<void> {
+    stats.directoriesVisited++;
+    directories.push({ path: relDir, parent });
+    let entries;
+    try {
+      entries = await readdir(absDir, { withFileTypes: true });
+    } catch {
+      // Unreadable directory (permissions, race with a concurrent delete):
+      // skip it rather than fail the whole walk over one entry.
+      return;
+    }
+
+    const sorted = entries.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    // Sequential by design: depth-first deterministic ordering across platforms.
+    /* oxlint-disable no-await-in-loop */
+    for (const entry of sorted) {
+      const relPath = relDir === WORKSPACE_ROOT ? entry.name : `${relDir}/${entry.name}`;
+      if (!isWorkspacePath(relPath)) {
+        continue;
+      }
+      const absPath = join(absDir, entry.name);
+
+      if (entry.isSymbolicLink()) {
+        stats.symlinksSkipped++;
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        if (exclude.test(relPath, true)) {
+          stats.directoriesSkipped++;
+          continue;
+        }
+        await visitDir(absPath, relPath, relDir);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        // Sockets, FIFOs, devices: never source, never worth counting.
+        continue;
+      }
+
+      stats.filesSeen++;
+
+      if (exclude.test(relPath, false) || !include.test(relPath, false)) {
+        stats.filesExcluded++;
+        continue;
+      }
+
+      let fileStat;
+      try {
+        fileStat = await stat(absPath);
+      } catch {
+        stats.filesFailed++;
+        continue;
+      }
+
+      if (fileStat.size > maxFileSizeBytes) {
+        stats.filesTooLarge++;
+        continue;
+      }
+
+      let bytes: Buffer;
+      try {
+        bytes = await readFile(absPath);
+      } catch {
+        stats.filesFailed++;
+        continue;
+      }
+
+      const language = options.languageOf(relPath) ?? null;
+      if (language === null) {
+        stats.filesUnsupported++;
+      }
+
+      const revision_id = createHash('sha256').update(bytes).digest('hex');
+      files.push({
+        path: relPath,
+        parent: relDir,
+        language,
+        sizeBytes: bytes.byteLength,
+        revision_id,
+      });
+    }
+    /* oxlint-enable no-await-in-loop */
+  }
+
+  await visitDir(options.root, WORKSPACE_ROOT, undefined);
+
+  return { files, directories, stats: { ...stats } };
 }
