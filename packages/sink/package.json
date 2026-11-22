@@ -1,0 +1,18 @@
+{
+  "name": "@cpg/sink",
+  "version": "0.0.1",
+  "private": true,
+  "description": "C-SINK: the GraphSink seam and MemoryStore, the always-on in-memory graph (U2a.2).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@cpg/model": "*"
+  }
+}

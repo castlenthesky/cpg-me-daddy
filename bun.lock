@@ -78,6 +78,13 @@
         "@cpg/model": "*",
       },
     },
+    "packages/sink": {
+      "name": "@cpg/sink",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
+      },
+    },
     "packages/watch": {
       "name": "@cpg/watch",
       "version": "0.0.1",
@@ -207,6 +214,8 @@
     "@cpg/parse": ["@cpg/parse@workspace:packages/parse"],
 
     "@cpg/resolve": ["@cpg/resolve@workspace:packages/resolve"],
+
+    "@cpg/sink": ["@cpg/sink@workspace:packages/sink"],
 
     "@cpg/vscode-host": ["@cpg/vscode-host@workspace:apps/vscode"],
 
