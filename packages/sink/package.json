@@ -13,6 +13,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@cpg/model": "*"
+    "@cpg/model": "*",
+    "@cpg/store": "*"
   }
 }
