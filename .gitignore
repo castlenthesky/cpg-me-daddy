@@ -7,3 +7,14 @@ node_modules
 
 # multi-agent deliberation working artifacts - never committed
 .debate/
+coverage/
+
+# turbo local cache and run logs
+.turbo/
+
+# stryker mutation reports, incremental state and sandbox
+reports/
+.stryker-tmp/
+
+# Claude linked checkouts. Not this tree's source; oxlint treats a nested config here as a second root.
+.claude/worktrees/

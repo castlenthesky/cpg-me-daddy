@@ -33,9 +33,8 @@ or graph persistence until this slice is confirmed working end to end.
 - **Cross-file edges route through visible, fqn-keyed `SYMBOL` nodes**, in a channel separate from
   a file's own nodes — not direct edges between call sites and definitions.
 - **Python first, TypeScript second** for the extraction/language-adapter work.
-- **Tooling is npm + tsc + vitest**, not Bun/oxlint/oxfmt/lefthook. That stack was built, then
-  reverted for lacking verification gates, not for being the wrong tools — it's expected back once
-  the current redo is far enough along to support it (`docs/plans/unified-architecture.md` §6).
+- **Tooling is bun + tsc + vitest + oxlint + oxfmt + lefthook.** The lockfile is `bun.lock`.
+  Invoke scripts with `bun run`.
 - **FalkorDB is a tier-2 store, not the first thing built.** It enters at the point a
   separate-process reader needs it (the MCP wedge), with an in-process `MemoryStore` as tier 1
   from the start. This amends the original D2 (`unified-architecture.md` §6).

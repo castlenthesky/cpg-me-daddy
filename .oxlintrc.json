@@ -1,0 +1,40 @@
+{
+  // Only non-default choices are explained here.
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import", "unicorn", "vitest"],
+  "categories": {
+    // Likely-bug rules: always errors.
+    "correctness": "error",
+    // Also errors: warnings rot. Individual rules that fight the codebase are turned off below with a reason.
+    "suspicious": "error"
+  },
+  "options": {
+    // Floating/misused promises need type information (oxlint-tsgolint).
+    "typeAware": true
+  },
+  "rules": {
+    // The single owner of unused-variable checks (tsc's noUnusedLocals/Parameters are off).
+    // args "all" also flags unused parameters (default "after-used" skips ones before a used one);
+    // a leading underscore marks an intentionally unused name.
+    "no-unused-vars": [
+      "error",
+      {
+        "args": "all",
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrors": "all",
+        "caughtErrorsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "import/no-cycle": "error",
+    "import/no-duplicates": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/no-new-array": "error",
+    "unicorn/throw-new-error": "error"
+  },
+  "ignorePatterns": ["dist", "out", "node_modules", "docs/**", ".vscode-test", ".debate"]
+}

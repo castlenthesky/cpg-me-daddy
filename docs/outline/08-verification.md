@@ -63,7 +63,7 @@ The parse-and-resolve layer is the product and the most heavily instrumented par
 | latency as a distribution | ms per ref site and per file, by file size and site count, over a **pipelined per-save loop against a warm document** (the one thing S3 did not measure); this re-cuts `perFileMs` and decides whether the 2 s promise is keepable | U6c (imports), U8 (calls) |
 | degradation visibility | `degradedBatches`, `timedOutSites`, backend restarts as first-class report rows, never a flag nobody reads | U6c |
 
-The harness runs locally (`npm run harness:resolve`) and nightly in CI. Its report is something the owner reads. If it shows the 2 s promise does not fit at p95 for a consumer set, the promise is restated per measured budget in `06-measurements.yaml` and the vision; it is never silently relaxed.
+The harness runs locally (`bun run harness:resolve`) and nightly in CI. Its report is something the owner reads. If it shows the 2 s promise does not fit at p95 for a consumer set, the promise is restated per measured budget in `06-measurements.yaml` and the vision; it is never silently relaxed.
 
 ## 5. Per-milestone gates
 
@@ -93,10 +93,10 @@ Every rule below has been seen to fail on a planted violation, or is not a rule.
 | runtime purity: the whole engine under plain `node` loads zero `vscode`/DOM/MCP-SDK modules; the anti-vacuity run plants an import and asserts the trap fires | `tools/purity-proof.mjs` | U2c |
 | the built CLI binary executes: `--version` → 0, unknown verb → 2 | `tools/check-cli-bin.mjs` | U2a |
 | usage text set-equals the flag table for every verb | vitest | U2a |
-| schema drift: `04-schema.yaml`'s generated region equals code | `npm run schema:doc --check` | U1 |
+| schema drift: `04-schema.yaml`'s generated region equals code | `bun run schema:doc --check` | U1 |
 | `receipt.statementCount === 1` for every replace-file | vitest (integration) | U5 |
 | structural nodes/LOC ≤ 1.5 over the fixture corpus (per-file warning) | vitest | U6 |
-| every archive coordinate cited in `docs/outline` resolves (`git rev-parse` the tag, `git cat-file -e` the path) | `tools/check-coordinates.mjs` | follow-up (12-retirement) |
+| every archive coordinate cited in `docs/outline` resolves (`git cat-file -e <sha>:<path>`, globs and braces expanded) | `tools/check-archive-coords.mjs` | in `bun run check` |
 | no live document cites a retired path (the list is defined in `12-retirement.md` §3 step 7, which is the only file exempt from the check) | `tools/check-citations.mjs` | follow-up |
 | registered MCP tools ≤ 12 | vitest | U10 |
 | reserved CFG/PDG/expression names never emitted by default | vitest | U10 |

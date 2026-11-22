@@ -194,8 +194,8 @@ contracts:
       - "layer B: put domain policy in the generic batcher, be a barrel that is also an implementation, advance known state before confirmed delivery, grow pause()/resume() with no caller"
     conformance_suite: "verifyWatchBackendContract (12) · verifyCoalesceContract (26) · verifyBatchOrderContract (4) · verifyWatchSessionContract (14); the suite carries the normative reference coalesce/flushBatch/createWatchSession — lift them verbatim into the package"
     port_from:
-      - "archive/research-sweep-20260916:packages/engine/src/watch/{sink,queue,backend,events,normalize,parcel-backend,debounce}.ts + 667 LOC of tests"
-      - "archive/discovery-20260916:packages/file-watcher/src/changes.ts"
+      - "e45574f:packages/engine/src/watch/{sink,queue,backend,events,normalize,parcel-backend,debounce}.ts + 667 LOC of tests"
+      - "21754b4:packages/file-watcher/src/changes.ts"
     resolves: [CS-10, L-14, L-07, L-15, L-31 (D1 kind-blind batching)]
     open_questions:
       - { id: OQ-1, kind: spike, text: "VS Code host directory events: 'none' + ancestor rescan, or onDidCreateFiles too?", disposition: "under P-A the host is not a producer input; only the parcel backend matters; ancestor rescan (discovery's WorkspaceGraphIndex.applyChange) is the fallback" }
@@ -272,8 +272,8 @@ contracts:
       - "require the monorepo/bundler/VS Code to run"
     conformance_suite: "verifyParseContract(harness) 30 tests over I5–I34; verifyGrammarDirResolution(resolve) for I10–I12; defect tags DEFECT-REPO-ROOT, -TSX-ROUTING, -JS-ALIAS, -ABI-VACUOUS, -POISONED-INIT, -TRUNCATION, -DUMP-DEFAULT, -TREE-LEAK, -GOD-PACKAGE, -VOCAB-OWNERSHIP, -SILENT-FALLBACK"
     port_from:
-      - "archive/master-20260916:packages/engine/src/parser/{backend,grammars,abi,wasm-locator,web-tree-sitter-backend}.ts + tests"
-      - "archive/master-20260916:packages/engine/src/extract/syntax.ts"
+      - "27361a3:packages/engine/src/parser/{backend,grammars,abi,wasm-locator,web-tree-sitter-backend}.ts + tests"
+      - "27361a3:packages/engine/src/extract/syntax.ts"
     pinned: { web-tree-sitter: 0.27.0, "@vscode/tree-sitter-wasm": 0.3.1, grammars: [typescript, tsx, javascript, python], abi_range: "13–15" }
     open_questions:
       - { id: Q1, kind: spike, text: "VSIX: copy .wasm next to the bundle or point CPG_GRAMMAR_DIR into node_modules?", disposition: "U3 packaging spike (<=1h)" }
@@ -347,9 +347,9 @@ contracts:
     may_not: [import vscode, do any I/O, resolve anything cross-file, match a name across the workspace (the stem-map and findSymbolInWorkspace patterns are banned by name), swallow a failure, truncate silently, return empty for an unknown grammar, be non-deterministic, put a content hash in an id, key salience on a wasm filename or a flat nodeType->label map, expose salience as configuration, mint a SYMBOL in the nodes channel or one nothing targets, ask a definition provider at the receiver token, emit a raw NUL byte, turn the expression tier on by default, deep-import another package's dist, be verified only by a hand-run script, rely on the picture]
     conformance_suite: "verifyExtractContract(harness{name, createExtractor, parse, digest}) — runs identically against hand-built fake SyntaxNodes (no wasm) and the real backend; verifySealContract; fixtures src/main.py + src/main.ts with named hazards (alias import, relative import, dotted call, forward reference, emoji column)"
     port_from:
-      - "archive/m0-calls-symbols-20260916:packages/engine/src/extract/{walk,adapter,python,typescript,delta,index,registry}.ts + builtins/"
-      - "archive/m0-calls-symbols-20260916:packages/engine/src/identity/{node-id,symbol-id}.ts + tests + id-diff support"
-      - "archive/discovery-20260916:packages/cpg-generator/src/{refSites,imports,subgraph}.ts (ADAPT: refRange/receiverRange rules; separate symbols channel)"
+      - "f18ee71:packages/engine/src/extract/{walk,adapter,python,typescript,delta,index,registry}.ts + builtins/"
+      - "f18ee71:packages/engine/src/identity/{node-id,symbol-id}.ts + tests + id-diff support"
+      - "21754b4:packages/cpg-generator/src/{refSites,imports,subgraph}.ts (ADAPT: refRange/receiverRange rules; separate symbols channel)"
     resolves: [CS-8 (elementDigest dropped at every seam — now revision_id is the staleness anchor and elementDigest stays the content anchor), L-20, L-44, L-26]
     open_questions:
       - { id: Q1, kind: debate, text: "may the extractor mint UNKNOWN for an unclassifiable construct?", disposition: "yes, sparingly, tagged needs_triage; it keeps counts reconcilable (DL-11)" }
@@ -423,10 +423,10 @@ contracts:
       - no position cache until fileChanged carries content
     conformance_suite: "verifyResolverContract(name, make) + verifyChainContract; 44 tests; INV-10c and INV-4 verified to fail against a deliberately broken chain"
     port_from:
-      - "archive/discovery-20260916:packages/cpg-generator/src/{resolve,chain,nullResolver,pythonPath}.ts (218/80/36/259 LOC)"
-      - "archive/discovery-20260916:src/dev/fakeResolver.ts (FixtureResolver, as a test double)"
-      - "archive/discovery-20260916:src/resolve/vscodeDefinitionResolver.ts (ADAPT: the nine behaviors; host-only optional link)"
-      - "archive/discovery-20260916:packages/file-watcher/src/resolvePass.ts (ADAPT: third-pass ordering, edges-only-never-symbols)"
+      - "21754b4:packages/cpg-generator/src/{resolve,chain,nullResolver,pythonPath}.ts (218/80/36/259 LOC)"
+      - "21754b4:src/dev/fakeResolver.ts (FixtureResolver, as a test double)"
+      - "21754b4:src/resolve/vscodeDefinitionResolver.ts (ADAPT: the nine behaviors; host-only optional link)"
+      - "21754b4:packages/file-watcher/src/resolvePass.ts (ADAPT: third-pass ordering, edges-only-never-symbols)"
     resolves:
       - "CS-5 (ResolveReport now has a consumer: verify's resolution-health)"
       - "CS-7 (sizing uses measured 0.5585 sites/LOC and 2.4788 ms/site)"
@@ -498,7 +498,7 @@ contracts:
     producer_may_not: "call onDelta with something makeDelta would return undefined for; nothing-changed is a non-event"
     conformance_suite: "verifyGraphSinkContract(name, makeSink) + verifySinkDeliveryContract(name, make); 46 tests; injected sleep/now so D2 asserts the backoff sequence exactly"
     port_from:
-      - "archive/research-sweep-20260916:packages/engine/src/watch/{sink,queue}.ts (the WatchSink/SerialQueue/withRetry ideas)"
+      - "e45574f:packages/engine/src/watch/{sink,queue}.ts (the WatchSink/SerialQueue/withRetry ideas)"
       - "the reference createMemoryGraphSink/createSinkDelivery in the archived suite"
     resolves: [CS-4 (confirmedSeq/renderedSeq measurement points), the edge-only-delta defect, L-31 (retry-does-not-advance-known-state)]
     open_questions:
@@ -590,10 +590,10 @@ contracts:
     may_not: [issue more than one statement for replace/delete, chunk, use DETACH DELETE, emit a DELETE outside planScopeDelete or accept a delete predicate as text, drop the graph without the token, write overlay inside a replace, interpolate values into query text (the archived serializeValue is a Cypher-injection surface), accept an unallowlisted label/type, read config from the host (the old store called vscode.workspace.getConfiguration inside connect()), type the driver as any, expose query(cypher):any or per-entity CRUD, fall back silently, mutate the WriteOp, SET null onto merge-on-key, match endpoints on a bare label or omit the WITH barrier, use CYPHER timeout=, set a write socket timeout below 2x, report applied:true for a write that did not reach the backend, report counts it did not compute, add a plugin registry (two tiers is the second caller; there is no third)]
     conformance_suite: "verifyGraphStoreContract(makeHarness) + verifyWritePlannerContract(makePlanner); 49 tests; one test per named defect (wildcard delete fixed twice, non-atomic writeDelta, torn write, DETACH DELETE, unpruned MERGE, injection, FILE.version pinned at 1, many-small, overlay-in-replace, GRAPH.QUERY key creation, CYPHER timeout=, unreported mutation, >500k)"
     port_from:
-      - "archive/master-20260916:packages/engine/src/store/{store,cypher,bootstrap,falkordb-store,open,falkordb.config}.ts + tests (cypher.ts 633 LOC is the highest-value artifact in the salvage)"
-      - "archive/master-20260916:packages/falkordb-service/** (remote+docker; spawned deferred)"
-      - "archive/master-20260916:docker/falkordb{,.dev}.yml"
-      - "archive/master-20260916:packages/engine/test/support/{falkordb,schema-conformance,invariants}.ts"
+      - "27361a3:packages/engine/src/store/{store,cypher,bootstrap,falkordb-store,open,falkordb.config}.ts + tests (cypher.ts 633 LOC is the highest-value artifact in the salvage)"
+      - "27361a3:packages/falkordb-service/** (remote+docker; spawned deferred)"
+      - "27361a3:docker/falkordb{,.dev}.yml"
+      - "27361a3:packages/engine/test/support/{falkordb,schema-conformance,invariants}.ts"
     resolves: [CS-1, CS-3, L-02, L-03, L-09, L-18]
     open_questions:
       - { id: Q1, kind: spike, text: "MemoryStore whole graph or bounded window? memory at 488k nodes unmeasured", disposition: "whole graph in v1; measure at U7 with the scale fixture" }
@@ -674,10 +674,10 @@ contracts:
     workspace_root: "first match: --workspace, the positional, CPG_WORKSPACE, cwd (read in main.ts). Never discovered by ascending; ascending finds only the config file and finding one does not relocate the root"
     conformance_suite: "verifyCliContract(makeHarness) 50 tests / 12 groups; CLI-D1 (bin executed) … CLI-D11 (disk side effect default) one per named defect; plus tools/check-cli-bin.mjs in CI before vitest: build, `--version` exit 0, `frobnicate` exit 2"
     port_from:
-      - "archive/master-20260916:packages/cli/src/{main,run,io}.ts (95 LOC verbatim in shape)"
+      - "27361a3:packages/cli/src/{main,run,io}.ts (95 LOC verbatim in shape)"
       - "commands/{index,query,watch}-cmd.ts (ADAPT: split parse -> config -> run -> render; NullGraphStore moves to the engine)"
       - "test/unit/{run,index-cmd,query-cmd,watch-cmd}.test.ts"
-      - "archive/master-20260916:tools/lib/compose-instance.ts (provenance handshake behind cpg doctor / store open)"
+      - "27361a3:tools/lib/compose-instance.ts (provenance handshake behind cpg doctor / store open)"
     resolves: [CS-9, CS-10, L-28, L-30, L-31, the bin-never-executed and usage-drift defects]
     open_questions:
       - { id: Q1, kind: debate, text: "where do the contract types live?", disposition: "in @cpg/engine's public surface (the port) — no separate contract package (L-43)" }
@@ -747,10 +747,10 @@ contracts:
     may_not: [import vscode from packages/**, drop an edge-only delta, derive a delta by re-reading the store and diffing (O(whole graph) per save in the archived provider), re-send the full payload on a delta, type the webview boundary loosely, trust a webview location, treat no render-report as healthy, report pass at a stale seq, present the graph as verification, call Math.random in the layout while claiming determinism (thread the seed), mint __root__ into the payload, dedupe silently in the renderer, use sync fs, widen localResourceRoots, load anything over the network from the webview, hard-code a colour, use a WebviewViewProvider for the editor area, use a log string as the event channel, deep-import dist, add a second graph surface before the first has a second caller]
     conformance_suite: "verifyExtHostContract(makeHost) 34 tests in groups A–F + verifyShellContract 5; E4 (identical counts/ids/edges but one stale revision: everything passes except revision-reconciliation) is the load-bearing test"
     port_from:
-      - "archive/discovery-20260916:src/views/graphViewProvider.ts (PORT: ready handshake, merge-locally-post-delta, id-only reveal)"
-      - "archive/discovery-20260916:src/webview/graphApp.ts + tsconfig"
-      - "archive/discovery-20260916:esbuild.js (30 LOC)"
-      - "archive/discovery-20260916:packages/graph-visualizer/src/{shell,layout,nodeTypes,relationshipTypes,legend}.ts (PORT) + visualizer.ts (ADAPT: split the 756-line class; fix the edge-only early return; strip NUL bytes; thread a seed)"
+      - "21754b4:src/views/graphViewProvider.ts (PORT: ready handshake, merge-locally-post-delta, id-only reveal)"
+      - "21754b4:src/webview/graphApp.ts + tsconfig"
+      - "21754b4:esbuild.js (30 LOC)"
+      - "21754b4:packages/graph-visualizer/src/{shell,layout,nodeTypes,relationshipTypes,legend}.ts (PORT) + visualizer.ts (ADAPT: split the 756-line class; fix the edge-only early return; strip NUL bytes; thread a seed)"
     resolves: [CS-6 (the purity proof is now a runtime trap with an anti-vacuity check at U2, not a clause here), the edge-only-delta drop, the 699-render-as-658 dedupe]
     open_questions:
       - { id: OQ-2, kind: debate, text: "does the extension own the engine process or attach to a daemon?", disposition: "owns it in-process (ND-1); the seam is message-shaped so a daemon is a later transport change" }

@@ -13,7 +13,7 @@ Nothing stale can be mistaken for current. The old documentation (`docs/` outsid
 | `docs/outline/**` | on develop | **stays** on develop and master; the only documentation in the working tree |
 | `docs/README.md`, `docs/STATUS.md`, `docs/architecture/**`, `docs/history/**`, `docs/plans/**`, `docs/research/**` (59 files) | on develop | moved to `archived/docs/**` on branch `docs/archive`; removed from develop |
 | `.debate/**` (114 files: contracts + conformance suites, motions, rounds, spikes, ledgers) | in the working tree, **gitignored, never committed** | committed for the first time at `archived/debate/**` on branch `docs/archive`; local copy deleted after the branch is pushed; `.gitignore` entry kept so a stray copy never re-enters develop |
-| the five `archive/*-20260916` tags | in the repo | unchanged; the coordinate system every `port_from` uses |
+| the five archive commits (`10-lessons.yaml` `archive_commits`) | on the remote branches named there | unchanged; the coordinate system every `port_from` uses |
 | the CPG research series (six claude.ai artifacts) | external | unchanged; distilled into `01-vision.md` §5 so nobody needs them |
 
 ## 3. Procedure
@@ -26,9 +26,9 @@ Run from a clean `develop` after the outline review. Every step is reversible un
 4. **Un-ignore and add `.debate/`.** Remove the `.debate/` line from `.gitignore` *on this branch only*, `git mv .debate archived/debate` (contracts, `_adv`, `_mut`, motions, rounds, spikes, ledger, `validate-citations.sh`, `citation-index.json`). Verify the two contract files that contain NUL bytes are added as binary-safe (they are test files; leave them).
 5. **Write `archived/AGENTS.md`** (verbatim text in §4).
 6. **Prepend the disclaimer header** (verbatim in §4) to every Markdown, YAML, JSON and TypeScript file under `archived/**` (Markdown: an HTML comment plus a blockquote; YAML/TS: a comment block; JSON: skip, but list them in `archived/AGENTS.md`). A script does this; a check asserts every file begins with the exact block.
-7. **Add the two gates to CI** (on this branch and, in step 10, on develop): `tools/check-citations.mjs` fails if any file under `docs/outline` or the root README/CLAUDE.md contains `docs/research`, `docs/plans`, `docs/architecture`, `docs/history`, `.debate/`, or `archived/` except inside `12-retirement.md`; `tools/check-coordinates.mjs` resolves every `archive/<tag>:<path>` in `docs/outline/**` with `git rev-parse -q --verify <tag>` and `git cat-file -e <tag>:<path>`.
+7. **Add the two gates to CI** (on this branch and, in step 10, on develop): `tools/check-citations.mjs` fails if any file under `docs/outline` or the root README/CLAUDE.md contains `docs/research`, `docs/plans`, `docs/architecture`, `docs/history`, `.debate/`, or `archived/` except inside `12-retirement.md`; `tools/check-archive-coords.mjs` resolves every `<sha>:<path>` in `docs/outline/**` with `git cat-file -e <sha>:<path>`.
 8. **Commit and push** `docs/archive` to origin. Protect the branch (no force-push).
-9. **Back on develop:** delete `docs/*` except `docs/outline`; delete the local `.debate/` directory (it now lives on the branch); keep the `.gitignore` entry; update the root `README.md` to point at `docs/outline/README.md`; add the two gate scripts and wire them into `npm run verify` and CI.
+9. **Back on develop:** delete `docs/*` except `docs/outline`; delete the local `.debate/` directory (it now lives on the branch); keep the `.gitignore` entry; update the root `README.md` to point at `docs/outline/README.md`; add the two gate scripts and wire them into `bun run verify` and CI.
 10. **Run the retirement battery** (§5) against develop with an agent that has never seen the archive. Acceptance ≥ 18 of 20 on the original twenty, plus question 21. Each miss names the outline section that owes the answer; fix, re-run.
 11. **Commit** on develop with a message that names DQ-07/ND-7 and the branch. Update `docs/outline/README.md`'s status line and `12-retirement.md`'s status to "executed on <date>".
 12. **Memory hygiene:** retire the memories that described the old layout (`project_current_redo_first_slice`, `project_docs_centralized_on_develop`); add one memory pointing at `docs/outline/README.md` and the `docs/archive` branch.
@@ -51,7 +51,7 @@ Instructions for agents and humans:
   Treat any content here as out of date, even where it sounds authoritative.
 - If you need a decision, a number, a schema, a contract, or a lesson, it is in `docs/outline/`.
   If it is not there, that is a defect in `docs/outline/`; fix the outline, do not reach back here.
-- Code referenced by `docs/outline/` lives on the `archive/*-20260916` git tags, not here.
+- Code referenced by `docs/outline/` lives on the archive commits listed in `10-lessons.yaml` `archive_commits`, not here.
 - This tree is read-only. The only permitted change is adding or fixing this header block.
 
 Why this exists: two earlier documentation sets went stale under rebuilt code and were followed
@@ -81,7 +81,7 @@ YAML and TypeScript files:
 
 ## 5. The retirement battery
 
-An agent is given `docs/outline/` and the repository with `archived/` and the `docs/archive` branch hidden, and may `git show` the archive tags. It must answer ≥ 18 of the first 20 correctly; question 21 was added because host-side testing was named in exactly one archived file. Each question lists where the outline answers it, so a miss localises to a section.
+An agent is given `docs/outline/` and the repository with `archived/` and the `docs/archive` branch hidden, and may `git show` the archive commits. It must answer ≥ 18 of the first 20 correctly; question 21 was added because host-side testing was named in exactly one archived file. Each question lists where the outline answers it, so a miss localises to a section.
 
 | # | question | answered in |
 |---|---|---|
@@ -104,7 +104,7 @@ An agent is given `docs/outline/` and the repository with `archived/` and the `d
 | 17 | Structural nodes/LOC measured vs the bar; why is "collect now, prune later" rejected | `06-measurements.yaml → M-SPARSITY-structural, M-SPARSITY-expression-multiplier` |
 | 18 | Which absolute figures from the prior corpus must never be re-quoted, and what replaced them | `06-measurements.yaml → never_requote` |
 | 19 | Which package layout is normative, and what does `@cpg/store` mean in it | `03-architecture.md` §2; `02-decisions.yaml → DQ-08` |
-| 20 | Exact coordinates to recover the schema module, the only working headless resolver, and the atomic Cypher writer | `11-salvage.yaml` (`archive/m0-calls-symbols-20260916:packages/engine/src/schema/*`, `archive/discovery-20260916:packages/cpg-generator/src/pythonPath.ts`, `archive/master-20260916:packages/engine/src/store/cypher.ts`) |
+| 20 | Exact coordinates to recover the schema module, the only working headless resolver, and the atomic Cypher writer | `11-salvage.yaml` (`f18ee71:packages/engine/src/schema/*`, `21754b4:packages/cpg-generator/src/pythonPath.ts`, `27361a3:packages/engine/src/store/cypher.ts`) |
 | 21 | How is host-side code tested, with what runner, in which unit | `08-verification.md` §7 (`@vscode/test-cli`); `07-milestones.yaml → U3.1.2` |
 
 The battery re-runs at every milestone boundary (story U10.3.1 is the last scheduled run). A plan with a failing battery is a bug, not a stale document.

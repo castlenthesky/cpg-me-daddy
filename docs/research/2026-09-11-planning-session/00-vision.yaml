@@ -279,7 +279,7 @@ proposals:
       via .cpg/engine.json (or starts one if absent), and forwards tool calls to the engine / read-only DB
       connection. N agents = N shims, one engine, one graph. Streamable HTTP (X8) becomes a later opt-in for
       remote agents rather than the v1 path. Registration: hosts get a one-line config
-      (`command: npx cpg mcp` or the VSIX-bundled binary); the VS Code extension can additionally register
+      (`command: bunx cpg mcp` or the VSIX-bundled binary); the VS Code extension can additionally register
       itself as an MCP server provider for Copilot.
     status: proposed
   - id: X14
@@ -289,8 +289,8 @@ proposals:
       LSP clients): ship the extension's own code inside the VSIX, and download the native server on first
       activation to a user-level cache, pinned by version and verified by checksum, with a setting to point
       at a system-installed or remote instance instead. Recommendation for this project:
-      (1) Engine = TypeScript npm package with a CLI (`cpg index | watch | mcp | status`), installable with
-          npx / npm -g for headless and CI use. The VSIX bundles the same engine JS via esbuild so the
+      (1) Engine = TypeScript package with a CLI (`cpg index | watch | mcp | status`), installable with
+          bunx / bun for headless and CI use. The VSIX bundles the same engine JS via esbuild so the
           extension has zero install steps.
       (2) FalkorDB = downloaded on first run to ~/.cache/cpg/falkordb/<version>/ (XDG-style, shared across
           workspaces), pinned version + sha256, with cpg.config.yaml `engine.db.mode` = spawned | remote |
@@ -423,7 +423,7 @@ risks:
   - { id: RK7, severity: medium, text: "Dogfood repo too small to expose perf or resolution problems before real users do. Mitigation: X10." }
   - { id: RK8, severity: medium, text: "Community detection on a call/import graph rarely maps 1:1 to human architectural layers; agent labels may be confidently wrong. Needs a human-visible review path." }
   - { id: RK2, severity: high,   text: "Name resolution quality determines cross-file edge quality; tree-sitter alone yields many unresolved calls." }
-  - { id: RK3, severity: medium, text: "Watcher stampedes (git checkout, npm install, codegen) overwhelm the incremental pipeline without a bulk mode." }
+  - { id: RK3, severity: medium, text: "Watcher stampedes (git checkout, bun install, codegen) overwhelm the incremental pipeline without a bulk mode." }
   - { id: RK4, severity: medium, text: "FalkorDB platform coverage (Windows) and SSPL licensing for a FOSS repo. Tracked in README follow-ons." }
   - { id: RK5, severity: medium, text: "Whole-graph visualization becomes a demo toy rather than a daily tool if not query-scoped." }
 
@@ -462,7 +462,7 @@ decisions:
   - { id: D21, text: "Readers are never blocked. Over-budget cascades mark dependents STALE; every node carries an explicit status property.", source: Q16 }
   - { id: D22, text: "MCP serves a partial graph with coverage status during first launch.", source: Q17 }
   - { id: D23, text: "v1 graph layers: filesystem, symbols, types, imports, calls, sparse REACHING_DEF (MEMBER|PARAM -> CALL). CFG and remaining PDG (CDG/DOMINATE) deferred; expression-tier nodes deferred. Amended 2026-09-12 — sparse data flow is in v1 (aligns with D10); full Joern PDG is not.", source: Q18 }
-  - { id: D24, text: "Distribution follows extension convention: engine bundled in VSIX and published to npm; FalkorDB downloaded on first run, pinned + checksummed (X14).", source: Q19 }
+  - { id: D24, text: "Distribution follows extension convention: engine bundled in VSIX and published as a package; FalkorDB downloaded on first run, pinned + checksummed (X14).", source: Q19 }
   - { id: D25, text: "Privacy and local compute are design principles (PR7).", source: Q20 }
   # Added 2026-09-11, decomposition round
   - { id: D26, text: "Resolution: adapter-native first; unresolved rate on ast-demo is a tracked metric; resolver seam designed now for later type-checker/SCIP plug-in.", source: GE-Q2 }

@@ -8,7 +8,7 @@ Terms as used throughout `docs/outline/`. Where a term names a thing in code, th
 
 **apps/** — the front doors: `cli`, `inspector`, `vscode`, later `mcp`. Each owns exactly one composition root and may import its own host SDK and nothing else's. Contrast *packages/*.
 
-**archive coordinate** — `archive/<lineage>-20260916:<path>`, read with `git show`. The five tags are listed in `10-lessons.yaml`. Four archived files contain NUL bytes and need `grep -a`.
+**archive coordinate** — `<sha>:<path>`, read with `git show <sha>:<path>`. The five archive commits, and the branches that keep them, are listed in `10-lessons.yaml` `archive_commits`. Four archived files contain NUL bytes and need `grep -a`.
 
 **atomic replace / one statement per file** — the store's write shape: a file's whole subgraph is deleted and recreated in ONE Cypher statement (`UNWIND $rows`). Measured ~6× faster than the same work as 16 statements and 51× faster than 900; also the only way a torn write cannot lose a file's subgraph. CI asserts `statementCount === 1`.
 

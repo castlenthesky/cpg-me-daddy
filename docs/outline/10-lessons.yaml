@@ -4,32 +4,34 @@
 # from the two prior attempts (L-01..L-48), the 12 cross-seam defects found while specifying the seams
 # (CS-01..CS-12, detailed in 05-contracts.yaml), and the 18 premises-at-risk findings from the retirement
 # audit (LA3-nn) with the decision that closed each. Each lesson: what happened, the rule it implies, and
-# where it bites THIS plan. Archive coordinates read with `git show <tag>:<path>`; four files there
+# where it bites THIS plan. Archive coordinates read with `git show <sha>:<path>`; four files there
 # contain NUL bytes and need `grep -a`.
 
-archive_tags:
-  - { tag: archive/master-20260916,          commit: 27361a3, what: "engine-first monorepo; the original FalkorDB/Joern CPG implementation" }
-  - { tag: archive/discovery-20260916,       commit: 21754b4, what: "visual-first redo (webview-first, minimal packages)" }
-  - { tag: archive/m0-calls-symbols-20260916, commit: f18ee71, what: "most advanced engine branch (schema registry, two-pass walker, symbol-id)" }
-  - { tag: archive/research-sweep-20260916,  commit: e45574f, what: "WatchSink decoupling + doc sweep" }
-  - { tag: archive/research-corpus-20260916, commit: 8cd478f, what: "the docs/ tree pre-distillation (= develop HEAD at the time)" }
+# The remote branch beside each commit is what keeps it reachable: delete that branch and git may
+# garbage-collect the commit. tools/check-archive-coords.mjs checks that every commit is on its branch.
+archive_commits:
+  - { commit: 27361a3a12c691f20b32050bd9b490f66368e89d, branch: origin/master, lineage: master, what: "engine-first monorepo; the original FalkorDB/Joern CPG implementation" }
+  - { commit: 21754b47da91a86bbbefc08009cb29d2215308e4, branch: origin/discovery, lineage: discovery, what: "visual-first redo (webview-first, minimal packages)" }
+  - { commit: f18ee71b08bb9cab34a1c8fd784930ab8e6deca6, branch: origin/feature/m0-7-9-calls-symbols, lineage: m0-calls-symbols, what: "most advanced engine branch (schema registry, two-pass walker, symbol-id)" }
+  - { commit: e45574f1a7868d31ff7180cba42abe488a424157, branch: origin/worktree-cpg-research-sweep, lineage: research-sweep, what: "WatchSink decoupling + doc sweep" }
+  - { commit: 8cd478fa8169fa45d4d9015937f736276f569319, branch: origin/develop, lineage: research-corpus, what: "the docs/ tree pre-distillation (= develop HEAD at the time)" }
 
 failures:
   - id: L-01
     failure: "Two node populations shared the label :FILE (filesystem FILE with `path`; CPG FILE with `filename`); every label-only query swept both; reconciliation threw on `fs.existsSync(null)` or deleted every CPG node as an orphan; the graph fragmented 2–5 s after launch."
     rule: "A structural label is not an identity. Two producers must never write the same label without a discriminating property, and the distinction lives beside the schema."
     bites: [DQ-01 owner-discriminated merge, DQ-09 one producer per edge label, 04-schema ownership classes]
-    where: "archive/master-20260916:src/services/sync/Reconciler.ts:224"
+    where: "27361a3:src/services/sync/Reconciler.ts:224"
   - id: L-02
     failure: "A wildcard DELETE of all non-FILE/non-DIRECTORY nodes wiped the whole graph every background reconciliation; the first fix missed an identical second code path (cleanupLegacyNodes)."
     rule: "Every destructive write funnels through one narrowly scoped method; when you fix a destructive write, grep for the SHAPE of the query, not the function name."
     bites: [C-STORE DeleteScope closed union + planScopeDelete as the only DELETE emitter, INV-6]
-    where: "archive/master-20260916:src/services/sync/Reconciler.ts (:219, :101)"
+    where: "27361a3:src/services/sync/Reconciler.ts (:219, :101)"
   - id: L-03
     failure: "DETACH DELETE on per-file re-parse destroyed INBOUND cross-file edges owned by other files; the workaround re-resolved every importer after every save."
     rule: "A per-file write must not be able to reach another file's data. Cross-file edges route through an identity node the replace never touches."
     bites: [SYMBOL indirection VD-05, C-STORE INV-5 never DETACH DELETE, INV-12]
-    where: "archive/master-20260916:src/services/storage/FalkorDBStore.ts:169"
+    where: "27361a3:src/services/storage/FalkorDBStore.ts:169"
   - id: L-04
     failure: "The force graph was reheated on every reconciliation even when nothing changed; smartReconciliation returned void so the caller could not know."
     rule: "A sync routine reports whether it mutated anything; the UI refresh is gated on the answer."
@@ -127,7 +129,7 @@ failures:
     failure: "The core type vocabulary lived inside the renderer package; 13 files deep-imported dist/contract; four copies of the same rationale comment; the review-only rule was silently violated."
     rule: "When the same rationale comment appears twice, the fix belongs in the dependency graph. Shared vocabulary goes in its own zero-dep package and the direction rule is a CI check."
     bites: ["@cpg/model (U0); check-deps deep-import rule"]
-    where: "archive/discovery-20260916:packages/graph-visualizer/src/contract.ts"
+    where: "21754b4:packages/graph-visualizer/src/contract.ts"
   - id: L-27
     failure: "The package named file-watcher contained the scanner, AST pass, resolve pass and orchestration (1,364 LOC) while the real watcher was 46 zero-import lines; it depended on all four of its downstream consumers."
     rule: "A package's name is its contract with the next reader. A package that depends on everything downstream is the composition root; name it so or split it."
@@ -136,7 +138,7 @@ failures:
     failure: "The composition root (WorkspaceSession, 120 LOC, no vscode import) was trapped in src/, so running headless required a 442-line duplicate harness hardcoding one developer's path."
     rule: "A large duplicate harness reimplementing a small class is a composition root in the wrong package. Never hardcode a developer's path as a default."
     bites: [DQ-08 apps/ own composition roots; C-CLI I-14]
-    where: "archive/discovery-20260916:src/dev/resolveHarness.ts:25 (grep -a)"
+    where: "21754b4:src/dev/resolveHarness.ts:25 (grep -a)"
   - id: L-29
     failure: "Debug AST-dump-to-disk was a pipeline stage in the hot path, defaulting to ON."
     rule: "Instrumentation subscribes to output; it never sits in the producing path; debug side effects default off."
@@ -251,9 +253,9 @@ premises_at_risk_closed:
   - { id: LA3-10, premise: "two incompatible target package layouts were both 'the target'", closed_by: DQ-08 }
   - { id: LA3-11, premise: "D33 named a daemon's watcher; the only watcher ever shipped was the VS Code one it demoted", closed_by: "P-A: the producer uses @parcel/watcher; the host supplies no producer input" }
   - { id: LA3-12, premise: "D32 scoped wasm 'for daemon and VSIX'; the stopgap grammar package became the only source", closed_by: "C-PARSE Q5: vendor @vscode/tree-sitter-wasm@0.3.1; provenance recorded" }
-  - { id: LA3-13, premise: "'we already have the fixture corpus' pointed at files only on an archive tag", closed_by: "DL-1 restated; U6a restores goldens from the tags" }
+  - { id: LA3-13, premise: "'we already have the fixture corpus' pointed at files only on an archive tag", closed_by: "DL-1 restated; U6a restores goldens from the archive commits" }
   - { id: LA3-14, premise: "the competitive study's parent pointer and baseline referenced trees on no branch", closed_by: "transcribed into M-RESEARCH-competitors; archived" }
   - { id: LA3-15, premise: "D7's reversal was recorded at the D-row but the pillar files still said MCP-before-visualization", closed_by: "VD-07 reversed; U2 picture, U10 MCP" }
   - { id: LA3-16, premise: "tie-ast-to-parent-file.md instructed execution on a branch reset past its code", closed_by: "archived; its one live idea (SOURCE_FILE edge, per-path promise chain) is in the schema and C-WATCH" }
-  - { id: LA3-17, premise: "STATUS said npm while bun.lock was still tracked", closed_by: "U0.1 deletes bun.lock (already deleted in the working tree)" }
+  - { id: LA3-17, premise: "STATUS said npm while bun.lock was still tracked", closed_by: "T-1 amended 2026-11-21: the package manager is bun and bun.lock stays" }
   - { id: LA3-18, premise: "AM-6's 'no host ships a modern MCP client' is a time-stamped market claim", closed_by: "SU-13: re-verify before U10" }

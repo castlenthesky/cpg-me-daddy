@@ -6,14 +6,14 @@
 # drift; everything outside that region is hand-maintained rationale.
 #
 # Transcribed 2026-09-17 from the archived registry
-#   archive/m0-calls-symbols-20260916:packages/engine/src/schema/{nodes,edges,enums,types}.ts
+#   f18ee71:packages/engine/src/schema/{nodes,edges,enums,types}.ts
 # with the additions required by decisions DQ-01, DQ-06, F-1 (revision_id on every :CPG node and
 # on FILE; `seq` lives on the delta envelope only) and ND-5 (schema version 3).
 #
 # Ids referenced: decisions in 02-decisions.yaml, lessons in 10-lessons.yaml.
 
 meta:
-  version: 3                 # 2 on the archive tag; 3 adds the required `revision_id` property (ND-5)
+  version: 3                 # 2 on the archived commit; 3 adds the required `revision_id` property (ND-5)
   version_history:
     - { version: 0, note: placeholder }
     - { version: 1, note: "M0.0 transcription of the R6-approved schema (2026-09-12)" }

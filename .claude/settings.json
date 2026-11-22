@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun run check)",
+      "Bash(bun run check:gates)",
+      "Bash(bun run check:deps)",
+      "Bash(bun run format:check)",
+      "Bash(bun run lint)",
+      "Bash(bun run typecheck)",
+      "Bash(bun run knip)",
+      "Bash(bun run test)",
+      "Bash(bun run test:coverage)",
+      "Bash(bun run format)",
+      "Bash(bun run lint:fix)",
+      "Bash(bun install)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR\"/tools/claude-post-edit.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}

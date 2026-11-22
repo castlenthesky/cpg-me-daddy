@@ -1,6 +1,6 @@
 # 03 — Architecture
 
-This document describes the target architecture as decided; it is a plan, not a description of the tree today. `07-milestones.yaml` says which parts exist at which milestone. As of 2026-09-17 the tree contains one core package (`packages/model`) and one host file (`src/extension.ts`, moving in U0.2).
+This document describes the target architecture as decided; it is a plan, not a description of the tree today. `07-milestones.yaml` says which parts exist at which milestone. As of 2026-10-28 (U0 complete) the tree contains one core package (`packages/model`) and one front door (`apps/vscode`, the extension host).
 
 ## 1. Producer and consumers
 

@@ -50,8 +50,10 @@ incremental-verifiable-steps working process still in use.
 
 ## 4. The `discovery` redo (minimal packages, visual-first)
 
-In place of the Bun stack: plain npm + tsc, and new minimal package skeletons — `ast-generator`,
-`cpg-generator`, `file-watcher`, `graph-builder`, `graph-visualizer`. The first slice was
+In place of the Bun stack, this redo used npm + tsc, and new minimal package skeletons — `ast-generator`,
+`cpg-generator`, `file-watcher`, `graph-builder`, `graph-visualizer`. The package manager is bun
+again as of 2026-11-21 (`bun.lock`, decision T-1); this section describes the redo, not the current
+toolchain. The first slice was
 deliberately small: a workspace file-traversal function producing a JSON tree, rendered in the
 graph webview (previously a hardcoded demo graph) — the smallest slice that proves the
 extension-host-to-webview pipeline end to end, verified visually before anything else was added.

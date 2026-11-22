@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      // tools/*.mjs are run by package scripts / node directly, so are entries.
+      "entry": ["tools/*.mjs"],
+      "project": ["tools/**/*.mjs"],
+      // The root package.json is the extension manifest, and vsce ships only its dependencies:
+      // apps/vscode/dist/extension.js loads @cpg/model at runtime, so the root must list it.
+      "ignoreDependencies": ["@cpg/model"]
+    },
+    // Entry src/extension.ts is detected from package.json "main" (dist -> src).
+    "apps/vscode": {
+      "project": ["src/**/*.ts"],
+      // The extension host provides `vscode` at runtime. Its types are @types/vscode in the root
+      // manifest, next to engines.vscode.
+      "ignoreDependencies": ["vscode"]
+    },
+    // Entry src/index.ts is detected from package.json "main"/"types" (dist -> src).
+    "packages/model": {
+      "project": ["src/**/*.ts"]
+    }
+  },
+  // knip's lefthook plugin only counts lefthook as used when CI is set or .git/hooks are
+  // installed. A clone installed with LEFTHOOK=0 or --ignore-scripts would fail with a false
+  // "unused devDependency", and turbo doesn't hash either condition. lefthook.yml is the real use.
+  "ignoreDependencies": ["lefthook"]
+}

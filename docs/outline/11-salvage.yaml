@@ -1,11 +1,11 @@
 # 11 — Salvage inventory
 #
-# Code on the archive tags worth porting, with exact coordinates. Read with `git show <tag>:<path>`.
+# Archived code worth porting, with exact coordinates. Read with `git show <sha>:<path>`.
 # LOC are measured (`git show … | wc -l`), not estimates. Verdicts: PORT = lift verbatim (re-point imports);
 # ADAPT = keep the named idea, change the named thing; DELETE = do not port (listed so nobody re-discovers it).
 # `unit` is the milestone whose stories port it. `hazards` are things that cost real time before.
 #
-# Tag shorthand: M = archive/master-20260916 · D = archive/discovery-20260916 · Z = archive/m0-calls-symbols-20260916 · R = archive/research-sweep-20260916
+# Commit shorthand: M = 27361a3 · D = 21754b4 · Z = f18ee71 · R = e45574f (full SHAs and the branches that keep them: 10-lessons.yaml archive_commits)
 
 hazards_global:
   - "Two archived schema sources are NOT normative and must not be ported as such: the archived design folder's schema JSON is the vendored Joern specification (18 layers, 39 concrete + 5 abstract nodes, 29 edges, 43 properties) that 04-schema.yaml's Joern table accounts for name by name, and the archived storage design's schema is the pre-2026-09-11 lineage (no SYMBOL, no DIRECTORY/MODULE, keeps CONTAINS and expression-tier nodes). Only the schema module on the m0-calls-symbols tag (rows below) and 04-schema.yaml are current. The approved spec text says 14 edge types; the code says 15 because SOURCE_FILE was re-adopted after the spec was written."

@@ -1,9 +1,5 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "out",
-    "rootDir": "."
-  },
-  "include": ["src/**/*"],
-  "references": [{ "path": "packages/model" }]
+  // Solution-style: builds nothing itself, so `tsc -b` builds each project into its own dist/.
+  "files": [],
+  "references": [{ "path": "packages/model" }, { "path": "apps/vscode" }]
 }
