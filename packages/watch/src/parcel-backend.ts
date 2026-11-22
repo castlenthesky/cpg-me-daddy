@@ -29,6 +29,12 @@ export interface ParcelBackendOptions {
   readonly load?: () => Promise<ParcelModule>;
   readonly now?: () => number;
   readonly platform?: string;
+  /**
+   * The root's real path. macOS FSEvents reports real paths (/private/var/... for a root at
+   * /var/...), so events are mapped back onto the root as given. packages/watch may not import
+   * node:fs (C-WATCH INV-3), so the composition root passes fs.promises.realpath. Omitted: no mapping.
+   */
+  readonly realpath?: (path: string) => Promise<string>;
 }
 
 const KIND = { create: 'created', update: 'changed', delete: 'deleted' } as const;
@@ -61,6 +67,15 @@ export function createParcelWatchBackend(options: ParcelBackendOptions = {}): Wa
       const { onError } = subscribeOptions;
       const report = (error: WatchError): void => onError?.(error);
       let open = true;
+      const realRoot = options.realpath ? await options.realpath(root).catch(() => root) : root;
+      // Only paths strictly under the root leave the backend (INV-4). FSEvents also reports the
+      // root directory itself, which is not under the root.
+      const underRoot = (path: string): string | undefined => {
+        for (const base of [root, realRoot]) {
+          if (path.startsWith(`${base}/`)) return root + path.slice(base.length);
+        }
+        return undefined;
+      };
       let parcel: ParcelModule;
       let native: { unsubscribe(): Promise<void> };
       try {
@@ -80,12 +95,12 @@ export function createParcelWatchBackend(options: ParcelBackendOptions = {}): Wa
               return;
             }
             const observedAt = now();
-            const raw = events.map((e): RawWatchEvent => ({
-              kind: KIND[e.type],
-              path: e.path,
-              entry: 'unknown',
-              observedAt,
-            }));
+            const raw = events.flatMap((e): RawWatchEvent[] => {
+              const path = underRoot(e.path);
+              return path === undefined
+                ? []
+                : [{ kind: KIND[e.type], path, entry: 'unknown', observedAt }];
+            });
             if (raw.length > 0) onEvents(raw);
           },
           subscribeOptions.ignore ? { ignore: [...subscribeOptions.ignore] } : {},

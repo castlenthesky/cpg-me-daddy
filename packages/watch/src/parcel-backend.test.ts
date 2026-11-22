@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -77,6 +78,37 @@ describe('createParcelWatchBackend, against a scripted parcel', () => {
         { kind: 'deleted', path: '/w/pkg', entry: 'unknown', observedAt: 42 },
       ],
     ]);
+  });
+
+  it('maps real paths back onto the root and drops anything not strictly under it (INV-4)', async () => {
+    const fake = fakeParcel();
+    const seen: string[] = [];
+    const backend = createParcelWatchBackend({
+      load: fake.load,
+      realpath: (p) => Promise.resolve(`/private${p}`),
+    });
+    await backend.subscribe('/var/w', (events) => seen.push(...events.map((e) => e.path)));
+    fake.fire(null, [
+      { type: 'create', path: '/private/var/w' },
+      { type: 'create', path: '/private/var/w/a.py' },
+      { type: 'create', path: '/var/w/b.py' },
+      { type: 'create', path: '/var/wx/c.py' },
+      { type: 'create', path: '/elsewhere/d.py' },
+    ]);
+    fake.fire(null, [{ type: 'create', path: '/var/w' }]);
+    expect(seen).toEqual(['/var/w/a.py', '/var/w/b.py']);
+  });
+
+  it('keeps the root as given when realpath fails', async () => {
+    const fake = fakeParcel();
+    const seen: string[] = [];
+    const backend = createParcelWatchBackend({
+      load: fake.load,
+      realpath: () => Promise.reject(new Error('ENOENT')),
+    });
+    await backend.subscribe('/w', (events) => seen.push(...events.map((e) => e.path)));
+    fake.fire(null, [{ type: 'create', path: '/w/a.py' }]);
+    expect(seen).toEqual(['/w/a.py']);
   });
 
   it('passes no ignore option when none is given', async () => {
@@ -175,7 +207,9 @@ describe('createParcelWatchBackend, against the real @parcel/watcher', () => {
   async function watch() {
     root = mkdtempSync(join(tmpdir(), 'cpg-parcel-'));
     const events: RawWatchEvent[] = [];
-    sub = await createParcelWatchBackend().subscribe(root, (batch) => events.push(...batch));
+    sub = await createParcelWatchBackend({ realpath }).subscribe(root, (batch) =>
+      events.push(...batch),
+    );
     return events;
   }
 
