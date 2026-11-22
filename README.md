@@ -34,6 +34,7 @@ Then press F5 in VS Code to launch the Extension Development Host and run **CPG:
 | `bun run typecheck:tests`   | `tsc` over all test files (incl. type tests)                                |
 | `bun run check:deps`        | dependency-direction rules (`tools/check-deps.mjs`)                         |
 | `bun run check:pack`        | asserts what `bun pm pack` would ship                                       |
+| `bun run check:cli-bin`     | builds `apps/cli` and runs the built `cpg` bin (`tools/check-cli-bin.mjs`)  |
 | `bun run knip`              | unused files/exports/deps                                                   |
 | `bun run test`              | vitest (unit, property, type tests)                                         |
 | `bun run test:coverage`     | vitest with coverage thresholds                                             |

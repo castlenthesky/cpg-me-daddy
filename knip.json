@@ -19,6 +19,9 @@
     // Entry src/index.ts is detected from package.json "main"/"types" (dist -> src).
     "packages/model": {
       "project": ["src/**/*.ts"]
+    },
+    "apps/cli": {
+      "project": ["src/**/*.ts"]
     }
   },
   // knip's lefthook plugin only counts lefthook as used when CI is set or .git/hooks are

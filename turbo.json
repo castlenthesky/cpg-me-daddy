@@ -99,6 +99,20 @@
       ],
       "outputs": ["apps/*/dist/**", "packages/*/dist/**", "!node_modules/**"]
     },
+    "//#check:cli-bin": {
+      // Builds and spawns apps/cli's bin (C-CLI I-6). After typecheck so two tsc -b never race on
+      // apps/cli/dist; before test:coverage ("in CI before vitest").
+      "dependsOn": ["//#typecheck"],
+      "inputs": [
+        "apps/cli/**",
+        "packages/*/src/**",
+        "tsconfig.base.json",
+        "tools/check-cli-bin.mjs",
+        "!apps/cli/dist/**",
+        "!**/.tsbuildinfo"
+      ],
+      "outputs": ["apps/cli/dist/**"]
+    },
     "//#typecheck:tests": {
       // tsc over every test file and the sources they import; no outputs (noEmit).
       "inputs": [
@@ -111,12 +125,14 @@
         "apps/*/package.json",
         "packages/*/package.json",
         "!packages/*/dist/**",
+        "!apps/*/dist/**",
         "!**/.tsbuildinfo"
       ],
       "outputs": []
     },
     "//#test:coverage": {
       // tools/** holds tools/*.test.mjs and the scripts they run (check-deps.test.mjs).
+      "dependsOn": ["//#check:cli-bin"],
       "inputs": [
         "apps/**",
         "packages/**",

@@ -1,0 +1,16 @@
+{
+  "name": "@cpg/cli",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The cpg binary: argv, stdout/stderr and exit codes. Node builtins and @cpg/* front doors only.",
+  "bin": {
+    "cpg": "./dist/main.js"
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  }
+}
