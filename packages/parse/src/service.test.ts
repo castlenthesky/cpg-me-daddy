@@ -162,6 +162,31 @@ describe('failures are outcomes, never throws', () => {
     ]);
   });
 
+  it('a grammar still loading when dispose() runs is dropped, not leaked', async () => {
+    let release: (() => void) | undefined;
+    const real = diskSource();
+    const s = make({
+      describe: () => 'slow',
+      load: async (ref) => {
+        await new Promise<void>((r) => (release = r));
+        return real.load(ref);
+      },
+    });
+    const pending = s.ensureReady(['python']);
+    await new Promise((r) => setTimeout(r, 0));
+    s.dispose();
+    release?.();
+    expect(await pending).toMatchObject([{ code: 'disposed', language: 'python' }]);
+    expect(s.provenance()).toEqual([]);
+    expect(await s.ensureReady(['python'])).toMatchObject([{ code: 'disposed' }]);
+  });
+
+  it('diagnoses a deeply nested file without overflowing the stack', async () => {
+    const depth = 20_000;
+    const handle = await ok(make(), 'deep.py', `x = ${'('.repeat(depth)}1${')'.repeat(depth)}\n`);
+    expect(() => handle.diagnostics()).not.toThrow();
+  });
+
   it('after dispose, parse is disposed', async () => {
     const s = make();
     s.dispose();

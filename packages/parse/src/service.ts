@@ -54,16 +54,15 @@ function diagnose(root: Node): ParseDiagnostics {
   let errorNodeCount = 0;
   let missingNodeCount = 0;
   let errorChars = 0;
-  const visit = (node: Node): void => {
+  // An explicit stack: a deeply nested file must not overflow the JS call stack.
+  const stack: Node[] = [root];
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     if (node.isMissing) missingNodeCount++;
     if (node.isError) {
       errorNodeCount++;
       errorChars += node.endIndex - node.startIndex;
-      return;
-    }
-    for (const child of node.children) visit(child);
-  };
-  visit(root);
+    } else stack.push(...node.children);
+  }
   const total = root.endIndex - root.startIndex;
   return { errorNodeCount, missingNodeCount, errorSpanRatio: total === 0 ? 0 : errorChars / total };
 }
@@ -122,6 +121,7 @@ export function createParseService({ registry, source }: ParseServiceOptions): P
         language,
         message: `${bytes.origin} has ABI ${String(grammar.abiVersion)}, runtime accepts ${String(abi.minCompatible)}..${String(abi.languageVersion)}`,
       };
+    if (disposed) return { code: 'disposed', language, message: 'disposed while loading' };
     const parser = new Parser();
     parser.setLanguage(grammar);
     const provenance: GrammarProvenance = {
@@ -182,6 +182,7 @@ export function createParseService({ registry, source }: ParseServiceOptions): P
 
   return {
     async ensureReady(ids) {
+      if (disposed) return [{ code: 'disposed', message: 'the parse service was disposed' }];
       const errors: ParseError[] = [];
       for (const id of ids) {
         const registration = registry.get(id);
