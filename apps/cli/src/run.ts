@@ -2,7 +2,7 @@
 // engine return and stdout. Pure w.r.t. ambient state: no process.*, no clock outside io.now (I-30).
 
 import { parseArgs } from 'node:util';
-import type { CpgEngine, StoreTarget } from './engine';
+import type { CpgEngine, StoreTarget } from '@cpg/engine';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -30,6 +30,8 @@ export interface RunOptions {
   readonly manifest: Manifest;
   readonly engine?: CpgEngine;
   readonly signal?: AbortSignal;
+  /** The process working directory, read in main.ts: the last workspace-root fallback (C-CLI). */
+  readonly cwd?: string;
 }
 
 class Fail extends Error {

@@ -35,6 +35,10 @@
       "bin": {
         "cpg": "./dist/main.js",
       },
+      "dependencies": {
+        "@cpg/engine": "*",
+        "@cpg/sink": "*",
+      },
       "devDependencies": {
         "@cpg/model": "*",
         "@cpg/resolve": "*",
@@ -54,6 +58,9 @@
       "dependencies": {
         "@cpg/model": "*",
         "@cpg/parse": "*",
+        "@cpg/resolve": "*",
+        "@cpg/sink": "*",
+        "@cpg/store": "*",
       },
     },
     "packages/model": {

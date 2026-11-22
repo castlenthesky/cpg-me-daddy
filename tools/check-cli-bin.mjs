@@ -3,7 +3,9 @@
 // then spawns the built dist/main.js the way an installed `cpg` runs, and asserts what it does.
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const APP = `${ROOT}/apps/cli`;
@@ -33,6 +35,15 @@ const banner = `${binName} ${pkg.version}`.replace(/[.]/g, '\\.');
 expectRun(['--version'], 0, 'stdout', new RegExp(`^${banner}\\n$`));
 expectRun(['frobnicate'], 2, 'stderr', /unknown command 'frobnicate'/);
 expectRun(['mcp'], 2, 'stderr', /not built yet/);
+// main.ts is the composition root: createEngine wired with the MemoryStore sink (BMO-79).
+const ws = mkdtempSync(join(tmpdir(), 'cpg-cli-bin-'));
+try {
+  writeFileSync(join(ws, 'a.ts'), 'export const a = 1;\n');
+  writeFileSync(join(ws, 'b.py'), 'b = 2\n');
+  expectRun(['index', '--dry-run', ws], 0, 'stdout', /^files seen=2 indexed=2 /m);
+} finally {
+  rmSync(ws, { recursive: true, force: true });
+}
 
 if (errors.length) {
   console.error(

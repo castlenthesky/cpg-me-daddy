@@ -269,6 +269,12 @@ const CASES = [
     /__gate_probe\.ts:1 +\[app-tier\]/,
   ),
   depsCase(
+    'check:deps rejects a createEngine() call under packages/** (engine-call-site)',
+    'packages/sink/src/__gate_probe.ts',
+    "import { createEngine } from '@cpg/engine';\nexport const e = createEngine({ version: '0' }, { sinks: [] });\n",
+    /__gate_probe\.ts:2 +\[engine-call-site\]/,
+  ),
+  depsCase(
     'check:deps rejects a deep import of @cpg/model in apps/cli (deep-import)',
     'apps/cli/src/__gate_probe.ts',
     "export { x } from '@cpg/model/dist/x';\n",
