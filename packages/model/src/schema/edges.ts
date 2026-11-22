@@ -4,6 +4,7 @@
  * including how it aligns with Joern's CPG.
  */
 import { INHERITS_RELATION, RESOLUTION_STATUS } from './enums';
+import { ownedBy } from './owner';
 import type { EdgeTypeSpec } from './types';
 
 export const EDGE_TYPES = [
@@ -53,7 +54,7 @@ export const EDGE_TYPES = [
     to: ['SYMBOL'],
     ownership: 'file-owned',
     write: 'delete-create',
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'status',
         type: 'string',
@@ -65,7 +66,7 @@ export const EDGE_TYPES = [
       { name: 'reason', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'confidence', type: 'float', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'resolvedBy', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M0.7',
     doc: 'CALL site to the SYMBOL it resolves to. R2: unresolved rate = one GROUP BY over `status`.',
   },
@@ -85,7 +86,7 @@ export const EDGE_TYPES = [
     to: ['SYMBOL'],
     ownership: 'file-owned',
     write: 'delete-create',
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'status',
         type: 'string',
@@ -94,7 +95,7 @@ export const EDGE_TYPES = [
         golden: 'include',
         doc: 'Identical enum object to CALLS.status.',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.7',
     doc: '',
   },
@@ -104,7 +105,7 @@ export const EDGE_TYPES = [
     to: ['SYMBOL'],
     ownership: 'file-owned',
     write: 'delete-create',
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'relation',
         type: 'string',
@@ -113,7 +114,7 @@ export const EDGE_TYPES = [
         golden: 'include',
         doc: '',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.10',
     doc:
       "Python's implicit/duck-typed Protocol conformance has no edge to attach to here — an honest, " +
@@ -125,7 +126,9 @@ export const EDGE_TYPES = [
     to: ['COMMUNITY'],
     ownership: 'overlay',
     write: 'overlay-job',
-    properties: [{ name: 'run_id', type: 'string', cardinality: 'one', golden: 'redact', doc: '' }],
+    properties: ownedBy('code', [
+      { name: 'run_id', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
+    ]),
     firstWrittenIn: 'M4',
     doc: '',
   },
@@ -155,10 +158,10 @@ export const EDGE_TYPES = [
     to: ['METHOD', 'TYPE_DECL'],
     ownership: 'overlay',
     write: 'overlay-job',
-    properties: [
+    properties: ownedBy('code', [
       { name: 'computed_at', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
       { name: 'run_id', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M4',
     doc: '',
   },
@@ -168,10 +171,10 @@ export const EDGE_TYPES = [
     to: ['FILE'],
     ownership: 'overlay',
     write: 'overlay-job',
-    properties: [
+    properties: ownedBy('code', [
       { name: 'computed_at', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
       { name: 'run_id', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M4',
     doc: '',
   },
@@ -181,7 +184,7 @@ export const EDGE_TYPES = [
     to: ['CALL'],
     ownership: 'file-owned',
     write: 'delete-create',
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'variable',
         type: 'string',
@@ -189,7 +192,7 @@ export const EDGE_TYPES = [
         golden: 'include',
         doc: 'Name of the binding whose definition reaches the call-site use.',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.7',
     doc:
       'Sparse data-flow: a MEMBER or PARAM definition reaches a CALL that uses that binding ' +

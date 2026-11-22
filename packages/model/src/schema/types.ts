@@ -45,6 +45,14 @@ export type GoldenPolicy =
   | 'redact' // volatile (timestamps, run ids); never printed, must not churn a golden diff
   | 'exclude'; // dropped from goldens entirely (revision_id: it changes with every fixture edit)
 
+/**
+ * Which pipeline tier writes this property (DQ-01c). `applyGraphDelta` reads it: when a node id is
+ * re-added, the producer's tier replaces the keys it owns and the other tier's keys are kept. Only
+ * the walker writes `'filesystem'` (DIRECTORY, and FILE's path/name/language/content_hash/revision_id);
+ * every other property, edge properties included, is `'code'`.
+ */
+export type PropertyOwner = 'filesystem' | 'code';
+
 export interface PropertySpec {
   readonly name: string;
   readonly type: PropertyType;
@@ -58,6 +66,8 @@ export interface PropertySpec {
    */
   readonly enumValues?: readonly string[];
   readonly golden: GoldenPolicy;
+  /** The tier that writes this property; stamped by `ownedBy` in `owner.ts`, never written inline. */
+  readonly owner: PropertyOwner;
   readonly doc: string;
 }
 

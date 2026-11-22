@@ -3,7 +3,8 @@
  * aligns with Joern's CPG.
  */
 import { CALL_KIND, METHOD_KIND, NODE_STATUS, TYPE_DECL_KIND } from './enums';
-import type { NodeLabelSpec, PropertySpec } from './types';
+import { ownedBy, type UnownedPropertySpec } from './owner';
+import type { NodeLabelSpec } from './types';
 
 /** P-B / F-1: minted by WATCH; on FILE and every :CPG label, never on an edge, never in an id. */
 const REVISION_ID = {
@@ -12,7 +13,7 @@ const REVISION_ID = {
   cardinality: 'one',
   golden: 'exclude',
   doc: "sha256 of the file's bytes. A :CPG node whose value differs from its FILE's is stale.",
-} as const satisfies PropertySpec;
+} as const satisfies UnownedPropertySpec;
 
 export const NODE_LABELS = [
   {
@@ -22,7 +23,7 @@ export const NODE_LABELS = [
     ownership: 'filesystem',
     write: 'merge-on-key',
     key: ['path'],
-    properties: [
+    properties: ownedBy('filesystem', [
       {
         name: 'path',
         type: 'string',
@@ -39,7 +40,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: 'Lifecycle status (D21/PR8).',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.2',
     doc: 'One node per workspace directory. Never :CPG — filesystem tier, not code.',
   },
@@ -51,53 +52,57 @@ export const NODE_LABELS = [
     write: 'merge-on-key',
     key: ['path'],
     properties: [
-      {
-        name: 'path',
-        type: 'string',
-        cardinality: 'one',
-        golden: 'include',
-        doc: 'Workspace-relative path.',
-      },
-      { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: 'Basename.' },
-      {
-        name: 'language',
-        type: 'string',
-        cardinality: 'one',
-        golden: 'include',
-        doc: 'Grammar id (F4).',
-      },
-      {
-        name: 'content_hash',
-        type: 'string',
-        cardinality: 'one',
-        golden: 'include',
-        doc: 'SHA-256 of file bytes. Source of truth for staleness (PR3).',
-      },
-      REVISION_ID,
-      {
-        name: 'interface_hash',
-        type: 'string',
-        cardinality: 'zeroOrOne',
-        golden: 'include',
-        doc: 'Hash of the exported-declaration surface. Gates cascades (GE-FR6).',
-      },
-      {
-        name: 'status',
-        type: 'string',
-        cardinality: 'one',
-        enumValues: NODE_STATUS,
-        golden: 'include',
-        doc: 'Lifecycle status; brackets the per-file replace transaction (GE-FR11).',
-      },
-      {
-        name: 'version',
-        type: 'int',
-        cardinality: 'one',
-        golden: 'redact',
-        doc: 'Monotonic per-file version, bumped every replace.',
-      },
-      { name: 'indexed_at', type: 'string', cardinality: 'zeroOrOne', golden: 'redact', doc: '' },
-      { name: 'loc', type: 'int', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
+      ...ownedBy('filesystem', [
+        {
+          name: 'path',
+          type: 'string',
+          cardinality: 'one',
+          golden: 'include',
+          doc: 'Workspace-relative path.',
+        },
+        { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: 'Basename.' },
+        {
+          name: 'language',
+          type: 'string',
+          cardinality: 'one',
+          golden: 'include',
+          doc: 'Grammar id (F4).',
+        },
+        {
+          name: 'content_hash',
+          type: 'string',
+          cardinality: 'one',
+          golden: 'include',
+          doc: 'SHA-256 of file bytes. Source of truth for staleness (PR3).',
+        },
+        REVISION_ID,
+      ]),
+      ...ownedBy('code', [
+        {
+          name: 'interface_hash',
+          type: 'string',
+          cardinality: 'zeroOrOne',
+          golden: 'include',
+          doc: 'Hash of the exported-declaration surface. Gates cascades (GE-FR6).',
+        },
+        {
+          name: 'status',
+          type: 'string',
+          cardinality: 'one',
+          enumValues: NODE_STATUS,
+          golden: 'include',
+          doc: 'Lifecycle status; brackets the per-file replace transaction (GE-FR11).',
+        },
+        {
+          name: 'version',
+          type: 'int',
+          cardinality: 'one',
+          golden: 'redact',
+          doc: 'Monotonic per-file version, bumped every replace.',
+        },
+        { name: 'indexed_at', type: 'string', cardinality: 'zeroOrOne', golden: 'redact', doc: '' },
+        { name: 'loc', type: 'int', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
+      ]),
     ],
     firstWrittenIn: 'M0.2',
     doc: 'One node per indexed file. Never :CPG — id is `file:<path>`, stable across saves.',
@@ -109,7 +114,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       {
         name: 'file',
@@ -134,7 +139,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: '',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc: 'The file-scoped module/namespace root. Free functions and top-level statements hang off this.',
   },
@@ -145,7 +150,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       {
         name: 'kind',
@@ -181,7 +186,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: 'R6 addition (Complexity/Standards, uncontested).',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc: 'class | interface | enum | type_alias | protocol | dataclass.',
   },
@@ -192,7 +197,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       {
         name: 'kind',
@@ -259,7 +264,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: 'R6 addition.',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc: 'function | method | constructor | getter | setter | lambda_named.',
   },
@@ -270,7 +275,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       {
         name: 'ordinal',
@@ -283,7 +288,7 @@ export const NODE_LABELS = [
       { name: 'default', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'file', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       REVISION_ID,
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc: 'A formal parameter. IN-only; there is no METHOD_PARAMETER_OUT equivalent.',
   },
@@ -294,14 +299,14 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'name', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       { name: 'type_text', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'file', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       REVISION_ID,
       { name: 'range', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       { name: 'visibility', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc: 'Class field / dataclass attribute / module-level constant.',
   },
@@ -312,7 +317,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'callee_name', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       {
         name: 'receiver_text',
@@ -341,7 +346,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: '',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.7',
     doc: 'A call/new/decorator/await site. Args, receiver and literals fold into properties (design rule 3).',
   },
@@ -352,7 +357,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'source_text', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       { name: 'imported_names', type: 'string[]', cardinality: 'list', golden: 'include', doc: '' },
       { name: 'alias', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
@@ -368,7 +373,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: '',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.7',
     doc:
       'One per import statement. The bare `resolved` boolean this node once carried is dropped (R6) — ' +
@@ -381,7 +386,7 @@ export const NODE_LABELS = [
     ownership: 'identity',
     write: 'merge-on-key',
     key: ['fqn'],
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'fqn',
         type: 'string',
@@ -423,7 +428,7 @@ export const NODE_LABELS = [
       },
       { name: 'kind', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'language', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M0.7',
     doc: 'Cross-file identity anchor. Not :CPG and has no `file` — a per-file delete cannot touch it (D5).',
   },
@@ -434,7 +439,7 @@ export const NODE_LABELS = [
     ownership: 'overlay',
     write: 'overlay-job',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'algorithm', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       { name: 'run_id', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
       { name: 'size', type: 'int', cardinality: 'one', golden: 'include', doc: '' },
@@ -468,7 +473,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: 'R6 addition: room for hierarchical/multi-resolution detection.',
       },
-    ],
+    ]),
     firstWrittenIn: 'M4',
     doc: 'One community-detection result. Written only by the async analytics overlay job.',
   },
@@ -479,7 +484,7 @@ export const NODE_LABELS = [
     ownership: 'identity',
     write: 'merge-on-key',
     key: ['name'],
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'name',
         type: 'string',
@@ -488,7 +493,7 @@ export const NODE_LABELS = [
         doc: 'e.g. `needs_triage`, `source`, `sink`.',
       },
       { name: 'value', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc:
       'Generic classification hook. TAG values are classification metadata only — numeric metrics stay ' +
@@ -501,7 +506,7 @@ export const NODE_LABELS = [
     ownership: 'file-owned',
     write: 'delete-create',
     key: ['id'],
-    properties: [
+    properties: ownedBy('code', [
       { name: 'reason', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'file', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       REVISION_ID,
@@ -514,7 +519,7 @@ export const NODE_LABELS = [
         golden: 'include',
         doc: '',
       },
-    ],
+    ]),
     firstWrittenIn: 'M0.6',
     doc: 'An unparseable region of an otherwise-parsed file.',
   },
@@ -525,7 +530,7 @@ export const NODE_LABELS = [
     ownership: 'graph-singleton',
     write: 'merge-on-key',
     key: [],
-    properties: [
+    properties: ownedBy('code', [
       {
         name: 'schema_version',
         type: 'int',
@@ -536,7 +541,7 @@ export const NODE_LABELS = [
       { name: 'engine_version', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
       { name: 'overlays', type: 'string[]', cardinality: 'list', golden: 'include', doc: '' },
       { name: 'created_at', type: 'string', cardinality: 'one', golden: 'redact', doc: '' },
-    ],
+    ]),
     firstWrittenIn: 'M0.4',
     doc: 'The single graph-wide metadata node. Not :CPG; never touched by a per-file replace.',
   },
