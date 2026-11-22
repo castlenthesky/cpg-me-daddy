@@ -10,7 +10,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const TEST_FILE = /\.test(-d)?\.|\.spec\./;
-const SPEC = /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s*)['"]([^'"]+)['"]/g;
+// A keyword right after a quote is a quoted word in a string, never syntax (see check-deps.mjs).
+const SPEC = /(?<![\w'"`])(?:from\s*|require\s*\(\s*|import\s*\(\s*|import\s*)['"]([^'"]+)['"]/g;
 const PACKED = /^packed\s+\S+\s+(.+)$/;
 const ZERO_DEP = new Set(['@cpg/model']);
 

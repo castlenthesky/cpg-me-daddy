@@ -507,19 +507,36 @@ const CASES = [
   },
   {
     // Uncovered mutants count against the score, so an untested file must push it under `break`.
+    // Only the probe is mutated, so the score is the probe's own (0) however much tested code
+    // exists: a fixed-size probe in the full mutate set stopped crossing `break` once U1's
+    // validator tests landed. The planted test imports the probe and calls nothing; without it,
+    // vitest finds no test related to the probe and Stryker aborts before scoring.
     slow: true,
     name: 'test:mutation rejects an untested source file (break threshold)',
     expectOutput: /threshold|break/i,
-    command: ['bun', 'run', '--silent', 'test:mutation'],
+    command: [
+      'bun',
+      'run',
+      '--silent',
+      'test:mutation',
+      '--mutate',
+      'packages/model/src/__gate_probe.ts',
+    ],
     plant() {
       const body = Array.from(
         { length: 40 },
         (_, i) => `export function probe${i}(x: number): number {\n  return x + ${i};\n}\n`,
       ).join('\n');
       writeFileSync(at('packages/model/src/__gate_probe.ts'), body);
+      writeFileSync(
+        at('packages/model/src/__gate_probe.test.ts'),
+        "import { expect, test } from 'vitest';\nimport * as probe from './__gate_probe';\n\n" +
+          "test('loads the probe', () => {\n  expect(probe).toBeDefined();\n});\n",
+      );
     },
     cleanup() {
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+      rmSync(at('packages/model/src/__gate_probe.test.ts'), { force: true });
       // Drop incremental state so planted mutants cannot colour the next real run.
       rmSync(at('reports/stryker-incremental.json'), { force: true });
     },
