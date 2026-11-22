@@ -11,3 +11,6 @@ export type {
 } from './walker/walker';
 export { filesystemTier } from './walker/filesystem-tier';
 export type { FilesystemTier } from './walker/filesystem-tier';
+export { createEngine } from './engine';
+export type { EngineConfig, EngineDeps, EngineSink } from './engine';
+export type * from './port';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CpgEngine, StoreTarget } from './engine';
+import type { CpgEngine, StoreTarget } from '@cpg/engine';
 import { captureIo } from './io';
 import { EXIT, exitCodeFor, run } from './run';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage } from './spec';
@@ -10,12 +10,13 @@ function fakeEngine(fail = false) {
   const connects: StoreTarget[] = [];
   let closed = 0;
   const engine: CpgEngine = {
-    identity: { name: 'fake', version: '0' },
+    identity: { name: 'fake', version: '0', languages: [] },
     connect: (target) => {
       connects.push(target);
       if (fail) return Promise.reject(new Error('ECONNREFUSED'));
-      return Promise.resolve({ close: () => Promise.resolve(void closed++) });
+      return Promise.resolve({ target, close: () => Promise.resolve(void closed++) });
     },
+    index: () => Promise.reject(new Error('fakeEngine.index is not driven by these tests')),
   };
   return { engine, connects, closed: () => closed };
 }

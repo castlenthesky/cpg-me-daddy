@@ -8,5 +8,11 @@
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "../model" }, { "path": "../parse" }]
+  "references": [
+    { "path": "../model" },
+    { "path": "../parse" },
+    { "path": "../resolve" },
+    { "path": "../sink" },
+    { "path": "../store" }
+  ]
 }

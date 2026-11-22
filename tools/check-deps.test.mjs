@@ -54,6 +54,19 @@ describe('check-deps passes a clean two-tier tree', () => {
     expect(status).toBe(0);
   });
 
+  it('lets packages/engine define createEngine, its tests and apps/* call it, and a comment name it', () => {
+    const { status, out } = run({
+      ...CLEAN,
+      'packages/engine/src/engine.ts':
+        '// createEngine() is the composition root\nexport function createEngine(config) {\n  return config;\n}\n',
+      'packages/engine/src/engine.test.ts':
+        "import { createEngine } from './engine';\ncreateEngine({});\n",
+      'apps/cli/src/main.ts': "import { createEngine } from '@cpg/engine';\ncreateEngine({});\n",
+    });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
   it('lets packages/engine know more than one sibling', () => {
     const { status } = run({
       ...CLEAN,
@@ -125,6 +138,18 @@ describe('check-deps rejects every planted violation', () => {
       'packages/model/src/probe.ts',
       "import yaml from 'yaml';\n",
       'model-zero-deps',
+    ],
+    [
+      'a createEngine() call in packages/foo',
+      'packages/foo/src/probe.ts',
+      "import { createEngine } from '@cpg/engine';\nexport const e = createEngine({}, { sinks: [] });\n",
+      'engine-call-site',
+    ],
+    [
+      'a createEngine() call inside packages/engine itself',
+      'packages/engine/src/boot.ts',
+      "import { createEngine } from './engine';\nexport const e = createEngine ({}, { sinks: [] });\n",
+      'engine-call-site',
     ],
     [
       'a composition root in packages/foo',
