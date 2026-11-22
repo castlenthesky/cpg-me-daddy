@@ -1,0 +1,47 @@
+# Rung 07. A subdirectory package. Nested DIRECTORY/HAS_ENTRY, dotted module names, a dotted import.
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+PARSE shapes/__init__.py language=python root=module hasError=false
+PARSE shapes/square.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+DIRECTORY dir:shapes name=shapes
+FILE file:main.py name=main.py language=python
+FILE file:shapes/__init__.py name=__init__.py language=python
+FILE file:shapes/square.py name=square.py language=python
+HAS_ENTRY dir:. -> dir:shapes
+HAS_ENTRY dir:. -> file:main.py
+HAS_ENTRY dir:shapes -> file:shapes/__init__.py
+HAS_ENTRY dir:shapes -> file:shapes/square.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-6:0
+IMPORT file:main.py:IMPORT:$root:0 source_text=shapes.square imported_names=[area] is_type_only=false range=1:0-1:30
+METHOD file:main.py:METHOD:main name=main kind=function params_count=0 range=4:0-5:11
+CALL file:main.py:CALL:main:0 callee_name=area args_count=1 kind=call range=5:4-5:11
+MODULE file:shapes/__init__.py:MODULE:$root name=shapes range=1:0-1:0
+MODULE file:shapes/square.py:MODULE:$root name=shapes.square range=1:0-3:0
+METHOD file:shapes/square.py:METHOD:area name=area kind=function params_count=1 range=1:0-2:22
+PARAM file:shapes/square.py:PARAM:area.side name=side ordinal=0
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+SOURCE_FILE file:shapes/__init__.py:MODULE:$root -> file:shapes/__init__.py
+SOURCE_FILE file:shapes/square.py:MODULE:$root -> file:shapes/square.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:IMPORT:$root:0
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:main
+DECLARES file:shapes/square.py:MODULE:$root -> file:shapes/square.py:METHOD:area
+HAS_PARAM file:shapes/square.py:METHOD:area -> file:shapes/square.py:PARAM:area.side
+IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:METHOD:main -> `main.py`/main().
+DEFINES file:shapes/__init__.py:MODULE:$root -> `shapes/__init__.py`/    # ?Q1
+DEFINES file:shapes/square.py:MODULE:$root -> `shapes/square.py`/    # ?Q1
+DEFINES file:shapes/square.py:METHOD:area -> `shapes/square.py`/area().
+DEFINES file:shapes/square.py:PARAM:area.side -> `shapes/square.py`/area().(side)    # ?Q2
+
+[resolution]
+IMPORTS file:main.py:IMPORT:$root:0 -> `shapes/square.py`/area(). status=resolved
+CALLS file:main.py:CALL:main:0 -> `shapes/square.py`/area(). status=resolved

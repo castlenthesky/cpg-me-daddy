@@ -1,0 +1,16 @@
+# Rung 01. One empty Python file. A MODULE exists even with no statements.
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-1:0
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1

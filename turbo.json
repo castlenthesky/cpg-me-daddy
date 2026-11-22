@@ -145,11 +145,14 @@
     },
     "//#test:coverage": {
       // tools/** holds tools/*.test.mjs and the scripts they run (check-deps.test.mjs).
+      // fixtures/** is read by packages/model/src/ladder.test.ts; without it a fixture edit replays
+      // a cached pass.
       "dependsOn": ["//#check:cli-bin"],
       "inputs": [
         "apps/**",
         "packages/**",
         "tools/**",
+        "fixtures/**",
         "*.ts",
         "*.mts",
         "*.cts",

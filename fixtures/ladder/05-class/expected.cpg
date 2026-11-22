@@ -1,0 +1,31 @@
+# Rung 05. A class with one field and one method. TYPE_DECL, MEMBER, and a METHOD nested in a type.
+
+[parse]
+PARSE main.py language=python root=module hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-6:0
+TYPE_DECL file:main.py:TYPE_DECL:Greeter name=Greeter kind=class range=1:0-5:12
+MEMBER file:main.py:MEMBER:Greeter.greeting name=greeting range=2:4-2:22
+METHOD file:main.py:METHOD:Greeter.greet name=greet kind=method params_count=2 range=4:4-5:12
+PARAM file:main.py:PARAM:Greeter.greet.self name=self ordinal=0
+PARAM file:main.py:PARAM:Greeter.greet.name name=name ordinal=1
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:TYPE_DECL:Greeter
+DECLARES file:main.py:TYPE_DECL:Greeter -> file:main.py:MEMBER:Greeter.greeting
+DECLARES file:main.py:TYPE_DECL:Greeter -> file:main.py:METHOD:Greeter.greet
+HAS_PARAM file:main.py:METHOD:Greeter.greet -> file:main.py:PARAM:Greeter.greet.self
+HAS_PARAM file:main.py:METHOD:Greeter.greet -> file:main.py:PARAM:Greeter.greet.name
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:TYPE_DECL:Greeter -> `main.py`/Greeter#
+DEFINES file:main.py:MEMBER:Greeter.greeting -> `main.py`/Greeter#greeting.
+DEFINES file:main.py:METHOD:Greeter.greet -> `main.py`/Greeter#greet().
+DEFINES file:main.py:PARAM:Greeter.greet.self -> `main.py`/Greeter#greet().(self)    # ?Q2
+DEFINES file:main.py:PARAM:Greeter.greet.name -> `main.py`/Greeter#greet().(name)    # ?Q2
