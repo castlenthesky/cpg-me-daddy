@@ -15,3 +15,11 @@ export { createEngine } from './engine';
 export type { EngineConfig, EngineDeps, EngineSink } from './engine';
 export { worstState } from './verify';
 export type * from './port';
+export { CONFIG_PRECEDENCE, ConfigError, resolveConfig, toCpgConfigInput } from './config/resolve';
+export {
+  CONFIG_FILE_NAME,
+  configFileLayer,
+  parseConfigFile,
+  stringifyConfigFile,
+} from './config/file';
+export type { CpgConfigFile } from './config/file';

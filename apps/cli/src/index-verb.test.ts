@@ -125,7 +125,10 @@ describe('cpg index --dry-run wiring', () => {
     const r = await cli(['index', '--dry-run', '/w'], f.engine);
     expect(r.code).toBe(EXIT.OK);
     expect(f.connects()).toBe(0);
-    expect(f.requests).toEqual([{ config: { root: '/w' }, session: null, resumeFrom: null }]);
+    // The whole CpgConfigInput (provenance dropped) is pinned in config-verb.test.ts (U2c.1).
+    expect(f.requests).toEqual([
+      { config: expect.objectContaining({ root: '/w' }), session: null, resumeFrom: null },
+    ]);
   });
 
   it("hands the engine run()'s own signal", async () => {
