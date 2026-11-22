@@ -3,7 +3,7 @@
 // then spawns the built dist/main.js the way an installed `cpg` runs, and asserts what it does.
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -95,8 +95,12 @@ try {
   } catch (e) {
     errors.push(`cpg schema --print: stdout is not one JSON document (${String(e)})`);
   }
-  // the ladder fixtures, a real multi-directory tree: verify exits 0 through the bin
-  expectRun(['verify', join(ROOT, 'fixtures', 'ladder')], 0, 'stdout', /^verify unavailable$/m);
+  // the ladder fixtures, a real multi-directory tree: verify exits 0 through the bin. A copy under a
+  // .git-bounded dir, so a stray cpg.config.yaml at the repository root is never read.
+  const ladder = join(ws, 'ladder');
+  cpSync(join(ROOT, 'fixtures', 'ladder'), ladder, { recursive: true });
+  mkdirSync(join(ladder, '.git'));
+  expectRun(['verify', ladder], 0, 'stdout', /^verify unavailable$/m);
   expectRun(['schema', '--check'], 0, 'stderr', /up to date/);
   expectRun(['schema', '--check', '--workspace', ws], 1, 'stderr', /cannot read/);
   // cpg config (U2c.1): one cpg.config.resolved document. The workspace has a cpg.config.yaml, so

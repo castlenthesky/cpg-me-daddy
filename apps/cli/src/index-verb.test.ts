@@ -365,7 +365,7 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
       undefined,
       ['consumers.store', 'falkor', '--store', 'U5'],
     ],
-    ['--inspect', ['--inspect'], undefined, ['consumers.inspect', '--inspect', 'U2b']],
+    ['--inspect', ['--inspect'], undefined, ['consumers.inspect true', '--inspect', 'U2b']],
     [
       'a file with store: falkor',
       [],
@@ -376,7 +376,7 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
       'a file with vscode: true',
       [],
       'version: 1\nconsumers: { vscode: true }\n',
-      ['consumers.vscode', 'cpg.config.yaml', 'U3'],
+      ['consumers.vscode true', 'cpg.config.yaml', 'U3'],
     ],
   ] as const)(
     '%s: exit 2 "not built yet", naming the switch and its source; no engine, no connect',
@@ -424,5 +424,45 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
     expect(r.code).toBe(EXIT.FAILED);
     expect(r.stderr.join('\n')).toContain('127.0.0.1:6382/cpg');
     expect(f.requests).toEqual([]);
+  });
+});
+
+// Round two, after the test review (named defects a4-a6, b1).
+describe('cpg index without --dry-run: round two', () => {
+  it('connects to the resolved store target: env and file layers, not the flags alone (a5)', async () => {
+    const root = await workspace('version: 1\nstore: { falkor: { graph: fg, port: 7100 } }\n');
+    const f = fakeEngine({ ...REPORT, dryRun: false });
+    const r = await cli(['index', root], f.engine, { env: { CPG_HOST: 'eh' } });
+    expect(r.code).toBe(EXIT.OK);
+    expect(f.opened.map((o) => o.target)).toEqual([{ host: 'eh', port: 7100, graph: 'fg' }]);
+  });
+
+  it('--store memory over a file with store: falkor is the resolved winner, so it runs (a6)', async () => {
+    const root = await workspace('version: 1\nconsumers: { store: falkor }\n');
+    const f = fakeEngine({ ...REPORT, dryRun: false });
+    const configs: EngineConfig[] = [];
+    const r = await cli(['index', '--store', 'memory', root], f.engine, { configs });
+    expect(r.code).toBe(EXIT.OK);
+    expect(configs).toEqual([{ version: '9.8.7', consumers: HEADLESS }]);
+    expect(f.log).toEqual(['connect', 'index', 'close']);
+  });
+
+  it('the write session closes even when index rejects (b1)', async () => {
+    const f = fakeEngine();
+    const failing: CpgEngine = {
+      ...f.engine,
+      index: () => Promise.reject(new Error('index-boom')),
+    };
+    await expect(cli(['index', '/w'], failing)).rejects.toThrow('index-boom');
+    expect(f.log).toEqual(['connect', 'close']);
+  });
+
+  it('an interrupted report is still printed, the session closes, and it exits 130 (b1, I-27)', async () => {
+    const report = { ...REPORT, dryRun: false, interrupted: true };
+    const f = fakeEngine(report);
+    const r = await cli(['index', '--format', 'json', '/w'], f.engine);
+    expect(r.code).toBe(EXIT.INTERRUPTED);
+    expect(r.stdout.map((l) => JSON.parse(l) as unknown)).toMatchObject([{ body: report }]);
+    expect(f.log).toEqual(['connect', 'index', 'close']);
   });
 });

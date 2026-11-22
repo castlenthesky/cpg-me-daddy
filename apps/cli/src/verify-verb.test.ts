@@ -347,13 +347,25 @@ describe('cpg verify wiring', () => {
   });
 
   it.each([
-    ['--store falkor', ['--store', 'falkor'], undefined, ['consumers.store', '--store', 'U5']],
-    ['--inspect', ['--inspect'], undefined, ['consumers.inspect', '--inspect', 'U2b']],
+    [
+      '--store falkor',
+      ['--store', 'falkor'],
+      undefined,
+      ['consumers.store "falkor"', '--store', 'U5'],
+    ],
+    ['--inspect', ['--inspect'], undefined, ['consumers.inspect true', '--inspect', 'U2b']],
     [
       'a file with vscode: true',
       [],
       'version: 1\nconsumers: { vscode: true }\n',
-      ['consumers.vscode', 'cpg.config.yaml', 'U3'],
+      ['consumers.vscode true', 'cpg.config.yaml', 'U3'],
+    ],
+    // round two (review b4): a file's store, and two switches each with its own source
+    [
+      'a file with store: falkor, plus --inspect',
+      ['--inspect'],
+      'version: 1\nconsumers: { store: falkor }\n',
+      ['consumers.store "falkor"', 'cpg.config.yaml', 'U5', 'consumers.inspect true', '--inspect'],
     ],
   ] as const)(
     '%s: exit 2 "not built yet" naming the switch and its source; no engine, no connect',
@@ -363,6 +375,7 @@ describe('cpg verify wiring', () => {
       const configs: EngineConfig[] = [];
       const r = await cli(['verify', ...flags, root], f.engine, { configs });
       expect(r.code).toBe(EXIT.USAGE);
+      expect(r.stdout).toEqual([]);
       const err = r.stderr.join('\n');
       expect(err).toContain('not built yet');
       for (const name of names) expect(err).toContain(name);
@@ -400,6 +413,15 @@ describe('cpg verify wiring', () => {
       expect(pipe.stdout).toHaveLength(format === 'json' ? 1 : 7);
     },
   );
+
+  // round two (review a6): the refusal reads the resolved winner, not the file
+  it('--store memory over a file with store: falkor verifies', async () => {
+    const root = await workspace('version: 1\nconsumers: { store: falkor }\n');
+    const f = fakeEngine();
+    const r = await cli(['verify', '--store', 'memory', root], f.engine);
+    expect(r.code).toBe(EXIT.OK);
+    expect(f.calls).toHaveLength(1);
+  });
 
   it('the read session closes even when verify rejects', async () => {
     const f = fakeEngine('pass', true);

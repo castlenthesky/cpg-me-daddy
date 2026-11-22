@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type {
   CpgEngine,
+  EngineConfig,
   EngineSession,
   IndexReport,
   IndexRequest,
@@ -72,13 +73,24 @@ async function tree(entries: Record<string, string>): Promise<string> {
 
 async function cli(
   argv: string[],
-  o: { env?: Record<string, string>; cwd?: string; engine?: CpgEngine; isTty?: boolean } = {},
+  o: {
+    env?: Record<string, string>;
+    cwd?: string;
+    engine?: CpgEngine;
+    isTty?: boolean;
+    configs?: EngineConfig[];
+  } = {},
 ) {
   const io = captureIo({ isTty: o.isTty ?? false, ...(o.env && { env: o.env }) });
   const { engine } = o;
   const code = await run(argv, io, {
     manifest,
-    ...(engine && { createEngine: () => engine }),
+    ...(engine && {
+      createEngine: (config: EngineConfig) => {
+        o.configs?.push(config);
+        return engine;
+      },
+    }),
     ...(o.cwd !== undefined && { cwd: o.cwd }),
   });
   return { code, stdout: io.stdout, stderr: io.stderr };
@@ -203,6 +215,15 @@ describe('cpg config --format=json (C-CLI I-25)', () => {
     const ws = await tree({ '.git/': '' });
     const r = await cli(['config', '--format=json', ws]);
     expect(r.code).toBe(EXIT.OK);
+    // round two (review b3): given a constructor, cpg config still builds no engine
+    const configs: EngineConfig[] = [];
+    const f = fakeEngine();
+    const withEngine = await cli(['config', '--format=json', '--store', 'falkor', ws], {
+      engine: f.engine,
+      configs,
+    });
+    expect(withEngine.code).toBe(EXIT.OK);
+    expect(configs).toEqual([]);
   });
 
   it.each([
@@ -611,11 +632,38 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nincludes: [typo]\n' });
     for (const env of [{}, { CPG_PORT: 'abc' }]) {
       const f = fakeEngine();
+      const configs: EngineConfig[] = [];
       const bad = Object.keys(env).length > 0 ? await tree({ '.git/': '' }) : ws;
-      const r = await cli([...argv, bad], { engine: f.engine, env });
+      const r = await cli([...argv, bad], { engine: f.engine, env, configs });
       expect(r.code).toBe(EXIT.USAGE);
       expect([f.connects, f.requests, f.verifies]).toEqual([[], [], []]);
+      // round two (review b3): no engine is even built
+      expect(configs).toEqual([]);
     }
+  });
+
+  // round two (review b2): the walk scope and the loader warnings reach index without --dry-run
+  it('cpg index without --dry-run passes the same resolved values, and the loader warnings', async () => {
+    const ws = await tree({
+      '.git/': '',
+      [FILE]: `${FILE_TEXT}languages: { python: false }\n`,
+    });
+    const f = fakeEngine();
+    const r = await cli(['index', ws], { engine: f.engine });
+    expect(r.code).toBe(EXIT.OK);
+    expect(f.requests.map((q) => q.config)).toEqual([
+      {
+        ...plainDefaults(ws),
+        include: ['src/**'],
+        exclude: ['**/gen/**'],
+        maxFileSizeBytes: 4096,
+        store: { host: 'fh', port: 7100, graph: 'fg', mode: 'remote' },
+        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50 },
+      },
+    ]);
+    expect(f.requests[0]?.session).not.toBeNull();
+    expect(f.connects).toEqual([{ host: 'fh', port: 7100, graph: 'fg' }]);
+    expect(r.stderr.join('\n')).toMatch(/warning.*languages/);
   });
 
   it('--config reaches cpg index --dry-run', async () => {

@@ -544,6 +544,17 @@ describe('rule 9: apps/cli loads only builtins, @cpg/engine and @cpg/model at ru
     expect(status).toBe(0);
   });
 
+  // round two (review a7): a type-only import still has to pass rule 2 (app-tier)
+  it.each([
+    ['vscode', "import type { Uri } from 'vscode';\nexport type U = Uri;\n"],
+    ['an npm package', "import type { Chalk } from 'chalk';\nexport type C = Chalk;\n"],
+  ])('still rejects a type-only import of %s in apps/cli under app-tier', (_name, text) => {
+    const { status, out } = cli('apps/cli/src/x.ts', text);
+    expect(status).toBe(1);
+    expect(out).toContain('[app-tier]');
+    expect(out).not.toContain('[cli-runtime-import]');
+  });
+
   it("exempts apps/cli's test files, which are not its runtime", () => {
     const { status, out } = cli(
       'apps/cli/src/x.test.ts',

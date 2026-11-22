@@ -451,6 +451,8 @@ describe('interruption and resume', () => {
       files: [],
       nodesWritten: 0,
       edgesWritten: 0,
+      // round two (review a1): the interrupted branch reports no target either
+      target: null,
       consumers: [],
     });
   });
@@ -524,8 +526,42 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
       await expect(engine.connect(TARGET, { readOnly: false })).rejects.toThrow(/^SEAT: /);
       await expect(engine.connect(TARGET, { readOnly: false })).rejects.toThrow(message);
       expect(log).toEqual([]);
+      // round two (review a3): only the switch that is on is named
+      const refusal = await engine.connect(TARGET, { readOnly: false }).then(
+        () => '',
+        (e: unknown) => String(e),
+      );
+      const named = ['consumers.store', 'consumers.inspect', 'consumers.vscode'].filter((k) =>
+        refusal.includes(k),
+      );
+      expect(named).toHaveLength(1);
     },
   );
+
+  // round two (review a2): host sinks alone never replace the always-on memory store
+  it('host sinks without a memoryStore: the engine still builds its memory store, first', async () => {
+    const root = await tree({ 'm.py': '' });
+    const log: string[] = [];
+    const host = recording('host', undefined, log);
+    const engine = engineWith({ sinks: [host.sink] });
+    const session = await engine.connect(TARGET, { readOnly: false });
+    const report = await engine.index(
+      { config: { root }, session, resumeFrom: null },
+      () => {},
+      new AbortController().signal,
+    );
+    await session.close();
+    expect(report.consumers).toEqual(['memory', 'host']);
+    // the root DIRECTORY and m.py, one HAS_ENTRY: the built-in store's receipt, not the host's
+    expect(report).toMatchObject({ nodesWritten: 2, edgesWritten: 1 });
+    expect(host.ops).toHaveLength(1);
+    const verified = await engine.verify(
+      await engine.connect(TARGET, { readOnly: true }),
+      { root },
+      null,
+    );
+    expect(verified.consumers).toEqual(['memory']);
+  });
 
   it('every switch that is not built is named in one refusal', async () => {
     const engine = engineWith({ consumers: { store: 'falkor', inspect: true, vscode: true } });
