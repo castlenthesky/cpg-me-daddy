@@ -18,7 +18,7 @@ pre-commit:
     - name: oxlint
       run: bun run --silent oxlint -- --deny-warnings --no-error-on-unmatched-pattern {staged_files}
       glob: '*.{ts,mts,cts,js,mjs,cjs}'
-    # Whole-repo (cheap, ~50ms): dependency direction is a global property, not per-file.
+    # Whole-repo (cheap, ~0.3s: one TypeScript parse per file): dependency direction is a global property, not per-file.
     - name: check-deps
       run: bun run --silent check:deps
 

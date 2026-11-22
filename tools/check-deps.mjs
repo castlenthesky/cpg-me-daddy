@@ -7,6 +7,11 @@
 // is a lesson rather than a preference, and every rule has been seen to fail
 // on a planted violation (tools/check-deps.test.mjs; L-31).
 //
+// Module specifiers are found via TypeScript's scanner (`ts.preProcessFile`)
+// and parse tree (`ts.createSourceFile`) rather than a regex, so comments and
+// strings never produce false positives and comments inside syntax, template
+// literals, or statements after regex literals are never missed.
+//
 //  1. HOST-SDK (rank-1 constraint). Nothing under packages/** may import a host
 //     SDK (vscode, the MCP SDK) or touch a DOM global. The core has to run
 //     under plain node, so a host import anywhere in it is a build failure,
@@ -33,11 +38,12 @@
 //  6. NO NUL BYTES IN SOURCE (see the comment at the check).
 //
 //  7. SEAM CONTRACTS IMPORT TYPES ONLY. Every packages/**/contract.ts may import only through
-//     statement-level `import type` / `export type ... from` of an allowlisted package
-//     (CONTRACT_IMPORTS, kept here rather than in the package for the same reason as rule 2). The
-//     inline `{ type X }` form is rejected: only the statement-level form is erased under every TS
-//     setting. This rule limits IMPORTS only: a runtime EXPORT from contract.ts or index.ts is caught
-//     by each seam package's src/index.test.ts (Object.keys of the namespace is []), not here.
+//     statement-level `import type` / `export type ... from` (decided from the parse tree) of an
+//     allowlisted package (CONTRACT_IMPORTS, kept here rather than in the package for the same
+//     reason as rule 2). The inline `{ type X }` form is rejected: only the statement-level form
+//     is erased under every TS setting. This rule limits IMPORTS only: a runtime EXPORT from
+//     contract.ts or index.ts is caught by each seam package's src/index.test.ts (Object.keys of
+//     the namespace is []), not here.
 //
 //  8. createEngine() IS CALLED ONLY IN apps/*: a call site under packages/** is a composition root
 //     outside a front door (03-architecture §2 rule 3). The definition, comment lines and test
@@ -46,17 +52,12 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { basename, join, relative, resolve } from 'node:path';
+import ts from 'typescript';
 
 const ROOT = process.argv[2]
   ? resolve(process.argv[2])
   : new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const SKIP = new Set(['node_modules', 'dist', 'out', '.git', '.vscode-test', '.debate']);
-// Every way a module specifier is written: `... from 'x'` (import, import type, export {..} from,
-// export * from; `from` may sit on a later line than `import`/`export`, and `\s` spans newlines),
-// a bare side-effect `import 'x'`, `require('x')` and dynamic `import('x')`. Applied to the whole
-// file (not line by line) so a specifier on a line of its own is still seen. A keyword right after
-// a quote is a quoted word in a string, never syntax: `declared 'from' set [${x}]` is not an import.
-const SPEC = /(?<![\w'"`])(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"]([^'"\n]+)['"]/g;
 const DOM_GLOBAL = /\b(?:window|document|navigator)\s*\.|\b(?:HTMLElement|customElements)\b/;
 const ENGINE_CALL = /(?<!function\s+)\bcreateEngine\s*\(/;
 
@@ -71,26 +72,6 @@ const APP_SDKS = {
 // Rule 7's allowlist, per package; '*' is the default.
 const CONTRACT_IMPORTS = { '*': ['@cpg/model'] };
 
-// Rule 7: split a contract.ts into its statement-level type-only imports and everything else.
-// A type-only statement matches the import-clause GRAMMAR, never "anything up to from" (which would
-// run across a semicolon-less statement boundary and swallow a following value import):
-//   import type { A, B } from 'x' | import type * as N from 'x' | import type D from 'x'
-//   export type { A } from 'x'    | export type * from 'x'       | export type * as N from 'x'
-// typeSpecs: the specifier of each such statement, with its 1-based line.
-// rest: the source with each such statement blanked out, newlines kept so line numbers still agree;
-// any SPEC match left in it is a runtime load (value import, side-effect import, require, import()).
-const TYPE_ONLY_STMT =
-  /^[ \t]*(?:import|export)\s+type\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\}|\w+(?:\s*,\s*\{[^}]*\})?)\s+from\s*['"]([^'"\n]+)['"][ \t]*;?/gm;
-// REAL.
-function splitTypeOnly(source) {
-  const typeSpecs = [];
-  const rest = source.replace(TYPE_ONLY_STMT, (stmt, spec, offset) => {
-    typeSpecs.push({ spec, line: source.slice(0, offset).split('\n').length });
-    return stmt.replace(/[^\n]/g, ' ');
-  });
-  return { typeSpecs, rest };
-}
-
 // 'x/' matches any subpath of a scope; 'x' matches x itself and x/anything.
 function matches(spec, entry) {
   return entry.endsWith('/')
@@ -99,9 +80,57 @@ function matches(spec, entry) {
 }
 const isBuiltin = (spec) => spec.startsWith('node:') || builtinModules.includes(spec.split('/')[0]);
 
-function* specifiers(source) {
-  for (const m of source.matchAll(SPEC))
-    yield { spec: m[1], line: source.slice(0, m.index).split('\n').length };
+function specifiers(file, source) {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest);
+  const hits = new Map();
+
+  function record(node, lit, typeOnly) {
+    if (!lit || !ts.isStringLiteralLike(lit)) return;
+    const key = lit.getStart(sf);
+    if (!hits.has(key)) {
+      hits.set(key, {
+        spec: lit.text,
+        line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        typeOnly,
+      });
+    }
+  }
+
+  function visit(node) {
+    if (ts.isImportDeclaration(node)) {
+      record(node, node.moduleSpecifier, node.importClause?.isTypeOnly === true);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+      record(node, node.moduleSpecifier, node.isTypeOnly);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      record(node, node.moduleReference.expression, false);
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+    ) {
+      record(node, node.arguments[0], false);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      record(node, node.argument.literal, false);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sf);
+
+  for (const ref of ts.preProcessFile(source, true, true).importedFiles) {
+    if (!hits.has(ref.pos)) {
+      hits.set(ref.pos, {
+        spec: ref.fileName,
+        line: sf.getLineAndCharacterOfPosition(ref.pos).line + 1,
+        typeOnly: false,
+      });
+    }
+  }
+
+  return [...hits.values()];
 }
 
 function walk(dir, skip, acc = []) {
@@ -117,7 +146,7 @@ function walk(dir, skip, acc = []) {
 
 const violations = [];
 function flag(file, line, rule, detail) {
-  violations.push(`${relative(ROOT, file)}:${line}  [${rule}] ${detail}`);
+  violations.push(`${relative(ROOT, file)}:${String(line)}  [${rule}] ${detail}`);
 }
 
 const files = [...walk(join(ROOT, 'packages'), SKIP), ...walk(join(ROOT, 'apps'), SKIP)];
@@ -172,28 +201,32 @@ for (const file of files) {
     });
   }
 
+  const specs = specifiers(file, source);
+
   // Rule 7: SEAM CONTRACTS IMPORT TYPES ONLY.
   if (!isApp && basename(file) === 'contract.ts') {
     const allowed = CONTRACT_IMPORTS[pkg] ?? CONTRACT_IMPORTS['*'];
-    const { typeSpecs, rest } = splitTypeOnly(source);
-    for (const { spec, line: at } of typeSpecs)
-      if (!allowed.includes(spec))
+    for (const { spec, line: at, typeOnly } of specs) {
+      if (typeOnly) {
+        if (!allowed.includes(spec))
+          flag(
+            file,
+            at,
+            'contract-types-only',
+            `${pkg} contract.ts imports "${spec}"; allowed: ${allowed.join(', ')}`,
+          );
+      } else {
         flag(
           file,
           at,
           'contract-types-only',
-          `${pkg} contract.ts imports "${spec}"; allowed: ${allowed.join(', ')}`,
+          `${pkg} contract.ts loads "${spec}" at runtime; only \`import type\` is allowed`,
         );
-    for (const { spec, line: at } of specifiers(rest))
-      flag(
-        file,
-        at,
-        'contract-types-only',
-        `${pkg} contract.ts loads "${spec}" at runtime; only \`import type\` is allowed`,
-      );
+      }
+    }
   }
 
-  for (const { spec, line: at } of specifiers(source)) {
+  for (const { spec, line: at } of specs) {
     const cpg = spec.match(/^@cpg\/([^/]+)(\/.+)?$/);
     if (cpg?.[2])
       flag(
@@ -255,7 +288,7 @@ for (const file of files) {
 const pkgsDir = join(ROOT, 'packages');
 for (const pkg of existsSync(pkgsDir) ? readdirSync(pkgsDir) : []) {
   for (const file of walk(join(pkgsDir, pkg, 'dist'), new Set())) {
-    for (const { spec, line } of specifiers(readFileSync(file, 'utf8'))) {
+    for (const { spec, line } of specifiers(file, readFileSync(file, 'utf8'))) {
       if (HOST_SDKS.some((entry) => matches(spec, entry))) {
         flag(
           file,
@@ -269,7 +302,7 @@ for (const pkg of existsSync(pkgsDir) ? readdirSync(pkgsDir) : []) {
 }
 
 if (violations.length) {
-  console.error(`check-deps: ${violations.length} violation(s)\n`);
+  console.error(`check-deps: ${String(violations.length)} violation(s)\n`);
   for (const v of violations) console.error('  ' + v);
   process.exit(1);
 }

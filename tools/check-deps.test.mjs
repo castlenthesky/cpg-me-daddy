@@ -198,6 +198,17 @@ describe('rule 7: seam contract.ts imports types only', () => {
     ],
     ['export type * as N from', "export type * as N from '@cpg/model';\n"],
     ['import type with no semicolon', "import type { A } from '@cpg/model'\nexport type R = A\n"],
+    // U2c.3: the scanner skips comments, so a specifier inside one is no longer a false positive,
+    // and a statement is type-only by the parse tree, not by a regex over its text
+    [
+      'a quoted specifier inside a comment',
+      "// see import { x } from '@cpg/model'\nexport type R = 1;\n",
+    ],
+    ['an import type with a comment inside', "import type /* c */ { A } from '@cpg/model';\n"],
+    [
+      'a disallowed import type inside a block comment',
+      "/*\nimport type { X } from '@cpg/sink';\n*/\nexport type R = 1;\n",
+    ],
   ])('accepts %s', (_name, text) => {
     const { status, out } = run(contract(text));
     expect(out).toContain('check-deps: ok');
@@ -246,11 +257,7 @@ describe('rule 7: seam contract.ts imports types only', () => {
     ['export * (a value re-export)', "export * from '@cpg/model';\n"],
     ['import type from a disallowed package', "import type { X } from '@cpg/sink';\n"],
     ['import type from a relative path', "import type { X } from './local';\n"],
-    // documented false positive: a quoted specifier inside a comment is flagged; pinned so nobody "fixes" it silently
-    [
-      'a quoted specifier inside a comment',
-      "// see import { x } from '@cpg/model'\nexport type R = 1;\n",
-    ],
+    ['an import type node in a type position', "export type R = import('@cpg/model').X;\n"],
   ])('rejects %s', (_name, text) => {
     const { status, out } = run(contract(text));
     expect(status).toBe(1);
@@ -287,5 +294,147 @@ describe('rule 7: seam contract.ts imports types only', () => {
       ),
     );
     expect(out).toMatch(/contract\.ts:5 +\[contract-types-only\]/);
+  });
+});
+
+// U2c.3 (BMO-48): specifiers come from ts.preProcessFile and the parse tree, never a regex. A regex
+// reads a specifier in a comment or a string as an import, and misses one written around a comment
+// or as a template literal. preProcessFile alone misses three forms (marked below) that the parse
+// tree sees, so the scanner needs both.
+describe('check-deps finds specifiers with the TypeScript scanner, in packages/** and apps/**', () => {
+  it.each([
+    [
+      'an import with a comment before its specifier',
+      'packages/foo/src/probe.ts',
+      "import /* c */ 'vscode';\n",
+      'host-sdk',
+    ],
+    [
+      'an export * with a comment after its from',
+      'packages/foo/src/probe.ts',
+      "export * from /* c */ 'vscode';\n",
+      'host-sdk',
+    ],
+    [
+      'a require with a comment before its parenthesis',
+      'packages/foo/src/probe.js',
+      "require /* c */ ('vscode');\n",
+      'host-sdk',
+    ],
+    [
+      'a dynamic import of a template literal',
+      'packages/foo/src/probe.ts',
+      'export const m = import(`vscode`);\n',
+      'host-sdk',
+    ],
+    [
+      'a require of a template literal in stale dist',
+      'packages/foo/dist/probe.js',
+      'require(`vscode`);\n',
+      'host-sdk',
+    ],
+    // preProcessFile alone misses this one and the next two
+    [
+      'export type * as N from',
+      'packages/foo/src/probe.ts',
+      "export type * as V from 'vscode';\n",
+      'host-sdk',
+    ],
+    [
+      'a require inside a template substitution',
+      'packages/foo/src/probe.ts',
+      "export const s = `${require('vscode')}`;\n",
+      'host-sdk',
+    ],
+    [
+      'a require after a regex literal holding a quote',
+      'packages/foo/src/probe.ts',
+      "const r = /'/; require('vscode');\nexport { r };\n",
+      'host-sdk',
+    ],
+    // after a regex literal holding a backtick preProcessFile sees nothing, so only the parse tree
+    // can find these two
+    [
+      'import x = require() after a regex literal holding a backtick',
+      'packages/foo/src/probe.ts',
+      "const r = /`/;\nimport v = require('vscode');\nexport { r, v };\n",
+      'host-sdk',
+    ],
+    [
+      'an import type node after a regex literal holding a backtick',
+      'packages/foo/src/probe.ts',
+      "const r = /`/;\nexport type R = import('vscode').Uri;\nexport { r };\n",
+      'host-sdk',
+    ],
+    // post-implementation (sabotage survivors): the parse tree's import() and template-literal
+    // handling, and the one form only preProcessFile sees
+    [
+      'a dynamic import after a regex literal holding a backtick',
+      'packages/foo/src/probe.ts',
+      "const r = /`/;\nexport const m = import('vscode');\n",
+      'host-sdk',
+    ],
+    [
+      'a template-literal require after a regex literal holding a backtick',
+      'packages/foo/src/probe.js',
+      'const r = /`/;\nrequire(`vscode`);\n',
+      'host-sdk',
+    ],
+    [
+      'an AMD define dependency',
+      'packages/foo/src/probe.js',
+      "define(['vscode'], function (v) {\n  return v;\n});\n",
+      'host-sdk',
+    ],
+    [
+      'an app import with a comment before its specifier (apps/inspector)',
+      'apps/inspector/src/probe.ts',
+      "import /* c */ 'chalk';\n",
+      'app-tier',
+    ],
+    [
+      'a nested app file requiring a template literal (apps/mcp)',
+      'apps/mcp/src/deep/nested/probe.mjs',
+      'require(`chalk`);\n',
+      'app-tier',
+    ],
+  ])('rejects %s', (_name, path, text, rule) => {
+    const { status, out } = run({ ...CLEAN, [path]: text });
+    expect(out).toContain(`[${rule}]`);
+    expect(status).toBe(1);
+  });
+
+  it.each([
+    ['an import in a line comment', "// import { x } from 'vscode'\nexport const a = 1;\n"],
+    ['a require in a block comment', "/* require('vscode') */\nexport const a = 1;\n"],
+    ['a string that reads like an import', 'export const s = "x from \'vscode\'";\n'],
+    [
+      'a template string that reads like an import',
+      "export const t = (a: string) => `import 'vscode' ${a}`;\n",
+    ],
+  ])('accepts %s in packages/foo', (_name, text) => {
+    const { status, out } = run({ ...CLEAN, 'packages/foo/src/probe.ts': text });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it('reports a multi-line import once, on the line its statement starts', () => {
+    const { out } = run({
+      ...CLEAN,
+      'packages/foo/src/probe.ts':
+        "export const a = 1;\nimport type {\n  Uri,\n}\n  from\n  'vscode';\n",
+    });
+    expect(out.match(/\[host-sdk\]/g)).toHaveLength(1);
+    expect(out).toMatch(/probe\.ts:2 +\[host-sdk\]/);
+  });
+
+  it('reports two imports of one module on their own lines, once each', () => {
+    const { out } = run({
+      ...CLEAN,
+      'packages/foo/src/probe.ts': "import 'vscode';\nexport * from 'vscode';\n",
+    });
+    expect(out.match(/\[host-sdk\]/g)).toHaveLength(2);
+    expect(out).toMatch(/probe\.ts:1 +\[host-sdk\]/);
+    expect(out).toMatch(/probe\.ts:2 +\[host-sdk\]/);
   });
 });

@@ -35,6 +35,7 @@ Then press F5 in VS Code to launch the Extension Development Host and run **CPG:
 | `bun run check:deps`        | dependency-direction rules (`tools/check-deps.mjs`)                                                              |
 | `bun run check:pack`        | asserts what `bun pm pack` would ship                                                                            |
 | `bun run check:cli-bin`     | builds `apps/cli` and runs the built `cpg` bin (`tools/check-cli-bin.mjs`)                                       |
+| `bun run check:purity`      | runs the bin's `cpg index --dry-run` under a `Module._load` trap, then `--plant` (`tools/purity-proof.mjs`)      |
 | `bun run schema:doc`        | regenerates the GENERATED region of `docs/outline/04-schema.yaml` from `CPG_SCHEMA` (`--check` exits 1 on drift) |
 | `bun run knip`              | unused files/exports/deps                                                                                        |
 | `bun run test`              | vitest (unit, property, type tests)                                                                              |
