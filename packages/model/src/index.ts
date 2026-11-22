@@ -34,15 +34,15 @@ import type { PropertyOwner } from './schema';
  * every consumer below inherits the bug.
  */
 export interface SourceRange {
-  startRow: number;
-  startColumn: number;
-  endRow: number;
-  endColumn: number;
+  readonly startRow: number;
+  readonly startColumn: number;
+  readonly endRow: number;
+  readonly endColumn: number;
 }
 
 /**
  * Everything a host needs to open a node's source and put the cursor on it —
- * carried in `GraphNode.data.location` and read back through `nodeLocation`.
+ * carried in `GraphNode.data.location` and read back through `readNodeLocation`.
  *
  * `range` is the construct's full extent (the whole method, the whole class)
  * and is what to frame in the viewport. `nameRange` is the construct's
@@ -54,10 +54,10 @@ export interface SourceRange {
  * in which case `range` is the only sensible target.
  */
 export interface NodeLocation {
-  /** Absolute path, the same one that is the file node's own `id`. */
-  filePath: string;
-  range: SourceRange;
-  nameRange?: SourceRange;
+  /** The owning file, workspace-relative (DQ-02). Never `'.'`: the root is not a source file. */
+  readonly filePath: WorkspacePath;
+  readonly range: SourceRange;
+  readonly nameRange?: SourceRange;
 }
 
 /**
@@ -90,7 +90,7 @@ export interface GraphEdge {
   readonly type?: string;
   /**
    * Open property bag, same contract as `GraphNode.data` — read back through a
-   * typed accessor (`edgeResolution`) rather than by indexing, so only one
+   * typed accessor (`readEdgeResolution`) rather than by indexing, so only one
    * place knows each key's shape.
    *
    * Nothing in the renderer reads it, and that is not an oversight: the link
@@ -113,48 +113,12 @@ export interface GraphEdge {
  * failing to typecheck across a package boundary.
  */
 export interface EdgeResolution {
-  status: string;
+  readonly status: string;
   /** The resolver id that produced this answer, so provenance is inspectable per edge rather than per run. */
-  resolvedBy: string;
-  confidence?: number;
-  reason?: string;
-}
-
-/**
- * Reads back the resolution a producer stored on a reference node — how a
- * `CALL`/`IMPORT` explains itself when it has no outgoing edge.
- *
- * Mirrored onto the node as well as the edge because the interesting cases are
- * exactly the ones with *no* edge: a builtin, or a reference nothing could
- * resolve. Edge-only provenance can't describe an absent edge.
- */
-export function nodeResolution(node: GraphNode): EdgeResolution | undefined {
-  return readResolution(node.data?.['resolution']);
-}
-
-/** Reads back what a producer stored in `edge.data` — the mirror of `nodeLocation`, and the only place that knows the key and shape. */
-export function edgeResolution(edge: GraphEdge): EdgeResolution | undefined {
-  return readResolution(edge.data?.['resolution']);
-}
-
-// Type guard rather than `as`: narrows `unknown` to a property bag without an unchecked assertion.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function readResolution(candidate: unknown): EdgeResolution | undefined {
-  if (!isRecord(candidate)) {
-    return undefined;
-  }
-  if (typeof candidate['status'] !== 'string' || typeof candidate['resolvedBy'] !== 'string') {
-    return undefined;
-  }
-  return {
-    status: candidate['status'],
-    resolvedBy: candidate['resolvedBy'],
-    ...(typeof candidate['confidence'] === 'number' ? { confidence: candidate['confidence'] } : {}),
-    ...(typeof candidate['reason'] === 'string' ? { reason: candidate['reason'] } : {}),
-  };
+  readonly resolvedBy: string;
+  /** In [0, 1], as C-RESOLVE defines it. */
+  readonly confidence?: number;
+  readonly reason?: string;
 }
 
 /**
@@ -209,45 +173,8 @@ export type HostToWebview =
  */
 export type WebviewToHost = { type: 'ready' } | { type: 'reveal'; nodeId: string };
 
-function isSourceRange(value: unknown): value is SourceRange {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const range = value;
-  return (
-    typeof range['startRow'] === 'number' &&
-    typeof range['startColumn'] === 'number' &&
-    typeof range['endRow'] === 'number' &&
-    typeof range['endColumn'] === 'number'
-  );
-}
-
-/**
- * Reads back the `NodeLocation` a producer stored in `node.data.location`, or
- * `undefined` for a node that has none.
- *
- * `GraphNode.data` is deliberately an open bag, so this is the one place that
- * knows the key and shape — the alternative is every consumer hand-casting the
- * same untyped fields and drifting from the producer. An `undefined` result is
- * routine, not an error: `directory` nodes have no source position at all, and
- * a `file` node doesn't need one (its `id` is already the path).
- */
-export function nodeLocation(node: GraphNode): NodeLocation | undefined {
-  const location = node.data?.['location'];
-  if (!isRecord(location)) {
-    return undefined;
-  }
-  const candidate = location;
-  if (typeof candidate['filePath'] !== 'string' || !isSourceRange(candidate['range'])) {
-    return undefined;
-  }
-  return {
-    filePath: candidate['filePath'],
-    range: candidate['range'],
-    ...(isSourceRange(candidate['nameRange']) ? { nameRange: candidate['nameRange'] } : {}),
-  };
-}
-
 export * from './delta';
+export * from './read';
+export * from './payload';
 export * from './schema';
 export * from './paths';

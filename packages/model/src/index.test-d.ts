@@ -2,7 +2,16 @@ import { assertType, describe, expect, expectTypeOf, it } from 'vitest';
 import * as model from './index';
 import {
   applyGraphDelta,
-  nodeLocation,
+  readEdgeResolution,
+  readNodeLocation,
+  readNodeResolution,
+  validatePayload,
+  type EdgeResolution,
+  type ModelDefect,
+  type ModelDefectCode,
+  type NodeLocation,
+  type Read,
+  type WorkspacePath,
   toWorkspacePath,
   type DeltaApplyResult,
   type GraphDelta,
@@ -105,9 +114,68 @@ describe('@cpg/model public types', () => {
     expectTypeOf<GraphNode['type']>().toEqualTypeOf<string>();
   });
 
-  it('nodeLocation may return undefined', () => {
-    expectTypeOf(nodeLocation).returns.toBeNullable();
+  it('ModelDefectCode is exactly the seven contract codes', () => {
+    expectTypeOf<ModelDefectCode>().toEqualTypeOf<
+      | 'empty-id'
+      | 'id-contains-separator'
+      | 'duplicate-node-id'
+      | 'dangling-edge'
+      | 'malformed-location'
+      | 'malformed-resolution'
+      | 'non-monotonic-seq'
+    >();
   });
+
+  it('the read accessors return Read<T>', () => {
+    expectTypeOf(readNodeLocation).returns.toEqualTypeOf<Read<NodeLocation>>();
+    expectTypeOf(readNodeResolution).returns.toEqualTypeOf<Read<EdgeResolution>>();
+    expectTypeOf(readEdgeResolution).returns.toEqualTypeOf<Read<EdgeResolution>>();
+  });
+
+  it('Read<T> narrows on state: present has value, malformed has defect, absent has neither', () => {
+    const r = readNodeLocation({ id: 'a', type: 'X' });
+    expectTypeOf(r).toEqualTypeOf<Read<NodeLocation>>();
+    // @ts-expect-error value exists only after narrowing to present
+    void r.value;
+    if (r.state === 'present') expectTypeOf(r.value).toEqualTypeOf<NodeLocation>();
+    if (r.state === 'malformed') expectTypeOf(r.defect).toEqualTypeOf<ModelDefect>();
+    if (r.state === 'absent') {
+      // @ts-expect-error absent carries no value
+      void r.value;
+    }
+  });
+
+  it('NodeLocation.filePath is a WorkspacePath and its fields are readonly', () => {
+    expectTypeOf<NodeLocation['filePath']>().toEqualTypeOf<WorkspacePath>();
+    const range = { startRow: 0, startColumn: 0, endRow: 0, endColumn: 0 };
+    // @ts-expect-error a plain string is not a WorkspacePath
+    const bad: NodeLocation = { filePath: 'src/x.ts', range };
+    void bad;
+    const loc: NodeLocation = { filePath: toWorkspacePath('/w', '/w/x.ts'), range };
+    // @ts-expect-error NodeLocation is readonly
+    loc.range = range;
+  });
+
+  it('validatePayload takes one or two args and returns a readonly ModelDefect array', () => {
+    expectTypeOf(validatePayload).parameter(0).toEqualTypeOf<GraphPayload>();
+    expectTypeOf(validatePayload).returns.toEqualTypeOf<readonly ModelDefect[]>();
+    assertType(validatePayload(p));
+    assertType(validatePayload(p, { previousSeq: 3 }));
+    // @ts-expect-error previousSeq is a number
+    validatePayload(p, { previousSeq: '3' });
+  });
+
+  /* oxlint-disable import/namespace -- the point is to touch names that must not exist. */
+  it('the old accessors are gone from the module', () => {
+    // @ts-expect-error replaced by readNodeLocation
+    void model.nodeLocation;
+    // @ts-expect-error replaced by readNodeResolution
+    void model.nodeResolution;
+    // @ts-expect-error replaced by readEdgeResolution
+    void model.edgeResolution;
+    expectTypeOf(model).not.toHaveProperty('nodeLocation');
+  });
+  /* oxlint-enable import/namespace */
 
   it('the message unions discriminate on `type`', () => {
     expectTypeOf<HostToWebview['type']>().toEqualTypeOf<'graph' | 'graph-delta'>();

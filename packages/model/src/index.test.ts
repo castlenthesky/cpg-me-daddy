@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyGraphDelta,
-  edgeResolution,
-  nodeLocation,
-  nodeResolution,
   toWorkspacePath,
   type DeltaApplyResult,
   type GraphDelta,
@@ -674,87 +671,5 @@ describe('applyGraphDelta edges', () => {
       ),
     );
     expect(next.edges).toEqual([e1, e2, e1]);
-  });
-});
-
-describe('nodeLocation', () => {
-  const range = { startRow: 1, startColumn: 0, endRow: 3, endColumn: 1 };
-
-  it('reads a well-formed location', () => {
-    const got = nodeLocation({
-      id: 'a',
-      type: 'METHOD',
-      data: { location: { filePath: '/x.ts', range } },
-    });
-    expect(got).toEqual({ filePath: '/x.ts', range });
-  });
-
-  it('carries nameRange when present, since range alone lands the caret one token short', () => {
-    const nameRange = { startRow: 1, startColumn: 9, endRow: 1, endColumn: 12 };
-    const got = nodeLocation({
-      id: 'a',
-      type: 'METHOD',
-      data: { location: { filePath: '/x.ts', range, nameRange } },
-    });
-    expect(got?.nameRange).toEqual(nameRange);
-  });
-
-  it.each([
-    ['no data at all', { id: 'a', type: 'directory' }],
-    ['no location key', { id: 'a', type: 'file', data: {} }],
-    ['location is null', { id: 'a', type: 'file', data: { location: null } }],
-    [
-      'filePath is not a string',
-      { id: 'a', type: 'file', data: { location: { filePath: 7, range } } },
-    ],
-    [
-      'range is malformed',
-      { id: 'a', type: 'file', data: { location: { filePath: '/x.ts', range: { startRow: 1 } } } },
-    ],
-  ])('returns undefined rather than throwing: %s', (_label, node) => {
-    expect(nodeLocation(node)).toBeUndefined();
-  });
-});
-
-describe('resolution accessors', () => {
-  it('reads resolution off a node, which is how an ABSENT edge explains itself', () => {
-    // The interesting cases have no edge at all — a builtin, or a reference
-    // nothing could resolve. Edge-only provenance cannot describe those.
-    const got = nodeResolution({
-      id: 'call:1',
-      type: 'CALL',
-      data: { resolution: { status: 'external', resolvedBy: 'python-path', reason: 'stdlib' } },
-    });
-    expect(got).toEqual({ status: 'external', resolvedBy: 'python-path', reason: 'stdlib' });
-  });
-
-  it('reads resolution off an edge', () => {
-    const got = edgeResolution({
-      source: 'a',
-      target: 'b',
-      data: { resolution: { status: 'resolved', resolvedBy: 'lsp', confidence: 0.9 } },
-    });
-    expect(got).toEqual({ status: 'resolved', resolvedBy: 'lsp', confidence: 0.9 });
-  });
-
-  it('requires both status and resolvedBy, so provenance is never half-recorded', () => {
-    expect(
-      edgeResolution({ source: 'a', target: 'b', data: { resolution: { status: 'resolved' } } }),
-    ).toBeUndefined();
-    expect(
-      edgeResolution({ source: 'a', target: 'b', data: { resolution: { resolvedBy: 'lsp' } } }),
-    ).toBeUndefined();
-  });
-
-  it('accepts a status string this package has never heard of', () => {
-    // Deliberate: a producer emitting a new status must degrade to "unknown
-    // status", not fail to typecheck across a package boundary.
-    expect(
-      edgeResolution({
-        source: 'a',
-        target: 'b',
-        data: { resolution: { status: 'speculative', resolvedBy: 'x' } },
-      }),
-    ).toEqual({ status: 'speculative', resolvedBy: 'x' });
   });
 });
