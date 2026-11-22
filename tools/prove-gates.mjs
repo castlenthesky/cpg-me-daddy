@@ -334,6 +334,29 @@ const CASES = [
       },
     };
   })(),
+  (() => {
+    // The real gate on the real file: `bun run schema:doc --check` (also proves the literal
+    // `--check` pass-through of the package script) must reject a hand edit of the generated region.
+    const file = at('docs/outline/04-schema.yaml');
+    let original = '';
+    return {
+      name: 'check:schema rejects a hand edit inside the generated region of 04-schema.yaml',
+      expectOutput: /generated region is stale/,
+      command: ['bun', 'run', '--silent', 'schema:doc', '--check'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        if (!original.includes('# Node labels ('))
+          throw new Error('04-schema.yaml no longer contains the generated region header');
+        writeFileSync(
+          file,
+          original.replace('# Node labels (', () => '# Node label ('),
+        );
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+      },
+    };
+  })(),
   {
     name: 'typecheck rejects a type error',
     expectOutput: /TS2322/,
@@ -655,6 +678,16 @@ const CASES = [
     from: '"entry": ["tools/*.mjs"],',
     to: '"entry": [],',
     expectOutput: /claude-post-edit\.mjs/,
+  }),
+  configCase({
+    // Nothing else hashes docs/**: without the doc as a task input a hand edit replays a cached pass,
+    // and the same run proves `bun run check` itself runs check:schema.
+    name: 'check:schema: a 04-schema.yaml-only edit (hand edit in the generated region) invalidates the turbo cache',
+    task: 'check:schema',
+    file: 'docs/outline/04-schema.yaml',
+    from: '# Node labels (',
+    to: '# Node label (',
+    expectOutput: /generated region is stale/,
   }),
 ];
 

@@ -348,3 +348,17 @@ describe('ownedBy', () => {
     expect(out[1]?.enumValues).toBe(enumValues);
   });
 });
+
+describe('golden corrections (U1.1.2 D4)', () => {
+  test('FILE.content_hash is golden-excluded, like revision_id whose value it equals', () => {
+    expect(nodeSpec('FILE')?.properties.find((p) => p.name === 'content_hash')?.golden).toBe(
+      'exclude',
+    );
+  });
+
+  test.each(['confidence', 'resolvedBy'])('CALLS.%s is golden-excluded (DQ-09)', (name) => {
+    expect(
+      EDGE_TYPES.find((e) => e.type === 'CALLS')?.properties.find((p) => p.name === name)?.golden,
+    ).toBe('exclude');
+  });
+});
