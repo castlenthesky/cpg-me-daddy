@@ -245,24 +245,55 @@ describe('cpg config --format=json (C-CLI I-25)', () => {
       layer: 'env',
       source: 'CPG_GRAPH',
     });
-    const flagged = await configJson([ws, '--port', '7002'], { env });
+    const flagged = await configJson([ws, '--port', '7002', '--graph', 'fg'], { env });
     expect(leaf(flagged['body'], 'store.port')).toEqual({
       value: 7002,
       layer: 'flag',
       source: '--port',
     });
+    expect(leaf(flagged['body'], 'store.graph')).toEqual({
+      value: 'fg',
+      layer: 'flag',
+      source: '--graph',
+    });
+  });
+
+  it('only CPG_WORKSPACE, CPG_HOST, CPG_PORT and CPG_GRAPH are read', async () => {
+    const ws = await tree({ '.git/': '' });
+    const env = {
+      CPG_MODE: 'docker',
+      CPG_INCLUDE: 'x',
+      CPG_GRAMMAR_DIR: '/g',
+      CPG_STORE_HOST: 'h',
+    };
+    const d = await configJson([ws], { env });
+    expect(JSON.stringify(d['body'])).not.toContain('"layer":"env"');
   });
 
   it.each([
     ['CPG_PORT', 'abc'],
     ['CPG_PORT', '0'],
+    ['CPG_PORT', '63.5'],
+    ['CPG_PORT', '7000abc'],
+    ['CPG_PORT', '70000'],
     ['CPG_HOST', ''],
   ])('%s=%j is a config error: exit 2, named, nothing on stdout', async (name, value) => {
     const ws = await tree({ '.git/': '' });
-    const r = await cli(['config', '--format=json', ws], { env: { [name]: value } });
+    for (const flags of [[], ['--port', '7000', '--host', 'h']]) {
+      const r = await cli(['config', '--format=json', ws, ...flags], { env: { [name]: value } });
+      expect(r.code).toBe(EXIT.USAGE);
+      expect(r.stdout).toEqual([]);
+      expect(r.stderr.join('\n')).toContain(name);
+    }
+  });
+
+  it('a config error is not a usage error: one cpg: line, no usage hint', async () => {
+    const ws = await tree({ '.git/': '' });
+    const r = await cli(['config', '--format=json', ws], { env: { CPG_PORT: 'abc' } });
     expect(r.code).toBe(EXIT.USAGE);
-    expect(r.stdout).toEqual([]);
-    expect(r.stderr.join('\n')).toContain(name);
+    expect(r.stderr).toHaveLength(1);
+    expect(r.stderr[0]).toMatch(/^cpg: .*CPG_PORT/);
+    expect(r.stderr[0]).not.toMatch(/--help|usage/);
   });
 
   it.each([
@@ -330,6 +361,28 @@ describe('cpg config: finding cpg.config.yaml', () => {
     expect(JSON.stringify(d['body'])).not.toContain('"layer":"file"');
   });
 
+  it.each([
+    ['a .git directory', { 'repo/.git/': '' }],
+    ['a .git file', { 'repo/.git': 'gitdir: /elsewhere\n' }],
+  ])('the search stops at %s in the root itself', async (_name, git) => {
+    const top = await tree({ [FILE]: 'version: 1\ninclude: [above]\n', ...git });
+    const d = await configJson([join(top, 'repo')]);
+    expect(leaf(d['body'], 'include')).toEqual(builtIn(['**/*']));
+  });
+
+  it('consumers.vscode: auto is false at the CLI, which is headless', async () => {
+    const ws = await tree({
+      '.git/': '',
+      [FILE]: 'version: 1\nconsumers: { inspect: true, store: falkor, vscode: auto }\n',
+    });
+    const d = await configJson([ws]);
+    expect(leaf(d['body'], 'consumers')).toEqual({
+      value: { inspect: true, store: 'falkor', vscode: false },
+      layer: 'file',
+      source: join(ws, FILE),
+    });
+  });
+
   it('--config names the file, even when one is nearer; relative to cwd, not the root', async () => {
     const top = await tree({
       '.git/': '',
@@ -393,6 +446,8 @@ describe('cpg config --format=text', () => {
     expect(r.stdout).toContain(
       'consumers {"inspect":false,"store":"memory","vscode":false} default built-in',
     );
+    const explicit = await cli(['config', '--format=text', ws]);
+    expect(explicit.stdout).toEqual(r.stdout);
   });
 
   it.each([['json'], ['text']])('--format=%s stdout does not depend on isTty (I-9)', async (f) => {
@@ -493,6 +548,25 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     await cli(['index', '--dry-run', ws, '--config', join(ws, 'c.yaml')], { engine: f.engine });
     expect(f.requests[0]?.config.include).toEqual(['named/**']);
   });
+
+  it('--config reaches cpg verify', async () => {
+    const ws = await tree({ '.git/': '', 'c.yaml': 'version: 1\ninclude: [named/**]\n' });
+    const f = fakeEngine();
+    await cli(['verify', ws, '--config', join(ws, 'c.yaml')], { engine: f.engine });
+    expect(f.verifies[0]?.include).toEqual(['named/**']);
+  });
+
+  it.each([['watch'], ['inspect'], ['index']])(
+    'the SEAT verb %s loads no config: built-in store, still "not built yet"',
+    async (verb) => {
+      const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nincludes: [typo]\n' });
+      const f = fakeEngine();
+      const r = await cli([verb, ws], { engine: f.engine, env: { CPG_HOST: 'e', CPG_PORT: 'x' } });
+      expect(r.code).toBe(EXIT.USAGE);
+      expect(r.stderr.join('\n')).toContain('not built yet');
+      expect(f.connects).toEqual([{ host: '127.0.0.1', port: 6382, graph: 'cpg' }]);
+    },
+  );
 
   it('the loader warnings reach stderr for index --dry-run too', async () => {
     const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nlanguages: { python: false }\n' });

@@ -48,6 +48,8 @@ expectRun(['mcp'], 2, 'stderr', /not built yet/);
 // main.ts is the composition root: createEngine wired with the MemoryStore sink (BMO-79).
 const ws = mkdtempSync(join(tmpdir(), 'cpg-cli-bin-'));
 try {
+  // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
+  mkdirSync(join(ws, '.git'));
   writeFileSync(join(ws, 'a.ts'), 'export const a = 1;\n');
   writeFileSync(join(ws, 'b.py'), 'b = 2\n');
   expectRun(['index', '--dry-run', ws], 0, 'stdout', /^files seen=2 indexed=2 /m);

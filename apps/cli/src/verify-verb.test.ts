@@ -4,7 +4,7 @@
 // go to stderr (I-10), a malformed flag never connects (I-12), the root is --workspace, then the
 // positional, then CPG_WORKSPACE, then cwd.
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -55,6 +55,8 @@ async function cli(
 async function indexedWorkspace(): Promise<{ root: string; engine: CpgEngine }> {
   const root = await mkdtemp(join(tmpdir(), 'cpg-cli-verify-'));
   roots.push(root);
+  // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
+  await mkdir(join(root, '.git'));
   await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
   await writeFile(join(root, 'b.py'), 'b = 2\n');
   const engine = createEngine({ version: manifest.version }, { sinks: [createMemoryStore()] });

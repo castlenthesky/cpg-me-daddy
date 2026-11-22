@@ -4,7 +4,7 @@
 // diagnostics on stderr (I-10); stdout never depends on isTty (I-9); interrupted exits 130 (I-27).
 
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CpgEngine, IndexReport, IndexRequest } from '@cpg/engine';
@@ -88,6 +88,8 @@ describe('cpg index --dry-run with the real engine (BMO-79)', () => {
   it('a.ts and b.py: one cpg.index.report document, filesIndexed 2, no store', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cpg-cli-index-'));
     roots.push(root);
+    // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
+    await mkdir(join(root, '.git'));
     const files = { 'a.ts': 'export const a = 1;\n', 'b.py': 'b = 2\n' };
     for (const [name, text] of Object.entries(files)) await writeFile(join(root, name), text);
     const memory = createMemoryStore();

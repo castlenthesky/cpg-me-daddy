@@ -7,7 +7,8 @@ import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const SRC = __dirname;
-const AMBIENT = /\bprocess\s*(?:\.|\[\s*['"`])\s*(?:env|argv)\b|['"`](?:node:)?process['"`]/;
+const AMBIENT =
+  /\bprocess\s*(?:\?\.|\.|\[\s*['"`])\s*(?:env|argv|cwd)\b|\}\s*=\s*process\b|['"`](?:node:)?process['"`]/;
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
@@ -18,7 +19,7 @@ function sources(dir: string): string[] {
 }
 
 describe('the engine reads no env itself', () => {
-  it('no shipped engine source reads process.env, process.argv or node:process', () => {
+  it('no shipped engine source reads process.env, argv, cwd, or node:process', () => {
     const files = sources(SRC).map((f) => relative(SRC, f));
     // Not vacuous: the scan sees the engine, the walker and the config resolver.
     expect(files).toEqual(
@@ -38,6 +39,10 @@ describe('the engine reads no env itself', () => {
     "const a = process['argv'];",
     "import { env } from 'node:process';",
     "const { env } = require('process');",
+    'const h = process?.env?.CPG_HOST;',
+    'const { env } = process;',
+    'const { argv, env: e } = process;',
+    'const here = process.cwd();',
   ])('the pattern catches %s (the guard can fail)', (line) => {
     expect(AMBIENT.test(line)).toBe(true);
   });

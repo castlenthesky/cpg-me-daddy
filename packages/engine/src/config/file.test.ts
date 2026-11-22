@@ -156,6 +156,25 @@ describe('parseConfigFile', () => {
     ['a zero debounce', 'version: 1\nwatch: { debounce_ms: 0 }\n', 'watch.debounce_ms'],
     ['YAML 1.2: yes is a string', 'version: 1\nlanguages: { python: yes }\n', 'languages.python'],
     ['include not a list', 'version: 1\ninclude: src\n', 'include'],
+    [
+      'an extra consumers key',
+      'version: 1\nconsumers: { inspect: true, store: memory, vscode: false, x: 1 }\n',
+      'consumers.x',
+    ],
+    [
+      'an extra store.falkor key',
+      'version: 1\nstore: { falkor: { hots: h } }\n',
+      'store.falkor.hots',
+    ],
+    ['an extra resolve key', 'version: 1\nresolve: { per_file: 5 }\n', 'resolve.per_file'],
+    ['a zero per_file_ms', 'version: 1\nresolve: { per_file_ms: 0 }\n', 'resolve.per_file_ms'],
+    [
+      'a fractional per_site_ms',
+      'version: 1\nresolve: { per_site_ms: 1.5 }\n',
+      'resolve.per_site_ms',
+    ],
+    ['a zero max_file_size_bytes', 'version: 1\nmax_file_size_bytes: 0\n', 'max_file_size_bytes'],
+    ['an empty host', 'version: 1\nstore: { falkor: { host: "" } }\n', 'store.falkor.host'],
   ])('%s is a ConfigError on its key', (_name, text, key) => {
     const e = configError(() => parseConfigFile(text, SRC));
     expect([e.key, e.layer, e.source]).toEqual([key, 'file', SRC]);
