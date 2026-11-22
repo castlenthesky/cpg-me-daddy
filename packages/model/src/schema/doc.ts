@@ -33,7 +33,10 @@ const ENUM_NAMES: ReadonlyMap<readonly string[], string> = new Map<readonly stri
 
 const PLAIN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const KEYWORDS = new Set(['true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n']);
-/** YAML 1.1's float pattern has an optional mantissa, so a bare exponent (`e0`, `E5`, `e-5`) reads as a number. */
+/**
+ * The `yaml` package's YAML 1.1 float pattern makes the mantissa optional, so a bare exponent (`e0`, `E5`,
+ * `e-5`) reads as NaN there. (The 1.1 spec and PyYAML require a dot; quoting is harmless for them.)
+ */
 const BARE_EXPONENT = /^[eE]-?[0-9]+$/;
 /** Characters YAML readers may treat as line breaks or non-printable: written as \u escapes. */
 // oxlint-disable-next-line no-control-regex -- the point is to match and escape control characters.

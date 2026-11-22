@@ -329,16 +329,26 @@ describe('renderSchemaRegion quoting (property-based, SD-4)', () => {
     'e-5',
   );
 
-  // YAML 1.1's float pattern makes the mantissa optional, so a bare exponent reads as a number (NaN).
-  // Found by this suite's property test in CI; pinned here so it no longer depends on the seed.
-  it.each(['e0', 'E5', 'e-5', 'e12'])(
+  // The `yaml` package's YAML 1.1 float pattern makes the mantissa optional, so a bare exponent reads as NaN.
+  // Found by this suite's property test in CI; pinned here (every scalar() path) so it no longer depends on the seed.
+  it.each(['e0', 'E5', 'e-5', 'E-5', 'e12', 'E-12'])(
     'quotes the exponent-shaped word %j so YAML 1.1 reads a string',
     (word) => {
-      const out = renderSchemaRegion(fixture([node({ label: word, key: [word] })], []));
+      const out = renderSchemaRegion(
+        fixture(
+          [node({ label: word, key: [word], properties: [prop({ name: word })] })],
+          [edge({ type: word, from: [word], to: [word] })],
+        ),
+      );
       for (const version of ['1.2', '1.1'] as const) {
-        const doc = parseAs<{ nodes: { label: unknown; key: unknown[] }[] }>(out, version);
+        const doc = parseAs<{
+          nodes: { label: unknown; key: unknown[]; properties: { name: unknown }[] }[];
+          edges: { type: unknown; from: unknown[]; to: unknown[] }[];
+        }>(out, version);
         expect(doc.nodes[0]?.label).toBe(word);
         expect(doc.nodes[0]?.key).toEqual([word]);
+        expect(doc.nodes[0]?.properties[0]?.name).toBe(word);
+        expect(doc.edges[0]).toMatchObject({ type: word, from: [word], to: [word] });
       }
     },
   );
