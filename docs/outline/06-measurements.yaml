@@ -292,6 +292,8 @@ research:
       - "mkdir pkg then write pkg/m.py at once: the create of pkg/m.py was never delivered in 3 of 10 trials; only `create pkg` arrived (C-WATCH OQ-10)"
       - "rm -r pkg arrives as delete pkg + delete pkg/m.py, including a child whose create was never delivered"
       - "500 files written in a loop arrive in one callback with 500 creates"
+      - "macOS (GitHub macos-latest runner, FSEvents, same parcel): events carry the REAL path (/private/var/... for a root subscribed at /var/...), and a create for the root directory itself arrives; the backend maps the real root back onto the given root and drops the root (PR #46)"
+      - "a missing root rejects subscribe with 'Bad file descriptor' on Linux, and a file root with 'Not a directory'"
   M-RESEARCH-ladder-parse:
     boundary: "fixtures/ladder rungs 00-12, 2026-11-22"
     values:
