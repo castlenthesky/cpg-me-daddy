@@ -33,6 +33,10 @@
       // Root config files are matched by extension, and the extension list must cover every module
       // flavour: vitest.config.mts was once missed by "*.ts" and a config edit replayed a cache hit.
       // Type-aware: the result depends on all sources and on every tsconfig, not only .oxlintrc.json.
+      // After typecheck: type-aware rules resolve @cpg/* through each package's dist/*.d.ts. Linting
+      // before `tsc -b` (as CI did) sees those types as `any`, so a cast that is required locally
+      // was reported as unnecessary in CI (PR #51).
+      "dependsOn": ["//#typecheck"],
       "inputs": [
         "apps/**",
         "packages/**",
