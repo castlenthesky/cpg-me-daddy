@@ -9,7 +9,7 @@
 // the dependency graph, not in a comment — so the vocabulary now owns a package
 // and everyone depends on it, rather than on whoever happened to declare it.
 //
-// Zero imports, deliberately, and enforced by `tools/check-deps.mjs`. This file
+// No imports from outside this package, enforced by `tools/check-deps.mjs`. This file
 // is required (or type-imported) from both a CommonJS/Node context (the CLI,
 // the extension host) and a browser/ESM context (the webview) — pulling in
 // anything here would pull that dependency's runtime into whichever side merely
@@ -252,3 +252,5 @@ export function applyGraphDelta(payload: GraphPayload, delta: GraphDelta): Graph
       .concat(delta.addedEdges),
   };
 }
+
+export * from './schema';
