@@ -18,6 +18,7 @@
       "@cpg/model": ["./packages/model/src/index.ts"],
       "@cpg/parse": ["./packages/parse/src/index.ts"],
       "@cpg/resolve": ["./packages/resolve/src/index.ts"],
+      "@cpg/sink": ["./packages/sink/src/index.ts"],
       "@cpg/watch": ["./packages/watch/src/index.ts"]
     }
   },

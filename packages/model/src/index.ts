@@ -178,3 +178,4 @@ export * from './read';
 export * from './payload';
 export * from './schema';
 export * from './paths';
+export * from './digest';

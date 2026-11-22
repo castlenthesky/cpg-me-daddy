@@ -32,6 +32,9 @@
     "packages/engine": {
       "project": ["src/**/*.ts"]
     },
+    "packages/sink": {
+      "project": ["src/**/*.ts"]
+    },
     "apps/cli": {
       "project": ["src/**/*.ts"]
     }
