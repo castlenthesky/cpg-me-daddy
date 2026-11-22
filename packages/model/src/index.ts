@@ -254,3 +254,4 @@ export function applyGraphDelta(payload: GraphPayload, delta: GraphDelta): Graph
 }
 
 export * from './schema';
+export * from './paths';
