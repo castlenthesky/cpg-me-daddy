@@ -1,8 +1,9 @@
 // run(argv, io, opts): everything between argv and the first engine call, and between the last
 // engine return and stdout. Pure w.r.t. ambient state: no process.*, no clock outside io.now (I-30).
 
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import type { CpgEngine, StoreTarget } from '@cpg/engine';
+import type { CpgEngine, IndexProgress, StoreTarget } from '@cpg/engine';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -70,7 +71,7 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   const spec = COMMANDS.find((c) => c.verb === verb);
   if (!spec) throw new Fail({ kind: 'usage', message: `unknown command '${verb}'` });
 
-  const values = parseFlags(spec, rest);
+  const { values, positionals } = parseFlags(spec, rest);
   if (values['help'] === true) {
     io.out(renderUsage(spec));
     return EXIT.OK;
@@ -81,6 +82,9 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (!opts.engine) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
+  if (spec.verb === 'index' && values['dry-run'] === true) {
+    return runIndexDryRun(opts.engine, values, positionals, io, opts);
+  }
   if (target) {
     const session = await opts.engine
       .connect(target, { readOnly: spec.session === 'read' })
@@ -94,9 +98,70 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   throw seat;
 }
 
+async function runIndexDryRun(
+  engine: CpgEngine,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): Promise<ExitCode> {
+  const workspace = typeof values['workspace'] === 'string' ? values['workspace'] : undefined;
+  const raw = workspace ?? positionals[0] ?? io.env['CPG_WORKSPACE'] ?? opts.cwd;
+  if (raw === undefined) {
+    throw new Fail({
+      kind: 'usage',
+      verb: 'index',
+      message: 'no workspace root: pass --workspace or a root',
+    });
+  }
+  const root = opts.cwd !== undefined ? resolve(opts.cwd, raw) : raw;
+  const quiet = values['quiet'] === true;
+  const onProgress = (p: IndexProgress): void => {
+    if (!quiet) io.status(`index: ${p.phase} ${p.filesTotal} files`);
+  };
+  const report = await engine.index(
+    { config: { root }, session: null, resumeFrom: null },
+    onProgress,
+    opts.signal ?? new AbortController().signal,
+  );
+
+  if (values['format'] === 'json') {
+    io.out(
+      JSON.stringify({
+        v: 1,
+        kind: 'cpg.index.report',
+        tool: `${opts.manifest.bin}@${opts.manifest.version}`,
+        producedAt: new Date(io.now()).toISOString(),
+        body: report,
+      }),
+    );
+  } else {
+    const { walk } = report;
+    io.out(`root ${report.root}`);
+    io.out(
+      `files seen=${walk.filesSeen} indexed=${walk.filesIndexed} excluded=${walk.filesExcluded} unsupported=${walk.filesUnsupported} tooLarge=${walk.filesTooLarge} failed=${walk.filesFailed}`,
+    );
+    io.out(
+      `written nodes=${report.nodesWritten} edges=${report.edgesWritten} dryRun=${report.dryRun}`,
+    );
+  }
+
+  for (const w of report.warnings) {
+    io.err(`cpg: warning: ${w}`);
+  }
+  io.err(
+    `cpg: indexed in ${Math.round(report.durationMs)} ms; consumers: ${report.consumers.join(', ') || 'none'}`,
+  );
+
+  return report.interrupted ? EXIT.INTERRUPTED : EXIT.OK;
+}
+
 type Values = Record<string, string | boolean | undefined>;
 
-function parseFlags(spec: CommandSpec, args: readonly string[]): Values {
+function parseFlags(
+  spec: CommandSpec,
+  args: readonly string[],
+): { readonly values: Values; readonly positionals: readonly string[] } {
   const flags = flagsOf(spec);
   let parsed: { values: Values; positionals: string[] };
   try {
@@ -126,7 +191,7 @@ function parseFlags(spec: CommandSpec, args: readonly string[]): Values {
     if (f.type === 'port' && !isPort(v))
       throw usage(`--${f.name} must be an integer in 1..65535, got '${v}'`);
   }
-  return parsed.values;
+  return { values: parsed.values, positionals: parsed.positionals };
 }
 
 const isPort = (v: string): boolean => /^\d{1,5}$/.test(v) && Number(v) >= 1 && Number(v) <= 65535;

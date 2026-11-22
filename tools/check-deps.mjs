@@ -38,6 +38,10 @@
 //     inline `{ type X }` form is rejected: only the statement-level form is erased under every TS
 //     setting. This rule limits IMPORTS only: a runtime EXPORT from contract.ts or index.ts is caught
 //     by each seam package's src/index.test.ts (Object.keys of the namespace is []), not here.
+//
+//  8. createEngine() IS CALLED ONLY IN apps/*: a call site under packages/** is a composition root
+//     outside a front door (03-architecture §2 rule 3). The definition, comment lines and test
+//     files are exempt.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { builtinModules } from 'node:module';
@@ -54,6 +58,7 @@ const SKIP = new Set(['node_modules', 'dist', 'out', '.git', '.vscode-test', '.d
 // a quote is a quoted word in a string, never syntax: `declared 'from' set [${x}]` is not an import.
 const SPEC = /(?<![\w'"`])(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"]([^'"\n]+)['"]/g;
 const DOM_GLOBAL = /\b(?:window|document|navigator)\s*\.|\b(?:HTMLElement|customElements)\b/;
+const ENGINE_CALL = /(?<!function\s+)\bcreateEngine\s*\(/;
 
 const HOST_SDKS = ['vscode', '@modelcontextprotocol/'];
 const APP_SDKS = {
@@ -146,12 +151,22 @@ for (const file of files) {
     source.split('\n').forEach((text, i) => {
       const code = text.trimStart();
       const isComment = code.startsWith('//') || code.startsWith('*') || code.startsWith('/*');
-      if (!isComment && DOM_GLOBAL.test(text)) {
+      if (isComment) return;
+      if (DOM_GLOBAL.test(text)) {
         flag(
           file,
           i + 1,
           'host-sdk',
           `package "${pkg}" touches a DOM global; core must run under plain node`,
+        );
+      }
+      // Rule 8: createEngine() IS CALLED ONLY IN apps/*.
+      if (!isTest && ENGINE_CALL.test(text)) {
+        flag(
+          file,
+          i + 1,
+          'engine-call-site',
+          'calls createEngine(); only a front door (apps/*) may',
         );
       }
     });
