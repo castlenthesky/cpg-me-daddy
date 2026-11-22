@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import * as contract from './contract';
 import * as api from './index';
 
-// SEAT package, types only until its implementation unit: neither the front door nor contract.ts may
-// carry a runtime export (check-deps rule 7 limits imports only, so this is the export-side guard).
-describe('@cpg/watch is types only', () => {
-  it.each([
-    ['index', api],
-    ['contract', contract],
-  ])('%s has no runtime exports', (_name, ns) => {
-    expect(Object.keys(ns)).toEqual([]);
+// contract.ts stays types only (check-deps rule 7 limits its imports; this guards its exports). The
+// front door exports exactly the runtime values that are REAL today.
+describe('@cpg/watch front door', () => {
+  it('contract.ts has no runtime exports', () => {
+    expect(Object.keys(contract)).toEqual([]);
+  });
+
+  it('index exports the parcel backend and nothing else at runtime', () => {
+    expect(Object.keys(api)).toEqual(['createParcelWatchBackend']);
   });
 });
