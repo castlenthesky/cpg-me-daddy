@@ -1,5 +1,5 @@
 // Mutation testing: measures whether the tests catch behaviour changes, not just execute lines.
-// Slow, so deliberately NOT part of `npm run check`; CI runs it on a schedule / manual dispatch.
+// Slow, so deliberately NOT part of `bun run check`; CI runs it on a schedule / manual dispatch.
 // .mjs rather than .json so choices can carry comments.
 export default {
   testRunner: 'vitest',

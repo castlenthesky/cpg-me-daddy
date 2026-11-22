@@ -376,7 +376,7 @@ vision_decisions:
   - { id: VD-21, text: "Readers never blocked; over-budget cascades mark dependents STALE; explicit status property on every node.", status: in-force, note: "Mechanism is ND-9." }
   - { id: VD-22, text: "MCP serves a partial graph with coverage status during first launch.", status: in-force, note: "Inert until U10." }
   - { id: VD-23, text: "v1 layers: filesystem, symbols, types, imports, calls, sparse REACHING_DEF; CFG/PDG and expression tier deferred.", status: amended, note: "EVAL_TYPE reserved for U8 (DQ-09)." }
-  - { id: VD-24, text: "Engine bundled in VSIX + npm; FalkorDB downloaded on first run, pinned + checksummed.", status: amended, by: [ND-2], note: "npm + VSIX distribution stands; the first-run download (spawned mode) is deferred." }
+  - { id: VD-24, text: "Engine bundled in VSIX and published as a package; FalkorDB downloaded on first run, pinned + checksummed.", status: amended, by: [ND-2], note: "Package + VSIX distribution stands; the first-run download (spawned mode) is deferred." }
   - { id: VD-25, text: "Privacy and local compute are design principles (PR7).", status: in-force }
   - { id: VD-26, text: "Adapter-native resolution first; unresolved rate tracked; resolver seam designed now.", status: in-force, note: "Restored to primary by HO-a." }
   - { id: VD-27, text: "Seeded-bug catalogue deferred until a clean, hand-audited golden graph exists.", status: in-force }
@@ -434,7 +434,7 @@ delivery_decisions_carried:
   - { id: DL-14, text: "Shortest honest route to real data in the graph; watcher/cascade and daemon/MCP are not on the near-term path.", status: in-force in spirit (U2 puts real data on screen at unit two) }
 
 tooling:
-  - { id: T-1, text: "Tooling is npm + tsc + vitest, not Bun/oxlint/oxfmt/lefthook.", status: in-force, note: "The revert was about process (no verification gates that round), not the tools; they may return once gates exist. bun.lock is deleted in U0.1." }
+  - { id: T-1, text: "Tooling is bun + tsc + vitest + oxlint + oxfmt + lefthook.", status: in-force, note: "Amended 2026-11-21: the package manager is bun and the lockfile is bun.lock. oxlint, oxfmt, and lefthook are in use now that the gates exist. Invoke scripts with bun." }
   - { id: T-2, text: "Every unit's gate names a visually observable artifact in at least one host, AND at least one machine assertion; the gate is the exit code.", status: in-force (replaces GR7's 'inspector-visible artifact' wording per motion M2) }
 
 settled_by_measurement_not_reopenable:

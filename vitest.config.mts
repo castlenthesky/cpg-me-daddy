@@ -8,7 +8,7 @@ export default defineConfig({
     // so a moved/renamed test dir can never turn the suite silently green.
     passWithNoTests: false,
     // Type-level tests (*.test-d.ts) and type errors in *.test.ts are checked by
-    // `npm run typecheck:tests` (tsc), so vitest's typecheck mode is
+    // `bun run typecheck:tests` (tsc), so vitest's typecheck mode is
     // left off (its default; it would check the same files twice). *.test-d.ts is not in `include`, so
     // it is never collected as a runtime test.
     coverage: {

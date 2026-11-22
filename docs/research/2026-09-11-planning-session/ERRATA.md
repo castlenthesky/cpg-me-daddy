@@ -41,9 +41,9 @@ then **reverted** on `discovery`, back to plain npm + tsc, along with the `cli`/
 
 The revert was about **process**, not about the tools being wrong: that implementation round got
 over-architected without enough visual/manual verification checkpoints along the way, and had to
-be scrapped when it couldn't be confirmed sound as it progressed. Bun/oxlint/oxfmt are expected to
-come back once the current incremental, verification-gated redo is far enough along to support
-reintroducing them safely — see `docs/plans/unified-architecture.md` §6 ("Tooling").
+be scrapped when it couldn't be confirmed sound as it progressed. The package manager is bun
+again as of 2026-11-21 (T-1): lockfile `bun.lock`, with oxlint, oxfmt, and lefthook. See
+`docs/plans/unified-architecture.md` §6 ("Tooling") for the redo that followed the revert.
 
 **How to read the F/M0 unit ladder now:** the *ordering lessons* in it are largely still valid and
 are cited directly in `unified-architecture.md` §1 ("From `main`: the process failure,

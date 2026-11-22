@@ -79,9 +79,9 @@ milestones:
     why_here: "A gate with no runner is a suggestion (L-31); a vocabulary inside the wrong package is how 13 deep imports happen (L-26). Everything else is gated on this."
     delivers: ["@cpg/model (13 exports, 17 tests, zero deps)", "tools/check-deps.mjs (4 rules)", ".github/workflows/ci.yml (verify on ubuntu+macos; gate-fails-when-violated job)", "vitest, tsconfig.base.json, project references", "5 archive tags", "apps/vscode with the one extension file", "two-tier layer rule"]
     gate:
-      machine: ["npm run verify green on both CI runners", "gate-fails-when-violated job proves check-deps rejects a planted vscode import in packages/**", "a planted `import 'vscode'` in apps/cli and a planted `@cpg/model/dist/x` deep import in apps/vscode are BOTH rejected (tier rule proven both ways)", "no NUL byte in any source file"]
+      machine: ["bun run verify green on both CI runners", "gate-fails-when-violated job proves check-deps rejects a planted vscode import in packages/**", "a planted `import 'vscode'` in apps/cli and a planted `@cpg/model/dist/x` deep import in apps/vscode are BOTH rejected (tier rule proven both ways)", "no NUL byte in any source file"]
       human: "CI is green on GitHub for the first time; `ls packages apps` shows the layout P-A describes"
-    locks_in: [the vocabulary package name @cpg/model, npm + tsc + vitest, the packages/ vs apps/ rule]
+    locks_in: [the vocabulary package name @cpg/model, bun + tsc + vitest, the packages/ vs apps/ rule]
     rollback_to: "the bare scaffold at 8cd478f"
     size: S
     features:
@@ -92,7 +92,7 @@ milestones:
             title: Commit the working tree as the U0 foundation
             epic: E-GATE
             acceptance:
-              - "packages/model, tools/check-deps.mjs, .github/workflows/ci.yml, vitest.config.ts, tsconfig.base.json, package-lock.json are tracked; bun.lock is deleted"
+              - "packages/model, tools/check-deps.mjs, .github/workflows/ci.yml, vitest.config.ts, tsconfig.base.json, bun.lock are tracked; package-lock.json is absent"
               - ".gitignore keeps the deliberation-corpus directory ignored until the docs/archive branch exists (12-retirement.md)"
               - "CI runs on push and both jobs pass"
             notes: "Commit message references DL-3 (CI in the first unit) and L-31."
@@ -110,7 +110,7 @@ milestones:
             title: Move src/extension.ts to apps/vscode and wire project references
             epic: E-LAYOUT
             acceptance:
-              - "apps/vscode/package.json exists (private, name @cpg/vscode-host or the extension id), apps/vscode/src/extension.ts is the old file unchanged, tsconfig references it, `npm run compile` is clean, F5 still shows the hello-world command"
+              - "apps/vscode/package.json exists (private, name @cpg/vscode-host or the extension id), apps/vscode/src/extension.ts is the old file unchanged, tsconfig references it, `bun run compile` is clean, F5 still shows the hello-world command"
               - "root package.json workspaces: [packages/*, apps/*]; the VSIX main points at the new output path"
             port_from: "the working tree's src/extension.ts"
             decisions: [DQ-08, ND-4]
@@ -126,7 +126,7 @@ milestones:
             title: Root README, CLAUDE.md pointer, and memory hygiene
             epic: E-RETIRE
             acceptance:
-              - "README.md says npm (not bun), states the honest scope line from 01-vision §4, and points at docs/outline/README.md"
+              - "README.md says bun, states the honest scope line from 01-vision §4, and points at docs/outline/README.md"
               - "a root CLAUDE.md of <= 20 lines: read docs/outline/README.md first; never read the docs/archive branch; START SIMPLE; gate ships with the code"
 
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -150,7 +150,7 @@ milestones:
         - "all @cpg/model tests green incl. the ported schema/validate/joern tests (vitest)"
         - "C-MODEL conformance suite (ported, amended) green against @cpg/model; the old 'DUPLICATES a re-added node id' test is GONE and its inverse passes"
         - "C-SINK conformance suite green against the reference MemoryStore in the same package"
-        - "`npm run schema:doc --check` exits 0 (04-schema.yaml's generated region matches code byte-for-byte)"
+        - "`bun run schema:doc --check` exits 0 (04-schema.yaml's generated region matches code byte-for-byte)"
         - "contracts-agree.test.ts compiles"
         - "the ND-10 statement-level id test passes"
         - "check-deps green: @cpg/model still has zero runtime deps"
@@ -180,7 +180,7 @@ milestones:
             title: The schema generator and the drift check
             epic: E-SCHEMA
             acceptance:
-              - "`npm run schema:doc` regenerates the BEGIN/END GENERATED region of docs/outline/04-schema.yaml from CPG_SCHEMA; `--check` exits 1 on drift; CI runs --check"
+              - "`bun run schema:doc` regenerates the BEGIN/END GENERATED region of docs/outline/04-schema.yaml from CPG_SCHEMA; `--check` exits 1 on drift; CI runs --check"
               - "the first regeneration produces a diff the owner signs off (the human artifact of U1)"
             port_from: ["archive/m0-calls-symbols-20260916:tools/schema-doc.ts"]
           - id: U1.1.3
@@ -522,7 +522,7 @@ milestones:
             title: Compose files, provenance handshake, integration harness, torn-batch test
             epic: E-STORE
             acceptance:
-              - "docker/falkordb.yml (cpg-test, 6381, in-memory, TIMEOUT_DEFAULT 30000) and docker/falkordb.dev.yml (cpg-dev, 6382, AOF+RDB, noeviction) ported; `npm run db:test:up` / `db:dev:up` with the nonce handshake; test/support/falkordb.ts refuses a foreign instance three ways"
+              - "docker/falkordb.yml (cpg-test, 6381, in-memory, TIMEOUT_DEFAULT 30000) and docker/falkordb.dev.yml (cpg-dev, 6382, AOF+RDB, noeviction) ported; `bun run db:test:up` / `db:dev:up` with the nonce handshake; test/support/falkordb.ts refuses a foreign instance three ways"
               - "the torn-batch test injects a fault (timeout via TIMEOUT 1 on a slowed statement) and asserts the prior subgraph is intact and the receipt is applied:false"
               - "schema-conformance.ts and invariants.ts ported (fix the cross-package relative import); they run at the end of every integration test"
             port_from:
@@ -647,7 +647,7 @@ milestones:
             epic: E-VERIFY
             acceptance:
               - "test/harness/resolver: (1) a golden corpus per language with hand-verified cross-file references (start: the two fixtures; grow to the S3 corpora); (2) precision/recall against a language-server oracle (basedpyright over stdio, run out-of-band, NOT in the engine yet) — precision MUST be 0 disagreements; recall reported per RefKind against the oracle's ceiling; (3) per-language ceiling table (Python now; TS 'unmeasured' until U9); (4) latency distribution: ms per ref site and per file, by file size and site count, over a pipelined per-save loop against a warm document (SU-4); (5) degradation visibility: degradedBatches, timedOutSites, backend restarts as first-class report rows"
-              - "the harness runs as `npm run harness:resolve` (local; nightly CI job) and writes a report the owner reads; its first run re-cuts perFileMs and records M-RESOLVE-per-save in 06-measurements"
+              - "the harness runs as `bun run harness:resolve` (local; nightly CI job) and writes a report the owner reads; its first run re-cuts perFileMs and records M-RESOLVE-per-save in 06-measurements"
               - "the report states in writing whether the 2 s promise fits at p95 for the fixture; if not, DQ-05's promise is restated per measured budget, never silently relaxed"
             decisions: [DQ-04, DQ-05]
             measurements: [M-RESOLVE-precision, M-RESOLVE-throughput, M-BUDGET-assembled]

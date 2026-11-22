@@ -3,7 +3,7 @@
   "workspaces": {
     ".": {
       // src/extension.ts is detected from package.json "main" (compiled path mapped back
-      // to source); tools/*.mjs are run by npm scripts / node directly, so are entries.
+      // to source); tools/*.mjs are run by package scripts / node directly, so are entries.
       "entry": ["tools/*.mjs"],
       "project": ["src/**/*.ts", "tools/**/*.mjs"]
     },

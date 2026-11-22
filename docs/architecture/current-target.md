@@ -414,7 +414,7 @@ Grouped roughly by impact.
 ### No test runner — the single biggest collaboration blocker
 
 Stated plainly in `src/AGENTS.md`: *"There is no test runner in this repo; this is the gate"*
-(referring to `npm run verify:resolve`).
+(referring to `bun run verify:resolve`).
 
 This repo has built excellent seams **for the express purpose of being testable** —
 `WatchBackend` takes a fake, `ChangeBatcher` takes an injected clock, `Resolver` has a
@@ -481,9 +481,10 @@ Documented as a gotcha; it is a real papercut in a watch-mode workflow. Fixable 
 
 ### No linter, no formatter, no CI
 
-`.github/` does not exist. Per project memory, Bun + oxlint + lefthook were tried and reverted
-to npm + tsc. That's a reasonable call for a solo discovery branch; it is not one for a team.
-Minimum viable: a CI job running `npm run compile` plus the new test suite on PRs. That alone
+At the time of this review, `.github/` did not exist. An earlier Bun + oxlint + lefthook attempt
+was reverted to npm + tsc before the gates existed. As of 2026-11-21 the package manager is bun
+(`bun.lock`), with oxlint, oxfmt, lefthook, and CI.
+Minimum viable: a CI job running `bun run compile` plus the new test suite on PRs. That alone
 catches the deep-import and contract-purity classes of breakage that comments currently guard.
 
 ### Not a problem
@@ -557,7 +558,7 @@ Move `contract.ts` verbatim into a new zero-dep package. Rewrite the five deep i
 normal barrel imports. Have `graph-visualizer` re-export for webview convenience. Delete the
 four copies of the deep-import rationale and the AGENTS.md rules they enforce.
 
-*Verify:* `npm run compile` clean; `grep -r "dist/contract" src packages` returns nothing;
+*Verify:* `bun run compile` clean; `grep -r "dist/contract" src packages` returns nothing;
 extension still renders a graph.
 
 ### Step 2 — Add the `GraphSink` output seam *(PASSTHROUGH)*
@@ -584,7 +585,7 @@ clock; `WorkspaceGraphIndex.applyChange` idempotency; `GraphBuilder` symbol surv
 `replaceFile`; the `resolveHarness` assertions as golden tests over a checked-in fixture
 workspace (which also removes the hardcoded `~/projects/demos/ast-demo` path).
 
-*Verify:* `npm test` green; add it to a CI job.
+*Verify:* `bun run test` green; add it to a CI job.
 
 ### Step 5 — Split `@cpg/file-watcher` into `watch` + `workspace-scan` + `engine`
 
@@ -607,7 +608,7 @@ plus one `createEngine` call.
 A real `bin` over `createEngine` with a Node watch backend. `resolveHarness.ts` deletes down to
 its fixtures and assertions.
 
-*Verify:* `npx cpg scan <path>` produces the same graph the extension does, with no VS Code
+*Verify:* `bunx cpg scan <path>` produces the same graph the extension does, with no VS Code
 running. **This is the proof that the vision is met.**
 
 ### Step 8 — Split `GraphBuilder`; add the store seam *(SEAT)*

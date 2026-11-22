@@ -1,6 +1,6 @@
 # 00 — Project Charter
 
-**Project:** cpg-me-daddy (CLI binary `cpg`, npm scope `@cpg/*`)
+**Project:** cpg-me-daddy (CLI binary `cpg`, package scope `@cpg/*`)
 **Charter date:** 2026-09-17
 **Owner:** Brian Henson
 **Repository:** `castlenthesky/cpg-me-daddy`, branch `develop`, merges to `master`
@@ -127,7 +127,7 @@ These rules are scars, not preferences. Each cites the lesson it prevents.
 | Cascade is unbounded without interface-hash gating | high | `interface_hash` is emitted by extraction at U6 and gating is enforced at U7; over-budget dependents are marked `stale` with a reason rather than blocking |
 | Name resolution quality determines cross-file edge quality | high | Precision invariant (0 disagreements) enforced in CI; recall reported against a measured ceiling; `EVAL_TYPE` admitted only at ≥95% of ceiling |
 | TypeScript resolution is unmeasured | medium | U9 opens with a one-day spike with a pre-declared threshold; nothing TS-specific is promised before it reports |
-| Watcher stampedes (git checkout, npm install) | medium | Bulk-mode thresholds from measured prior art; bulk processing is explicitly outside the freshness budget in v1 |
+| Watcher stampedes (git checkout, bun install) | medium | Bulk-mode thresholds from measured prior art; bulk processing is explicitly outside the freshness budget in v1 |
 | The picture invites false confidence | medium | Labeled a liveness check everywhere; `cpg verify` is the gate |
 | FalkorDB licensing (SSPL) and Windows coverage | medium | Docker and remote modes only in v1; SSPL review before any marketplace listing that downloads binaries |
 | A single plan document rots as its predecessors did | medium | This directory is checked three ways: archive-coordinate resolver in CI, schema drift check from U1, and the retirement battery re-run at every milestone boundary (`12-retirement.md`) |

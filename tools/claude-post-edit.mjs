@@ -4,11 +4,11 @@
 // Exit 2 + stderr is Claude Code's convention for feeding a problem back to the agent;
 // every other situation (outside repo, deleted file, other extension, bad input) exits 0
 // so the hook can never block or break an edit.
-// Calls the local binaries directly (not npx/npm) to stay fast.
+// Calls the local binaries directly to stay fast.
 
-import { existsSync } from 'node:fs';
-import { extname, relative, resolve, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { extname, isAbsolute, relative, resolve } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const EXTS = new Set(['.ts', '.tsx', '.js', '.mjs', '.json']);

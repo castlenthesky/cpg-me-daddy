@@ -92,7 +92,7 @@ See table for the per-library facts; additional notes:
 **Spike experiments (each ≤ half a day):**
 1. Parcel latency histogram on macOS and Linux: single-file save from VS Code, vim (`backupcopy=auto`), JetBrains safe-write, and `echo > file` from a terminal — confirm event shapes and time-to-callback; verify the delete+create pairing for vim/JetBrains.
 2. `git checkout` between two branches differing in 2 000 files in a repo with 50 k files under `node_modules`: count batches, sizes, wall-clock from first to last event; confirm `node_modules` produces zero events with parcel `ignore` and that `.git/index.lock` appears before the first worktree write and disappears after the last (this is the key **[I]** to validate).
-3. `npm install` / `pnpm install` and a codegen run writing 5 000 files inside an *unignored* directory: check whether the count/directory thresholds trip bulk mode and whether any events are lost (compare against a post-run hash walk).
+3. `bun install` / `pnpm install` and a codegen run writing 5 000 files inside an *unignored* directory: check whether the count/directory thresholds trip bulk mode and whether any events are lost (compare against a post-run hash walk).
 4. FSEvents drop test: generate >10 k events/s on macOS and confirm the reconciliation walk catches what parcel missed (parcel exposes no drop flag).
 5. Linux inotify exhaustion: set `max_user_watches=8192`, open a repo with 20 k directories, observe the error path and the fallback.
 6. Rename pairing accuracy: `git mv` 500 files, IDE-driven folder rename, `mv` across filesystems (inode changes → hash fallback), and rename-then-edit within 500 ms.

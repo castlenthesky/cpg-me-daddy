@@ -255,5 +255,5 @@ premises_at_risk_closed:
   - { id: LA3-14, premise: "the competitive study's parent pointer and baseline referenced trees on no branch", closed_by: "transcribed into M-RESEARCH-competitors; archived" }
   - { id: LA3-15, premise: "D7's reversal was recorded at the D-row but the pillar files still said MCP-before-visualization", closed_by: "VD-07 reversed; U2 picture, U10 MCP" }
   - { id: LA3-16, premise: "tie-ast-to-parent-file.md instructed execution on a branch reset past its code", closed_by: "archived; its one live idea (SOURCE_FILE edge, per-path promise chain) is in the schema and C-WATCH" }
-  - { id: LA3-17, premise: "STATUS said npm while bun.lock was still tracked", closed_by: "U0.1 deletes bun.lock (already deleted in the working tree)" }
+  - { id: LA3-17, premise: "STATUS said npm while bun.lock was still tracked", closed_by: "T-1 amended 2026-11-21: the package manager is bun and bun.lock stays" }
   - { id: LA3-18, premise: "AM-6's 'no host ships a modern MCP client' is a time-stamped market claim", closed_by: "SU-13: re-verify before U10" }

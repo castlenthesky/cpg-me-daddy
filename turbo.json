@@ -8,7 +8,7 @@
   // invalidates the cache. Untracked files (e.g. a new, unstaged source file) count as inputs.
   "$schema": "https://turborepo.dev/schema.json",
   // Hashed into EVERY task: dependency versions and the Node major (tsc/oxlint/vitest behaviour).
-  "globalDependencies": ["package.json", "package-lock.json", ".node-version"],
+  "globalDependencies": ["package.json", "bun.lock", ".node-version"],
   "tasks": {
     "//#format:check": {
       // oxfmt checks every non-ignored file type, so everything except what .oxfmtrc.json ignores
@@ -24,8 +24,9 @@
         "!.turbo/**",
         "!.git/**",
         "!.claude/settings.local.json",
+        "!.claude/worktrees/**",
         "!**/.tsbuildinfo",
-        "!package-lock.json"
+        "!bun.lock"
       ]
     },
     "//#lint": {
