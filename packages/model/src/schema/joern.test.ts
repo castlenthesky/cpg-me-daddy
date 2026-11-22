@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-import { EDGE_TYPES, NODE_LABELS } from '../index';
+import { EDGE_TYPES, NODE_LABELS, RESERVED_EDGES } from '../index';
 
 /** Our node label -> the Joern node it adopts or renames (04-schema.yaml `joern_name`). */
 const NODE_CITATIONS: Readonly<Record<string, string>> = {
@@ -135,6 +135,16 @@ describe('the citation tables describe the shipped schema', () => {
   test('the schema ships no rejected Joern name as a label or edge type', () => {
     expect(NODE_LABELS.filter((n) => REJECTED_JOERN_NODES.includes(n.label))).toEqual([]);
     expect(EDGE_TYPES.filter((e) => REJECTED_JOERN_EDGES.includes(e.type))).toEqual([]);
+  });
+});
+
+describe('reserved edges', () => {
+  test('every reserved type is a Joern-accounted name we do not ship', () => {
+    const types = RESERVED_EDGES.map((e) => e.type);
+    expect(types.filter((t) => !REJECTED_JOERN_EDGES.includes(t))).toEqual([]);
+    expect(types.filter((t) => !JOERN_EDGES.has(t))).toEqual([]);
+    const admitted: string[] = EDGE_TYPES.map((e) => e.type);
+    expect(types.filter((t) => admitted.includes(t))).toEqual([]);
   });
 });
 

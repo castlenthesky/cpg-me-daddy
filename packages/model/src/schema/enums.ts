@@ -39,6 +39,9 @@ export const NODE_STATUS = ['ready', 'indexing', 'stale', 'error'] as const;
 /** `INHERITS_FROM.relation` (R6 Next Steps #1 / DL6, merging EXTENDS+IMPLEMENTS). */
 export const INHERITS_RELATION = ['extends', 'implements'] as const;
 
+/** `relation` on the reserved receiver-type edge (DQ-09, reserved.ts). Unwritten until U8. */
+export const EVAL_TYPE_RELATION = ['receiver-type'] as const;
+
 export const TYPE_DECL_KIND = [
   'class',
   'interface',

@@ -28,6 +28,7 @@ const ENUM_NAMES: ReadonlyMap<readonly string[], string> = new Map<readonly stri
   [enums.TYPE_DECL_KIND, 'type_decl_kind'],
   [enums.METHOD_KIND, 'method_kind'],
   [enums.CALL_KIND, 'call_kind'],
+  [enums.EVAL_TYPE_RELATION, 'eval_type_relation'],
 ]);
 
 const PLAIN = /^[A-Za-z_][A-Za-z0-9_-]*$/;

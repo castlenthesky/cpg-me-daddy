@@ -9,3 +9,4 @@ Layout and rules: `docs/outline/03-architecture.md` §2. Root `AGENTS.md` applie
 - Read `data.location` / `data.resolution` only through `readNodeLocation` / `readNodeResolution` / `readEdgeResolution`. `absent` (undefined or null) is routine; `malformed` is a producer bug to surface, never to show as absent.
 - Mint node ids only with `makeNodeId`; never parse an id to decide a node's kind: dispatch on `node.type` (L-48).
 - After editing `nodes.ts`/`edges.ts`/`enums.ts` run `bun run schema:doc` and commit the `04-schema.yaml` diff; `check:schema` fails on drift.
+- The receiver-type edge reserved by DQ-09 lives in `schema/reserved.ts` (`RESERVED_EDGES`), not `edges.ts`: never emit it before U8. Admission moves the entry from `reserved.ts` to `edges.ts`, adds `firstWrittenIn` and bumps `CPG_SCHEMA.version`. Only `reserved.ts` may name it by literal in non-test source (scan in `reserved.test.ts`).

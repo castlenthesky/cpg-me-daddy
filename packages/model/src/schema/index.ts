@@ -3,6 +3,7 @@ export * from './enums';
 export * from './schema';
 export * from './edges';
 export * from './nodes';
+export * from './reserved';
 export * from './types';
 export * from './validate';
 export * from './ids';

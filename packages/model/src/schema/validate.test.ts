@@ -139,6 +139,22 @@ describe('undeclared vocabulary', () => {
     expect(result.problems.some((p) => p.includes('undeclared edge type'))).toBe(true);
   });
 
+  test('a reserved edge type fails by name, not as undeclared (INV-RE-5)', () => {
+    const delta = validDelta();
+    delta.edges.push({
+      type: 'EVAL_TYPE',
+      fromLabel: 'CALL',
+      toLabel: 'SYMBOL',
+      properties: { relation: 'receiver-type' },
+    });
+    const result = validateRowDelta(delta);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes('reserved edge type') && p.includes('U8'))).toBe(
+      true,
+    );
+    expect(result.problems.some((p) => p.includes('undeclared edge type'))).toBe(false);
+  });
+
   test('undeclared property fails (drift in either direction)', () => {
     const delta = validDelta();
     at(delta.nodes, 0).properties = { ...at(delta.nodes, 0).properties, totallyMadeUp: 'x' };

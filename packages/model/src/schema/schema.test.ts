@@ -6,6 +6,7 @@ import {
   EDGE_TYPES,
   ID_RULE,
   NODE_LABELS,
+  RESERVED_EDGES,
   RESOLUTION_STATUS,
   SCHEMA_CONSTRAINTS,
   SCHEMA_INDEXES,
@@ -95,6 +96,7 @@ describe('schema version 3 and revision_id (P-B, F-1, ND-5)', () => {
       idRule: ID_RULE,
       nodes: NODE_LABELS,
       edges: EDGE_TYPES,
+      reservedEdges: RESERVED_EDGES,
       indexes: SCHEMA_INDEXES,
       constraints: SCHEMA_CONSTRAINTS,
     });
