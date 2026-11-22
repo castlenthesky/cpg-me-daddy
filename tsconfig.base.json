@@ -3,7 +3,8 @@
     "module": "node16",
     "moduleResolution": "node16",
     "target": "ES2022",
-    "lib": ["ES2022"],
+    // ES2023.Array: oxlint (unicorn/no-array-sort) requires toSorted; Node >= 20 has it.
+    "lib": ["ES2022", "ES2023.Array"],
     "strict": true,
     "composite": true,
     "declaration": true,

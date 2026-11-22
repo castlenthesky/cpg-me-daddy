@@ -29,6 +29,9 @@
     "packages/watch": {
       "project": ["src/**/*.ts"]
     },
+    "packages/engine": {
+      "project": ["src/**/*.ts"]
+    },
     "apps/cli": {
       "project": ["src/**/*.ts"]
     }

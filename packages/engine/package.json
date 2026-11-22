@@ -1,0 +1,19 @@
+{
+  "name": "@cpg/engine",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The composition root's parts: createEngine, the workspace walker and the filesystem tier (U2a.2).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@cpg/model": "*",
+    "@cpg/parse": "*"
+  }
+}

@@ -48,6 +48,14 @@
         "@cpg/model": "*",
       },
     },
+    "packages/engine": {
+      "name": "@cpg/engine",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
+        "@cpg/parse": "*",
+      },
+    },
     "packages/model": {
       "name": "@cpg/model",
       "version": "0.0.1",
@@ -191,6 +199,8 @@
     "@clack/prompts": ["@clack/prompts@1.9.0", "", { "dependencies": { "@clack/core": "1.6.0", "fast-string-width": "^3.0.2", "fast-wrap-ansi": "^0.2.0", "sisteransi": "^2.0.0" } }, "sha512-tEj8X2No2A1c9NDnZECxiiJ8TP3vmFlN9tLlLeSaMqVW4tUmVG2R4qpv/eP4zymWxnymYLkLcIYVV0VcWj3RCQ=="],
 
     "@cpg/cli": ["@cpg/cli@workspace:apps/cli"],
+
+    "@cpg/engine": ["@cpg/engine@workspace:packages/engine"],
 
     "@cpg/model": ["@cpg/model@workspace:packages/model"],
 
