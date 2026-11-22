@@ -10,6 +10,10 @@
 # 8 GB / 18 CPU, TIMEOUT_DEFAULT 30000, CACHE_SIZE 200, NODE_CREATION_BUFFER 65536, RDB off, client
 # falkordb 6.8.0, batch 1000, 4 reader threads, 200 measured cycles.
 
+# Environment for the 2026-11-22 ladder spike: Linux 7.0.0-43-generic x86_64, Node 24.13.1,
+# @parcel/watcher 2.6.0 (inotify), web-tree-sitter 0.27.0 + @vscode/tree-sitter-wasm 0.3.1, basedpyright
+# 1.x, typescript-language-server 6.1.0 + typescript 5.9.3. Inputs were the fixtures/ladder workspaces.
+
 ids_convention: "M-<AREA>-<name>; referenced from other files as M-…"
 
 latency:
@@ -17,6 +21,10 @@ latency:
     value: "p50 70.37 ms (n=55) and 73.69 ms (n=50); within 5%"
     what: "T0->T1: filesystem change to watcher callback on macOS FSEvents"
     boundary: "macOS only; precedes any of our code; may not be argued against or 'optimised'"
+  M-LATENCY-inotify:
+    value: "50.2–50.7 ms (n=10)"
+    what: "T0->T1: one file write to the @parcel/watcher callback on Linux inotify"
+    boundary: "Linux only, 2026-11-22 spike. The flat 50 ms is parcel's own batch window (M-RESEARCH-watcher's MIN 50), not the kernel"
   M-LATENCY-debounce:
     value: "101.58 ms p50"
     what: "the 100 ms trailing debounce constant as measured on the declared clock"
@@ -139,6 +147,15 @@ resolution:
   M-RESOLVE-warmup:
     values: ["MAX_CONCURRENCY = 12 (sequential does not finish on a real workspace; unbounded floods the server into empty answers)", "WARMUP_BUDGET_MS = 4000, retry every 750 ms (no public 'is the language server ready' API)"]
     boundary: "measured against VS Code's Pylance; re-measure per headless backend"
+  M-RESOLVE-lsp-readiness:
+    boundary: "fixtures/ladder rungs 04, 06-08, 10-11 (2-file workspaces), 2026-11-22 spike; not a throughput or recall number"
+    values:
+      - "basedpyright: every call and import site answered at the hand-written definition on the first request; initialize ~100 ms, first definition ~120-130 ms, later ones 0-55 ms; NO $/progress notification was sent"
+      - "basedpyright resolves an imported call straight to the source definition (util.py), not to the local import binding; the receiver call g.greet() resolved to Greeter.greet"
+      - "tsserver with no tsconfig: no $/progress at all; textDocument/definition on an imported call returned the LOCAL IMPORT BINDING (a wrong, plausible answer, not an empty one) 3 of 3 cold runs and at every wait <= 600 ms after didOpen; correct at >= 1000 ms"
+      - "tsserver with a tsconfig: $/progress begin/end bracket the project load; answers before `end` were the import binding, after it correct"
+      - "tsserver with an unresolvable module (module nodenext, './util' with no extension) also returns the import binding"
+    rule: "retry-on-empty (M-RESOLVE-warmup) cannot catch a cold tsserver: its cold answer is not empty. A definition that lands on a same-file import binding is not a resolution (C-RESOLVE Q9)"
   M-RESOLVE-typescript:
     value: UNMEASURED
     rule: "both S3 resolvers were .py-gated; no tsserver was driven. Nothing about TS resolution may be inferred from Python numbers (U9 spike first)."
@@ -265,6 +282,22 @@ research:
       - "bulk-mode entry: >=200 paths OR >=50 dirs OR .git/index.lock present OR HEAD changed <2 s ago OR >=500 events/s; exit on 750 ms quiet AND lock gone, cap 10 s; reconciliation walk every 10 min idle"
       - "Linux max_user_watches default 1% of RAM clamped [8192, 1048576]; warn within 20%, degrade to polling on ENOSPC"
       - "editor save shapes: VS Code truncate-then-write (real zero-byte window; issue #98063 open since 2020), vim backupcopy rename mode, JetBrains safe-write temp + rename -> zero-byte re-read after 100 ms"
+  M-RESEARCH-watcher-linux:
+    boundary: "@parcel/watcher 2.6.0 on Linux inotify, 2026-11-22 spike, one run per row unless stated"
+    values:
+      - "create then change in the same tick arrives as ONE create: parcel merges events per path inside its window (contradicts C-WATCH INV-6, see OQ-9)"
+      - "create then delete in the same tick arrives as nothing"
+      - "rename arrives as delete + create; an atomic save (write a temp file, rename it over the target) arrives as create on a path already known"
+      - "mkdir pkg then write pkg/m.py at once: the create of pkg/m.py was never delivered in 3 of 10 trials; only `create pkg` arrived (C-WATCH OQ-10)"
+      - "rm -r pkg arrives as delete pkg + delete pkg/m.py, including a child whose create was never delivered"
+      - "500 files written in a loop arrive in one callback with 500 creates"
+  M-RESEARCH-ladder-parse:
+    boundary: "fixtures/ladder rungs 00-12, 2026-11-22"
+    values:
+      - "runtime ABI range 13–15; the python grammar is ABI 15 and the typescript grammar ABI 14; Parser.init ~3.5 ms, three grammar loads ~6.4 ms"
+      - "a ~120-line throwaway extractor reproduced every hand-written [structural] line of rungs 01-11; all 17 [parse] lines matched hasError and root type"
+      - "`def broken(:` recovers as one zero-width MISSING ')' and no ERROR node, so errorSpanRatio is 0 and missingNodeCount is the signal"
+      - "JSX under .ts parses with hasError (type_assertion + MISSING '/'); tree-sitter still recovers the function declaration around it"
   M-RESEARCH-resolvers:
     values:
       - "no SCIP indexer is incremental: scip-typescript builds one ts.createProgram per tsconfig at 1k–5k LOC/s (~5 min on Sourcegraph's repo), pins typescript ^4.5.4; scip-python is a pyright fork synced to a 2022-07-07 commit -> SCIP is a golden oracle and CI pass, never a live resolver (AM-4)"
@@ -323,7 +356,7 @@ still_unmeasured:
   - { id: SU-7, gap: "storage/memory per tier (GRAPH.MEMORY USAGE reports at MB granularity and returned 1 for every spike graph)", when: "U7 with INFO memory deltas at scale" }
   - { id: SU-8, gap: "query-side cost of an expression-tier graph (read latency, layout/WebGL at ~6x nodes)", when: "only if the tier is ever enabled" }
   - { id: SU-9, gap: "postMessage structured-clone cost of a large GraphPayload; delta size above which to snapshot", when: "U3 spike" }
-  - { id: SU-10, gap: "@parcel/watcher overflow signalling; case-insensitive volume key folding", when: "U4 spikes" }
+  - { id: SU-10, gap: "@parcel/watcher overflow signalling; case-insensitive volume key folding (Linux event shapes are now M-RESEARCH-watcher-linux)", when: "U4 spikes" }
   - { id: SU-11, gap: "DELETE-only and MERGE rollback under FalkorDB timeout; pipelined many-small writes", when: "U5" }
   - { id: SU-12, gap: "MemoryStore RSS at 488k nodes in the extension host", when: "U7" }
   - { id: SU-13, gap: "whether any MCP host ships a 2026-07-28-spec client yet", when: "before U10 (AM-6 is time-sensitive)" }
