@@ -21,6 +21,9 @@ const CASES: readonly Case[] = [
   ['/build', 'build', true, true],
   ['/build', 'pkg/build', true, false],
   ['build', 'pkg/build', true, true],
+  // At any depth means at a segment boundary: `build` never matches `rebuild`.
+  ['build', 'rebuild', true, false],
+  ['**/dist/**', 'pkg/mydist/a.js', false, false],
   // A trailing `/` is directory-only.
   ['build/', 'build', false, false],
   ['build/', 'build', true, true],
@@ -32,6 +35,9 @@ const CASES: readonly Case[] = [
   // `**` matches zero segments.
   ['/a/**/b.ts', 'a/b.ts', false, true],
   ['/a/**/b.ts', 'a/x/y/b.ts', false, true],
+  // `**` outside the subset (not before `/` or at the end) degrades to a one-segment `*`.
+  ['/a**.ts', 'ab.ts', false, true],
+  ['/a**.ts', 'a/b.ts', false, false],
 ];
 
 describe('compileMatcher', () => {
