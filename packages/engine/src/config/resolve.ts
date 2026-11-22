@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type {
   ConfigLayer,
   ConfigLayerInput,
+  ConsumerSwitches,
   CpgConfigInput,
   Provenanced,
   ResolvedConfig,
@@ -94,6 +95,11 @@ function isConfigKey(key: string): key is ConfigKey {
 
 const rankOf = (layer: ConfigLayer): number => CONFIG_PRECEDENCE.indexOf(layer);
 
+function perSwitch(_whole: Provenanced<ConsumerSwitches>): ResolvedConfig['consumers'] {
+  // SEAT: one provenance per consumer switch (owner decision 1A) lands with U2c.2.
+  throw new Error('SEAT: resolveConfig: per-switch consumers (owner decision 1A, U2c.2)');
+}
+
 export function resolveConfig(layers: readonly ConfigLayerInput[]): ResolvedConfig {
   // REAL
   const allLayers: readonly ConfigLayerInput[] = [
@@ -156,7 +162,7 @@ export function resolveConfig(layers: readonly ConfigLayerInput[]): ResolvedConf
     include: pick('include', KEY_SCHEMAS.include),
     exclude: pick('exclude', KEY_SCHEMAS.exclude),
     maxFileSizeBytes: pick('maxFileSizeBytes', KEY_SCHEMAS.maxFileSizeBytes),
-    consumers: pick('consumers', KEY_SCHEMAS.consumers),
+    consumers: perSwitch(pick('consumers', KEY_SCHEMAS.consumers)),
     store: {
       host: pick('store.host', KEY_SCHEMAS['store.host']),
       port: pick('store.port', KEY_SCHEMAS['store.port']),
@@ -183,7 +189,11 @@ export function toCpgConfigInput(resolved: ResolvedConfig): CpgConfigInput {
     include: [...resolved.include.value],
     exclude: [...resolved.exclude.value],
     maxFileSizeBytes: resolved.maxFileSizeBytes.value,
-    consumers: { ...resolved.consumers.value },
+    consumers: {
+      inspect: resolved.consumers.inspect.value,
+      store: resolved.consumers.store.value,
+      vscode: resolved.consumers.vscode.value,
+    },
     store: {
       host: resolved.store.host.value,
       port: resolved.store.port.value,

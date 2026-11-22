@@ -6,7 +6,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createEngine } from '@cpg/engine';
-import { createMemoryStore } from '@cpg/sink';
 import type { Io, Manifest } from './io';
 import { run } from './run';
 
@@ -40,11 +39,11 @@ const io: Io = {
 const controller = new AbortController();
 process.once('SIGINT', () => controller.abort());
 
-// Composition root (03-architecture §2 rule 3): wire the engine with the MemoryStore sink.
-const engine = createEngine({ version: manifest.version }, { sinks: [createMemoryStore()] });
+// Composition root (03-architecture §2 rule 3): run() calls createEngine once the config has
+// resolved, and the engine builds its own sinks from the consumer switches (owner decision 5a).
 void run(process.argv.slice(2), io, {
   manifest,
-  engine,
+  createEngine,
   cwd: process.cwd(),
   signal: controller.signal,
 }).then((code) => {

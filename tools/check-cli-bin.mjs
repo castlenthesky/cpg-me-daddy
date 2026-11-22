@@ -45,7 +45,8 @@ const banner = `${binName} ${pkg.version}`.replace(/[.]/g, '\\.');
 expectRun(['--version'], 0, 'stdout', new RegExp(`^${banner}\\n$`));
 expectRun(['frobnicate'], 2, 'stderr', /unknown command 'frobnicate'/);
 expectRun(['mcp'], 2, 'stderr', /not built yet/);
-// main.ts is the composition root: createEngine wired with the MemoryStore sink (BMO-79).
+// main.ts is the composition root: run() calls createEngine once the config has resolved, and the
+// engine builds its own sinks from the consumer switches (owner decision 5a, U2c.2).
 const ws = mkdtempSync(join(tmpdir(), 'cpg-cli-bin-'));
 try {
   // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
@@ -55,14 +56,27 @@ try {
   expectRun(['index', '--dry-run', ws], 0, 'stdout', /^files seen=2 indexed=2 /m);
   // no root given: main.ts hands run() process.cwd(), the last workspace-root fallback
   expectRun(['index', '--dry-run'], 0, 'stdout', /^files seen=2 indexed=2 /m, ws);
-  // verify through the bin reads main.ts's own MemoryStore, which nothing has indexed in this
-  // process (U2a.3 known gap: no store outlives a process before U5). filesystem-reconciliation
-  // fails, and that is exit 3 (never 1) with exactly one cpg.verify.report document on stdout.
-  const v = expectRun(['verify', '--format=json', ws], 3, 'stdout', /^\{.*\}\n$/);
+  // cpg index without --dry-run writes the engine-built memory store (U2c.2): the root DIRECTORY
+  // and two FILEs, two HAS_ENTRY.
+  expectRun(['index', ws], 0, 'stdout', /^written nodes=3 edges=2 dryRun=false$/m);
+  expectRun(['index', ws], 0, 'stderr', /consumers: memory$/m);
+  // a switched-on consumer that is not built yet is exit 2 "not built yet", naming its source
+  expectRun(['index', '--store', 'falkor', ws], 2, 'stderr', /not built yet.*--store/s);
+  // verify indexes first (owner decision 2A), so the bin passes on a workspace nothing indexed
+  // before: exit 0, one cpg.verify.report document whose store checks pass. Headless, so
+  // render-reconciliation is unavailable.
+  const v = expectRun(['verify', '--format=json', ws], 0, 'stdout', /^\{.*\}\n$/);
   try {
     const doc = JSON.parse(v.stdout);
-    const fs = doc.body.checks.find((c) => c.id === 'filesystem-reconciliation');
-    if (doc.kind !== 'cpg.verify.report' || doc.body.checks.length !== 6 || fs?.state !== 'fail')
+    const state = (id) => doc.body.checks.find((c) => c.id === id)?.state;
+    const passing = ['filesystem-reconciliation', 'id-uniqueness', 'revision-reconciliation'];
+    if (
+      doc.kind !== 'cpg.verify.report' ||
+      doc.body.checks.length !== 6 ||
+      passing.some((id) => state(id) !== 'pass') ||
+      state('render-reconciliation') !== 'unavailable' ||
+      JSON.stringify(doc.body.consumers) !== '["memory"]'
+    )
       errors.push(`cpg verify --format=json: unexpected document ${v.stdout}`);
   } catch (e) {
     errors.push(
@@ -81,6 +95,8 @@ try {
   } catch (e) {
     errors.push(`cpg schema --print: stdout is not one JSON document (${String(e)})`);
   }
+  // the ladder fixtures, a real multi-directory tree: verify exits 0 through the bin
+  expectRun(['verify', join(ROOT, 'fixtures', 'ladder')], 0, 'stdout', /^verify unavailable$/m);
   expectRun(['schema', '--check'], 0, 'stderr', /up to date/);
   expectRun(['schema', '--check', '--workspace', ws], 1, 'stderr', /cannot read/);
   // cpg config (U2c.1): one cpg.config.resolved document. The workspace has a cpg.config.yaml, so

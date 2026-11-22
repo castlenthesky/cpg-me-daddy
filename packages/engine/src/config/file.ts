@@ -33,9 +33,9 @@ const CONFIG_FILE_SCHEMA = z.strictObject({
     .exactOptional(),
   consumers: z
     .strictObject({
-      inspect: z.boolean(),
-      store: CONSUMER_STORE,
-      vscode: z.union([z.boolean(), z.literal('auto')]),
+      inspect: z.boolean().exactOptional(),
+      store: CONSUMER_STORE.exactOptional(),
+      vscode: z.union([z.boolean(), z.literal('auto')]).exactOptional(),
     })
     .exactOptional(),
   store: z
@@ -103,6 +103,11 @@ export function stringifyConfigFile(doc: CpgConfigFile): string {
   return stringify(doc);
 }
 
+// Typed void, not never, so the REAL code after a SEAT call still typechecks (RED only).
+function seat(what: string): void {
+  throw new Error(`SEAT: ${what}`);
+}
+
 /**
  * The file layer: the file's keys mapped to ResolvedConfig paths. `vscodeHost` says whether the
  * front door is the VS Code host, which is what `consumers.vscode: auto` resolves against.
@@ -112,7 +117,10 @@ export function configFileLayer(
   source: string,
   opts: { readonly vscodeHost: boolean },
 ): { readonly layer: ConfigLayerInput; readonly warnings: readonly string[] } {
-  // REAL
+  // SEAT: the file's consumer switches map to one key each (owner decision 1A) with U2c.2.
+  if (doc.consumers !== undefined) {
+    seat('configFileLayer: per-switch consumers (owner decision 1A, U2c.2)');
+  }
   const { consumers, watch, resolve } = doc;
   const falkor = doc.store?.falkor;
   const values = {

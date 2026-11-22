@@ -31,7 +31,9 @@ const KEYS = [
   'include',
   'exclude',
   'maxFileSizeBytes',
-  'consumers',
+  'consumers.inspect',
+  'consumers.store',
+  'consumers.vscode',
   'store.host',
   'store.port',
   'store.graph',
@@ -73,9 +75,10 @@ async function cli(
   o: { env?: Record<string, string>; cwd?: string; engine?: CpgEngine; isTty?: boolean } = {},
 ) {
   const io = captureIo({ isTty: o.isTty ?? false, ...(o.env && { env: o.env }) });
+  const { engine } = o;
   const code = await run(argv, io, {
     manifest,
-    ...(o.engine && { engine: o.engine }),
+    ...(engine && { createEngine: () => engine }),
     ...(o.cwd !== undefined && { cwd: o.cwd }),
   });
   return { code, stdout: io.stdout, stderr: io.stderr };
@@ -387,10 +390,57 @@ describe('cpg config: finding cpg.config.yaml', () => {
       [FILE]: 'version: 1\nconsumers: { inspect: true, store: falkor, vscode: auto }\n',
     });
     const d = await configJson([ws]);
+    const file = { layer: 'file', source: join(ws, FILE) };
     expect(leaf(d['body'], 'consumers')).toEqual({
-      value: { inspect: true, store: 'falkor', vscode: false },
+      inspect: { value: true, ...file },
+      store: { value: 'falkor', ...file },
+      vscode: { value: false, ...file },
+    });
+  });
+
+  // Owner decision 1A (U2c.2): the case it exists for, at the front door.
+  it('--inspect over a file setting store: falkor keeps each switch its own provenance', async () => {
+    const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nconsumers: { store: falkor }\n' });
+    const d = await configJson([ws, '--inspect']);
+    expect(leaf(d['body'], 'consumers')).toEqual({
+      inspect: { value: true, layer: 'flag', source: '--inspect' },
+      store: { value: 'falkor', layer: 'file', source: join(ws, FILE) },
+      vscode: builtIn(false),
+    });
+  });
+
+  it('--store beats the file for that switch only', async () => {
+    const ws = await tree({
+      '.git/': '',
+      [FILE]: 'version: 1\nconsumers: { inspect: true, store: falkor }\n',
+    });
+    const d = await configJson([ws, '--store', 'memory']);
+    expect(leaf(d['body'], 'consumers')).toEqual({
+      inspect: { value: true, layer: 'file', source: join(ws, FILE) },
+      store: { value: 'memory', layer: 'flag', source: '--store' },
+      vscode: builtIn(false),
+    });
+  });
+
+  it('without --inspect the flag layer sets no switch (a boolean flag only switches on)', async () => {
+    const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nconsumers: { inspect: true }\n' });
+    const d = await configJson([ws]);
+    expect(leaf(d['body'], 'consumers.inspect')).toEqual({
+      value: true,
       layer: 'file',
       source: join(ws, FILE),
+    });
+  });
+
+  it('no CPG_* env var sets a consumer switch', async () => {
+    const ws = await tree({ '.git/': '' });
+    const d = await configJson([ws], {
+      env: { CPG_STORE: 'falkor', CPG_INSPECT: 'true', CPG_CONSUMERS_STORE: 'falkor' },
+    });
+    expect(leaf(d['body'], 'consumers')).toEqual({
+      inspect: builtIn(false),
+      store: builtIn('memory'),
+      vscode: builtIn(false),
     });
   });
 
@@ -454,9 +504,9 @@ describe('cpg config --format=text', () => {
     expect(r.stdout.map((l) => l.split(' ')[0])).toEqual(KEYS);
     expect(r.stdout[0]).toBe(`root ${JSON.stringify(ws)} flag <root>`);
     expect(r.stdout).toContain('store.port 6382 default built-in');
-    expect(r.stdout).toContain(
-      'consumers {"inspect":false,"store":"memory","vscode":false} default built-in',
-    );
+    expect(r.stdout).toContain('consumers.inspect false default built-in');
+    expect(r.stdout).toContain('consumers.store "memory" default built-in');
+    expect(r.stdout).toContain('consumers.vscode false default built-in');
     const explicit = await cli(['config', '--format=text', ws]);
     expect(explicit.stdout).toEqual(r.stdout);
   });
@@ -510,7 +560,19 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     const f = fakeEngine();
     const r = await cli(['verify', '--strict', ws], { engine: f.engine, env: { CPG_GRAPH: 'eg' } });
     expect(r.code).toBe(EXIT.OK);
-    expect(f.connects).toEqual([{ host: 'fh', port: 7100, graph: 'eg' }]);
+    // index first, then verify (owner decision 2A): both sessions open on the resolved target
+    const target = { host: 'fh', port: 7100, graph: 'eg' };
+    expect(f.connects).toEqual([target, target]);
+    expect(f.requests.map((q) => q.config)).toEqual([
+      {
+        ...plainDefaults(ws),
+        include: ['src/**'],
+        exclude: ['**/gen/**'],
+        maxFileSizeBytes: 4096,
+        store: { ...target, mode: 'remote' },
+        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50 },
+      },
+    ]);
     expect(f.verifies).toEqual([
       {
         ...plainDefaults(ws),
@@ -528,20 +590,23 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     const ws = await tree({ '.git/': '', [FILE]: FILE_TEXT });
     const f = fakeEngine();
     await cli(['verify', ws, '--host', 'h', '--port', '7200'], { engine: f.engine });
-    expect(f.connects).toEqual([{ host: 'h', port: 7200, graph: 'fg' }]);
+    const target = { host: 'h', port: 7200, graph: 'fg' };
+    expect(f.connects).toEqual([target, target]);
   });
 
   it('with no file and no env, cpg verify connects to the built-in store', async () => {
     const ws = await tree({ '.git/': '' });
     const f = fakeEngine();
     await cli(['verify', ws], { engine: f.engine });
-    expect(f.connects).toEqual([{ host: '127.0.0.1', port: 6382, graph: 'cpg' }]);
+    const target = { host: '127.0.0.1', port: 6382, graph: 'cpg' };
+    expect(f.connects).toEqual([target, target]);
     expect(f.verifies).toEqual([{ ...plainDefaults(ws), strict: false }]);
   });
 
   it.each([
     ['verify', ['verify']],
     ['index --dry-run', ['index', '--dry-run']],
+    ['index', ['index']],
   ])('%s: a config error exits 2 before any engine call (I-12)', async (_name, argv) => {
     const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nincludes: [typo]\n' });
     for (const env of [{}, { CPG_PORT: 'abc' }]) {
@@ -567,7 +632,8 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     expect(f.verifies[0]?.include).toEqual(['named/**']);
   });
 
-  it.each([['watch'], ['inspect'], ['index']])(
+  // index without --dry-run is built since U2c.2 (index-verb.test.ts).
+  it.each([['watch'], ['inspect']])(
     'the SEAT verb %s loads no config: built-in store, still "not built yet"',
     async (verb) => {
       const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nincludes: [typo]\n' });

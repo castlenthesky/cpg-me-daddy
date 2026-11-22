@@ -45,7 +45,10 @@ async function opFor(root: string) {
       return memory.write(op);
     },
   };
-  const engine = createEngine({ version: '0' }, { sinks: [sink] });
+  const engine = createEngine(
+    { version: '0', consumers: { inspect: false, store: 'memory', vscode: false } },
+    { memoryStore: sink },
+  );
   const session = await engine.connect({ host: 'h', port: 1, graph: 'g' }, { readOnly: false });
   await engine.index(
     { config: { root }, session, resumeFrom: null },

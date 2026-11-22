@@ -46,6 +46,16 @@ const store: readonly FlagSpec[] = [
   { name: 'port', type: 'port', summary: 'graph store port' },
   { name: 'graph', type: 'string', summary: 'graph key' },
 ];
+// The consumer switches a flag sets (03-architecture §8); the VS Code panel's switch is the extension.
+const consumers: readonly FlagSpec[] = [
+  { name: 'inspect', type: 'boolean', summary: 'switch on the browser inspector consumer' },
+  {
+    name: 'store',
+    type: 'string',
+    values: ['memory', 'falkor'],
+    summary: 'the graph store consumer',
+  },
+];
 const root: PositionalSpec = { name: 'root', summary: 'workspace root, when no flag names one' };
 const bool = (name: string, summary: string): FlagSpec => ({ name, type: 'boolean', summary });
 // Defaults shared by most verbs: a workspace positional, no stdin, one document on stdout.
@@ -72,6 +82,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     config,
     format('text', 'json'),
     ...store,
+    ...consumers,
     bool('dry-run', 'index without a store'),
     bool('rebuild', 'drop and recreate the graph key'),
     bool('quiet', 'no progress on stderr'),
@@ -98,6 +109,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     config,
     format('text', 'json'),
     ...store,
+    ...consumers,
     bool('strict', 'treat unavailable checks as failures'),
   ]),
   cmd('inspect', 'emit the graph payload, or serve the browser inspector', 'read', [
@@ -114,6 +126,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     config,
     format('text', 'json'),
     ...store,
+    ...consumers,
   ]),
   cmd(
     'schema',

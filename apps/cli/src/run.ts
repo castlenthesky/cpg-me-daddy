@@ -12,6 +12,7 @@ import {
   type ConfigLayer,
   type ConfigLayerInput,
   type CpgEngine,
+  type EngineConfig,
   type EngineSession,
   type IndexProgress,
   type ResolvedConfig,
@@ -52,7 +53,11 @@ export const exitCodeFor = (error: CliError): ExitCode => EXIT_FOR[error.kind];
 
 export interface RunOptions {
   readonly manifest: Manifest;
-  readonly engine?: CpgEngine;
+  /**
+   * The composition root's engine constructor (owner decision 5a). run calls it once the config has
+   * resolved, so the engine builds only the sinks the resolved consumer switches enable.
+   */
+  readonly createEngine?: (config: EngineConfig) => CpgEngine;
   readonly signal?: AbortSignal;
   /** The process working directory, read in main.ts: the last workspace-root fallback (C-CLI). */
   readonly cwd?: string;
@@ -102,24 +107,33 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
     return EXIT.OK;
   }
   // Every flag is validated before anything touches the engine (I-12).
-  if (spec.verb === 'schema') return runSchema(spec, opts.engine, values, io, opts);
+  // SEAT: run builds the engine from the resolved consumers (owner decision 5a) with U2c.2.
+  const engine =
+    opts.createEngine === undefined
+      ? undefined
+      : seatEngine('run: the engine from the resolved consumers (owner decision 5a, U2c.2)');
+  if (spec.verb === 'schema') return runSchema(spec, engine, values, io, opts);
   if (spec.verb === 'config') return runConfig(spec, values, positionals, io, opts);
   // SEAT: verbs without a handler yet stop here (watch, query, inspect, doctor, index without --dry-run).
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
-  if (!opts.engine) throw seat;
+  if (!engine) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
   if (spec.verb === 'index' && values['dry-run'] === true) {
-    return runIndexDryRun(spec, opts.engine, values, positionals, io, opts);
+    return runIndexDryRun(spec, engine, values, positionals, io, opts);
   }
   if (spec.verb === 'verify') {
-    return runVerify(spec, opts.engine, values, positionals, io, opts);
+    return runVerify(spec, engine, values, positionals, io, opts);
   }
   const target = storeTarget(spec, values);
   if (target) {
-    const session = await connectStore(opts.engine, target, spec.session === 'read');
+    const session = await connectStore(engine, target, spec.session === 'read');
     await session.close();
   }
   throw seat;
+}
+
+function seatEngine(what: string): CpgEngine {
+  throw new Error(`SEAT: ${what}`);
 }
 
 function rootLayers(

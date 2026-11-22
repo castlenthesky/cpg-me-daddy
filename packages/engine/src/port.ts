@@ -46,8 +46,12 @@ export interface ResolvedConfig {
   readonly include: Provenanced<readonly string[]>;
   readonly exclude: Provenanced<readonly string[]>;
   readonly maxFileSizeBytes: Provenanced<number>;
-  /** One value (C-CLI): a layer that sets consumers sets all three switches. */
-  readonly consumers: Provenanced<ConsumerSwitches>;
+  /** One provenance per switch (owner decision 1A): `--inspect` over a file's `store` keeps both. */
+  readonly consumers: {
+    readonly inspect: Provenanced<boolean>;
+    readonly store: Provenanced<'memory' | 'falkor'>;
+    readonly vscode: Provenanced<boolean>;
+  };
   readonly store: {
     readonly host: Provenanced<string>;
     readonly port: Provenanced<number>;

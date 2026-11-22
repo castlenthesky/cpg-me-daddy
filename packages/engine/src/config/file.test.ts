@@ -7,6 +7,8 @@
 //     loader fails loudly, naming the key;
 //   - the sketch is a template: each instantiation of its alternatives (2 x 2) parses, validates,
 //     and round-trips through stringifyConfigFile, and maps onto ResolvedConfig's keys.
+// Owner decision 1A (U2c.2): each consumer switch maps to its own key, so the file may set any of
+// them alone, and each carries the file's provenance.
 
 import { parse, stringify } from 'yaml';
 import { describe, expect, it } from 'vitest';
@@ -85,7 +87,9 @@ describe('the 03-architecture §9 sketch', () => {
       values: {
         include: ['apps/*', 'packages/*', 'services/*'],
         exclude: ['**/node_modules', '**/dist', '**/__pycache__', '**/.venv'],
-        consumers: { inspect: false, store, vscode: false },
+        'consumers.inspect': false,
+        'consumers.store': store,
+        'consumers.vscode': false,
         'store.host': '127.0.0.1',
         'store.port': 6382,
         'store.graph': 'cpg',
@@ -105,7 +109,11 @@ describe('the 03-architecture §9 sketch', () => {
     const file = { layer: 'file', source: SRC };
     expect(r.watch.trailingMs).toEqual({ value: 100, ...file });
     expect(r.store.mode).toEqual({ value: mode, ...file });
-    expect(r.consumers).toEqual({ value: { inspect: false, store, vscode: false }, ...file });
+    expect(r.consumers).toEqual({
+      inspect: { value: false, ...file },
+      store: { value: store, ...file },
+      vscode: { value: false, ...file },
+    });
     expect(r.root).toEqual({ value: '/w', layer: 'default', source: 'cwd' });
   });
 });
@@ -136,7 +144,30 @@ describe('parseConfigFile', () => {
       SRC,
     );
     const { layer } = configFileLayer(doc, SRC, { vscodeHost });
-    expect(layer.values['consumers']).toEqual({ inspect: true, store: 'memory', vscode: expected });
+    expect(layer.values['consumers.vscode']).toBe(expected);
+    expect(layer.values['consumers.inspect']).toBe(true);
+    expect(layer.values['consumers.store']).toBe('memory');
+    expect(layer.values).not.toHaveProperty('consumers');
+  });
+
+  it.each([
+    ['store', 'consumers: { store: falkor }', { store: 'falkor' }],
+    ['inspect', 'consumers: { inspect: true }', { inspect: true }],
+    ['vscode', 'consumers: { vscode: true }', { vscode: true }],
+    ['none', 'consumers: {}', {}],
+  ])('a file setting only %s sets that switch; the others fall through', (_name, line, set) => {
+    const doc = parseConfigFile(`version: 1\n${line}\n`, SRC);
+    const { layer } = configFileLayer(doc, SRC, { vscodeHost: false });
+    const r = resolveConfig([{ layer: 'default', source: 'cwd', values: { root: '/w' } }, layer]);
+    const defaults = { inspect: false, store: 'memory', vscode: false };
+    for (const key of ['inspect', 'store', 'vscode'] as const) {
+      const fromFile = Object.hasOwn(set, key);
+      expect(r.consumers[key]).toEqual(
+        fromFile
+          ? { value: Reflect.get(set, key), layer: 'file', source: SRC }
+          : { value: defaults[key], layer: 'default', source: 'built-in' },
+      );
+    }
   });
 
   it.each([
@@ -145,12 +176,15 @@ describe('parseConfigFile', () => {
     ['the file cannot set the root', 'version: 1\nroot: /elsewhere\n', 'root'],
     ['a misspelt key', 'version: 1\nincludes: [src]\n', 'includes'],
     ['a misspelt nested key', 'version: 1\nwatch: { debounce: 5 }\n', 'watch.debounce'],
-    ['consumers set whole', 'version: 1\nconsumers: { store: memory }\n', 'consumers.inspect'],
-    // Post-implementation (sabotage): a schema with an optional vscode passed every case above.
     [
-      'consumers without vscode',
-      'version: 1\nconsumers: { inspect: true, store: memory }\n',
-      'consumers.vscode',
+      'a consumers.store not in the enum',
+      'version: 1\nconsumers: { store: none }\n',
+      'consumers.store',
+    ],
+    [
+      'a consumers.inspect not a boolean',
+      'version: 1\nconsumers: { inspect: auto }\n',
+      'consumers.inspect',
     ],
     ['host lives under store.falkor', 'version: 1\nstore: { host: x }\n', 'store.host'],
     [

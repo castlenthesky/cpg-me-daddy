@@ -23,6 +23,7 @@ import { createEngine } from './engine';
 import type {
   CheckResult,
   CheckState,
+  ConsumerSwitches,
   CpgEngine,
   StoreTarget,
   VerifyCheckId,
@@ -40,6 +41,11 @@ const IDS: readonly VerifyCheckId[] = [
   'resolution-health',
 ];
 const TARGET: StoreTarget = { host: 'localhost', port: 6382, graph: 'cpg' };
+/** The CLI's switches: memory only, no renderer (owner decision 5a builds the sinks from these). */
+const HEADLESS: ConsumerSwitches = { inspect: false, store: 'memory', vscode: false };
+/** An engine whose built-in memory store is `memory` (a test plants graphs in it). */
+const engineOn = (memory: EngineSink, sinks: readonly EngineSink[] = []): CpgEngine =>
+  createEngine({ version: '0', consumers: HEADLESS }, { memoryStore: memory, sinks });
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 const roots: string[] = [];
@@ -106,7 +112,7 @@ async function verify(
 async function indexed(files: Readonly<Record<string, string>> = FILES, id = 'memory') {
   const root = await tree(files);
   const memory = createMemoryStore({ id });
-  const engine = createEngine({ version: '0' }, { sinks: [memory] });
+  const engine = engineOn(memory);
   await indexInto(engine, root);
   return { root, memory, engine };
 }
@@ -149,7 +155,7 @@ async function planted(files: Readonly<Record<string, string>>, nodes: GraphNode
   const root = await tree(files);
   const memory = createMemoryStore();
   await memory.onSnapshot({ seq, nodes, edges: [] }, { seq, cause: 'initial' });
-  const engine = createEngine({ version: '0' }, { sinks: [memory] });
+  const engine = engineOn(memory);
   return { root, engine };
 }
 
@@ -213,17 +219,40 @@ describe('VerifyReport (I-21)', () => {
     expect(report.state).toBe('fail');
   });
 
-  it('with no store consumer, every store check is unavailable and consumers is empty', async () => {
-    const root = await tree(FILES);
-    const engine = createEngine({ version: '0' }, { sinks: [] });
+  it('headless (no renderer consumer): render-reconciliation is unavailable and says why (ND-8)', async () => {
+    const { root, engine } = await indexed();
     const report = await verify(engine, root);
-    expect(report.checks.map((c) => c.id)).toEqual(IDS);
-    for (const c of report.checks) expect(c.state).toBe('unavailable');
-    expect(report.state).toBe('unavailable');
-    expect(report.consumers).toEqual([]);
-    const strict = await verify(engine, root, { strict: true });
-    for (const c of strict.checks) expect(c.state).toBe('fail');
-    expect(strict.state).toBe('fail');
+    expect(check(report, 'render-reconciliation')).toMatchObject({
+      state: 'unavailable',
+      observed: 0,
+      expected: 0,
+      localisedTo: [],
+    });
+    expect(check(report, 'render-reconciliation').detail).toMatch(/no renderer consumer/);
+  });
+
+  it("the engine's own memory store: verify reads what index wrote, with no store passed in", async () => {
+    const root = await tree(FILES);
+    const engine = createEngine({ version: '0', consumers: HEADLESS });
+    await indexInto(engine, root);
+    const report = await verify(engine, root);
+    expect(check(report, 'filesystem-reconciliation')).toMatchObject({
+      state: 'pass',
+      observed: 4,
+      expected: 4,
+    });
+    expect(report.consumers).toEqual(['memory']);
+  });
+
+  it("a fresh engine has a fresh store: another engine's index is not seen", async () => {
+    const root = await tree(FILES);
+    await indexInto(createEngine({ version: '0', consumers: HEADLESS }), root);
+    const report = await verify(createEngine({ version: '0', consumers: HEADLESS }), root);
+    expect(check(report, 'filesystem-reconciliation')).toMatchObject({
+      state: 'fail',
+      observed: 0,
+      expected: 4,
+    });
   });
 
   it('asOfSeq is read once, before any store read, even while a writer moves the seq', async () => {
@@ -259,7 +288,7 @@ describe('VerifyReport (I-21)', () => {
         return memory.staleNodes();
       },
     };
-    const report = await verify(createEngine({ version: '0' }, { sinks: [sink] }), root);
+    const report = await verify(engineOn(sink), root);
     for (const c of report.checks) expect(c.asOfSeq).toBe(4);
     expect(calls[0]).toBe('inspect');
     expect(calls.filter((c) => c === 'inspect')).toHaveLength(1);
@@ -343,7 +372,7 @@ describe('filesystem-reconciliation: admitted files vs FILE nodes, per directory
       'src/b.py': 'b = 2\n',
       'src/big.py': 'big = 1234567890\n',
     });
-    const engine = createEngine({ version: '0' }, { sinks: [createMemoryStore()] });
+    const engine = engineOn(createMemoryStore());
     const include = ['src/**', '**/*.txt'];
     const exclude = [...DEFAULT_EXCLUDES, '**/*.txt'];
     const maxFileSizeBytes = 10;
@@ -422,7 +451,7 @@ describe('id-uniqueness via store.nodeKeys', () => {
         return memory.nodeKeys(label);
       },
     };
-    const report = await verify(createEngine({ version: '0' }, { sinks: [sink] }), root);
+    const report = await verify(engineOn(sink), root);
     // Keys: DIRECTORY 2 (2 distinct), FILE 4 (2), MODULE 3 (2), META_DATA 2 (1).
     expect(check(report, 'id-uniqueness')).toMatchObject({
       state: 'fail',
@@ -509,7 +538,7 @@ describe('verify is a read', () => {
         return memory.onSnapshot(payload, meta);
       },
     };
-    const engine = createEngine({ version: '0' }, { sinks: [sink] });
+    const engine = engineOn(sink);
     await indexInto(engine, root);
     writes.length = 0;
     await put(root, { 'a.ts': 'export const a = 2;\n' });
@@ -533,12 +562,17 @@ describe('verify is a read', () => {
     await session.close();
   });
 
-  it('two store sinks is a SEAT until U5 says which store verify reads', async () => {
+  it('a host sink is not read: verify reads the built-in store, and lists only it', async () => {
     const root = await tree(FILES);
-    const engine = createEngine(
-      { version: '0' },
-      { sinks: [createMemoryStore({ id: 'a' }), createMemoryStore({ id: 'b' })] },
-    );
-    await expect(verify(engine, root)).rejects.toThrow(/SEAT.*U5/);
+    const host = createMemoryStore({ id: 'host' });
+    const engine = engineOn(createMemoryStore({ id: 'built-in' }), [host]);
+    await indexInto(engine, root);
+    // A duplicated id planted in the host sink alone: the built-in store still holds one of each.
+    const nodes = [dir('.'), file('a.ts', FILES['a.ts']), moduleNode('m'), moduleNode('m')];
+    await host.onSnapshot({ seq: 9, nodes, edges: [] }, { seq: 9, cause: 'initial' });
+    const report = await verify(engine, root);
+    expect(check(report, 'id-uniqueness').state).toBe('pass');
+    expect(check(report, 'filesystem-reconciliation').state).toBe('pass');
+    expect(report.consumers).toEqual(['built-in']);
   });
 });

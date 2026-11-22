@@ -1,6 +1,10 @@
 // createEngine and index(), from BMO-79's acceptance list, C-CLI (IndexReport, I-20, I-22, P-A),
 // C-STORE (merge-filesystem; counts come from the store's receipt) and 03-architecture §5
 // (NullGraphStore backs --dry-run). Revision ids are an independent sha256 of the bytes.
+// U2c.2 (BMO-41, owner decision 5a): createEngine builds its own sinks from the consumer switches.
+// The memory store is always on (03-architecture §8); `memoryStore` substitutes its instance so a
+// test can record it; `sinks` are host-adapter sinks, written after it. falkor (U5), inspect (U2b)
+// and vscode (U3) are SEATs that connect() refuses before opening anything.
 
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -14,7 +18,13 @@ import { storeErrorCode } from '@cpg/store';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EngineSink } from './engine';
 import { createEngine } from './engine';
-import type { IndexProgress, IndexReport, IndexRequest, StoreTarget } from './port';
+import type {
+  ConsumerSwitches,
+  IndexProgress,
+  IndexReport,
+  IndexRequest,
+  StoreTarget,
+} from './port';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -40,6 +50,24 @@ const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex
 const keys = (rows: readonly NodeRow[]): string[] =>
   rows.map((n) => `${n.label} ${n.key}`).toSorted();
 const TARGET: StoreTarget = { host: 'localhost', port: 6382, graph: 'cpg' };
+const HEADLESS: ConsumerSwitches = { inspect: false, store: 'memory', vscode: false };
+
+interface EngineOptions {
+  /** Substitutes the built-in memory store's instance. */
+  readonly memory?: EngineSink | undefined;
+  /** Host-adapter sinks. */
+  readonly sinks?: readonly EngineSink[];
+  readonly consumers?: Partial<ConsumerSwitches>;
+  readonly version?: string;
+}
+const engineWith = (o: EngineOptions = {}) =>
+  createEngine(
+    { version: o.version ?? '0', consumers: { ...HEADLESS, ...o.consumers } },
+    {
+      ...(o.memory !== undefined && { memoryStore: o.memory }),
+      ...(o.sinks !== undefined && { sinks: o.sinks }),
+    },
+  );
 
 interface Recorded {
   readonly sink: EngineSink;
@@ -85,10 +113,15 @@ function recording(id = 'memory', receipt?: Partial<WriteReceipt>, log: string[]
 
 async function index(
   root: string,
-  sinks: readonly EngineSink[],
-  o: { dryRun?: boolean; config?: Partial<IndexRequest['config']>; signal?: AbortSignal } = {},
+  memory: EngineSink | undefined,
+  o: {
+    dryRun?: boolean;
+    config?: Partial<IndexRequest['config']>;
+    signal?: AbortSignal;
+    sinks?: readonly EngineSink[];
+  } = {},
 ): Promise<{ report: IndexReport; progress: IndexProgress[] }> {
-  const engine = createEngine({ version: '1.2.3' }, { sinks });
+  const engine = engineWith({ memory, version: '1.2.3', ...(o.sinks && { sinks: o.sinks }) });
   const session = o.dryRun === true ? null : await engine.connect(TARGET, { readOnly: false });
   const progress: IndexProgress[] = [];
   const report = await engine.index(
@@ -104,7 +137,7 @@ const i20 = (w: IndexReport['walk']): number =>
 
 describe('createEngine', () => {
   it('identity names the engine, the front door version and the registry languages', () => {
-    const engine = createEngine({ version: '4.5.6' }, { sinks: [] });
+    const engine = engineWith({ version: '4.5.6' });
     expect(engine.identity).toEqual({
       name: '@cpg/engine',
       version: '4.5.6',
@@ -112,10 +145,11 @@ describe('createEngine', () => {
     });
   });
 
-  it('connect opens every sink and the session closes them', async () => {
-    const a = recording('a');
-    const b = recording('b');
-    const engine = createEngine({ version: '0' }, { sinks: [a.sink, b.sink] });
+  it('connect opens every sink (built-in, then host) and the session closes them', async () => {
+    const log: string[] = [];
+    const a = recording('memory', undefined, log);
+    const b = recording('b', undefined, log);
+    const engine = engineWith({ memory: a.sink, sinks: [b.sink] });
     const session = await engine.connect(TARGET, { readOnly: false });
     expect(session.target).toEqual(TARGET);
     expect(await a.memory.stats()).toEqual({
@@ -124,6 +158,7 @@ describe('createEngine', () => {
       beyondMeasuredScale: false,
     });
     await b.memory.stats();
+    expect(log).toEqual(['memory.open', 'b.open']);
     await session.close();
     for (const m of [a.memory, b.memory])
       expect(await m.stats().then(String, storeErrorCode)).toBe('STORE_NOT_OPEN');
@@ -131,7 +166,7 @@ describe('createEngine', () => {
 
   it('schema() is CPG_SCHEMA itself, with no sink opened (U2a.4: what cpg schema prints and checks)', async () => {
     const a = recording('a');
-    const engine = createEngine({ version: '0' }, { sinks: [a.sink] });
+    const engine = engineWith({ memory: a.sink });
     expect(engine.schema()).toBe(CPG_SCHEMA);
     expect(await a.memory.stats().then(String, storeErrorCode)).toBe('STORE_NOT_OPEN');
   });
@@ -142,7 +177,7 @@ describe('index --dry-run (session null): NullGraphStore, no store', () => {
     const files = { 'a.ts': 'export const a = 1;\n', 'b.py': 'b = 2\n' };
     const root = await tree(files);
     const r = recording();
-    const { report } = await index(root, [r.sink], { dryRun: true });
+    const { report } = await index(root, r.sink, { dryRun: true });
 
     expect(report).toMatchObject({
       root,
@@ -177,7 +212,7 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
     const files = { 'a.ts': 'export {};\n', 'n.txt': 'n', 'src/b.py': 'x = 1\n' };
     const root = await tree(files);
     const r = recording('memory', { nodesWritten: 41, edgesWritten: 17 });
-    const { report } = await index(root, [r.sink]);
+    const { report } = await index(root, r.sink);
 
     expect(r.calls).toEqual(['memory.open', 'memory.write:start', 'memory.write:end']);
     expect(r.ops).toHaveLength(1);
@@ -218,7 +253,8 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
       edgesWritten: 17,
       dryRun: false,
       interrupted: false,
-      target: TARGET,
+      // the memory store dials no target (decision 139: naming 127.0.0.1:6382 would mislead)
+      target: null,
       consumers: ['memory'],
     });
   });
@@ -226,7 +262,7 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
   it('the write lands in MemoryStore: languages from the @cpg/parse registry', async () => {
     const root = await tree({ 'a.ts': '', 'b.tsx': '', 'c.mjs': '', 'd.py': '', 'e.txt': '' });
     const memory = createMemoryStore();
-    const { report } = await index(root, [memory]);
+    const { report } = await index(root, memory);
     expect(await memory.stats()).toMatchObject({ nodeCount: 6, edgeCount: 5 });
     expect(await memory.nodeKeys('DIRECTORY')).toEqual(['.']);
     const language = async (p: string) =>
@@ -242,22 +278,27 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
     expect(report.files.map((f) => f.path)).toEqual(['a.ts', 'b.tsx', 'c.mjs', 'd.py']);
   });
 
-  it('writes to every sink, strictly one after another, and lists them as consumers in order', async () => {
+  it('writes the built-in store, then each host sink, strictly one after another, and lists them in order', async () => {
     const log: string[] = [];
-    const a = recording('a', undefined, log);
+    const a = recording('memory', undefined, log);
     const b = recording('b', undefined, log);
+    const c = recording('c', undefined, log);
     const root = await tree({ 'm.py': '' });
-    const { report } = await index(root, [a.sink, b.sink]);
+    const { report } = await index(root, a.sink, { sinks: [b.sink, c.sink] });
     expect(log).toEqual([
-      'a.open',
+      'memory.open',
       'b.open',
-      'a.write:start',
-      'a.write:end',
+      'c.open',
+      'memory.write:start',
+      'memory.write:end',
       'b.write:start',
       'b.write:end',
+      'c.write:start',
+      'c.write:end',
     ]);
     expect(a.ops).toEqual(b.ops);
-    expect(report.consumers).toEqual(['a', 'b']);
+    expect(b.ops).toEqual(c.ops);
+    expect(report.consumers).toEqual(['memory', 'b', 'c']);
     // the root DIRECTORY and m.py, one HAS_ENTRY: one write's receipt, not the sum over sinks
     expect(report).toMatchObject({ nodesWritten: 2, edgesWritten: 1 });
   });
@@ -266,7 +307,7 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
 describe('IndexReport', () => {
   it('files are sorted by path (UTF-16 code units), not in walk order', async () => {
     const root = await tree({ 'b/x.ts': '', 'b.ts': '', 'a.py': '', 'B.py': '' });
-    const { report } = await index(root, [], { dryRun: true });
+    const { report } = await index(root, undefined, { dryRun: true });
     expect(report.files.map((f) => f.path)).toEqual(['B.py', 'a.py', 'b.ts', 'b/x.ts']);
   });
 
@@ -284,7 +325,7 @@ describe('IndexReport', () => {
       await chmod(join(root, 'locked.py'), 0o000);
       const r = recording();
       try {
-        const { report } = await index(root, [r.sink], { config: { maxFileSizeBytes: 10 } });
+        const { report } = await index(root, r.sink, { config: { maxFileSizeBytes: 10 } });
         expect(report.walk).toEqual({
           filesSeen: 5,
           filesIndexed: 1,
@@ -320,7 +361,7 @@ describe('IndexReport', () => {
       'src/skip.ts': '',
       'top.py': '',
     });
-    const { report } = await index(root, [], {
+    const { report } = await index(root, undefined, {
       dryRun: true,
       config: { include: ['**/*.ts'], exclude: ['**/skip.ts'], maxFileSizeBytes: 5 },
     });
@@ -334,12 +375,12 @@ describe('IndexReport', () => {
   });
 
   it('warns that the code tier is a SEAT on every run, and when no file was indexed', async () => {
-    const some = await index(await tree({ 'a.py': '' }), [], { dryRun: true });
+    const some = await index(await tree({ 'a.py': '' }), undefined, { dryRun: true });
     expect(some.report.warnings).toHaveLength(1);
     expect(some.report.warnings[0]).toMatch(/code tier.*U6a/);
 
     const none = await tree({ 'notes.txt': '' });
-    const { report } = await index(none, [], { dryRun: true });
+    const { report } = await index(none, undefined, { dryRun: true });
     expect(report.walk.filesIndexed).toBe(0);
     expect(report.warnings).toHaveLength(2);
     expect(report.warnings.some((w) => /code tier.*U6a/.test(w))).toBe(true);
@@ -350,7 +391,7 @@ describe('IndexReport', () => {
 
   it('reports progress after the walk and after the write', async () => {
     const root = await tree({ 'a.py': '', 'n.txt': '' });
-    const { progress } = await index(root, [], { dryRun: true });
+    const { progress } = await index(root, undefined, { dryRun: true });
     expect(progress).toEqual([
       { phase: 'walked', filesTotal: 2 },
       { phase: 'written', filesTotal: 2 },
@@ -358,7 +399,7 @@ describe('IndexReport', () => {
 
     const log: string[] = [];
     const r = recording('memory', undefined, log);
-    const engine = createEngine({ version: '0' }, { sinks: [r.sink] });
+    const engine = engineWith({ memory: r.sink });
     const session = await engine.connect(TARGET, { readOnly: false });
     await engine.index(
       { config: { root }, session, resumeFrom: null },
@@ -379,7 +420,7 @@ describe('interruption and resume', () => {
   it('an aborted signal writes nothing and reports interrupted', async () => {
     const root = await tree({ 'a.py': '', 'b.py': '' });
     const r = recording();
-    const { report, progress } = await index(root, [r.sink], { signal: AbortSignal.abort() });
+    const { report, progress } = await index(root, r.sink, { signal: AbortSignal.abort() });
     expect(r.ops).toEqual([]);
     expect(report).toMatchObject({
       interrupted: true,
@@ -394,7 +435,7 @@ describe('interruption and resume', () => {
   it('a signal that fires after the walk, before the write, still writes nothing', async () => {
     const root = await tree({ 'a.py': '' });
     const r = recording();
-    const engine = createEngine({ version: '0' }, { sinks: [r.sink] });
+    const engine = engineWith({ memory: r.sink });
     const session = await engine.connect(TARGET, { readOnly: false });
     const controller = new AbortController();
     const report = await engine.index(
@@ -417,12 +458,100 @@ describe('interruption and resume', () => {
   it('a non-null resumeFrom is refused: v1 index is not resumable', async () => {
     const root = await tree({ 'a.py': '' });
     const r = recording();
-    const engine = createEngine({ version: '0' }, { sinks: [r.sink] });
+    const engine = engineWith({ memory: r.sink });
     const session = await engine.connect(TARGET, { readOnly: false });
     const req: IndexRequest = { config: { root }, session, resumeFrom: [] };
     await expect(engine.index(req, () => {}, new AbortController().signal)).rejects.toThrow(
       /resum/i,
     );
     expect(r.ops).toEqual([]);
+  });
+});
+
+describe('createEngine builds its sinks from the consumer switches (owner decision 5a)', () => {
+  it('with no deps, a session index writes the engine-built memory store: consumers [memory]', async () => {
+    const root = await tree({ 'a.ts': 'export const a = 1;\n', 'b.py': 'b = 2\n' });
+    const engine = createEngine({ version: '0', consumers: HEADLESS });
+    const session = await engine.connect(TARGET, { readOnly: false });
+    const report = await engine.index(
+      { config: { root }, session, resumeFrom: null },
+      () => {},
+      new AbortController().signal,
+    );
+    await session.close();
+    // the root DIRECTORY and two FILEs, two HAS_ENTRY: the memory store's own receipt
+    expect(report).toMatchObject({
+      nodesWritten: 3,
+      edgesWritten: 2,
+      dryRun: false,
+      target: null,
+      consumers: ['memory'],
+    });
+  });
+
+  it('builds a new memory store per engine: nothing is shared between two engines', async () => {
+    const root = await tree({ 'a.ts': '' });
+    const first = createEngine({ version: '0', consumers: HEADLESS });
+    const second = createEngine({ version: '0', consumers: HEADLESS });
+    const s1 = await first.connect(TARGET, { readOnly: false });
+    await first.index(
+      { config: { root }, session: s1, resumeFrom: null },
+      () => {},
+      AbortSignal.timeout(60_000),
+    );
+    await s1.close();
+    const s2 = await second.connect(TARGET, { readOnly: true });
+    const report = await second.verify(s2, { root }, null);
+    await s2.close();
+    expect(report.checks.find((c) => c.id === 'filesystem-reconciliation')).toMatchObject({
+      state: 'fail',
+      observed: 0,
+      expected: 1,
+    });
+  });
+
+  it.each([
+    ['store falkor', { store: 'falkor' }, /consumers\.store falkor.*FalkorStore.*U5/],
+    ['inspect', { inspect: true }, /consumers\.inspect.*inspector.*U2b/],
+    ['vscode', { vscode: true }, /consumers\.vscode.*VS Code panel.*U3/],
+  ] as const)(
+    '%s: connect refuses with a labelled SEAT and opens no sink',
+    async (_name, consumers, message) => {
+      const log: string[] = [];
+      const memory = recording('memory', undefined, log);
+      const host = recording('host', undefined, log);
+      const engine = engineWith({ memory: memory.sink, sinks: [host.sink], consumers });
+      await expect(engine.connect(TARGET, { readOnly: false })).rejects.toThrow(/^SEAT: /);
+      await expect(engine.connect(TARGET, { readOnly: false })).rejects.toThrow(message);
+      expect(log).toEqual([]);
+    },
+  );
+
+  it('every switch that is not built is named in one refusal', async () => {
+    const engine = engineWith({ consumers: { store: 'falkor', inspect: true, vscode: true } });
+    const refusal = await engine.connect(TARGET, { readOnly: true }).then(
+      () => '',
+      (e: unknown) => String(e),
+    );
+    for (const key of ['consumers.store', 'consumers.inspect', 'consumers.vscode'])
+      expect(refusal).toContain(key);
+  });
+
+  it('a dry run opens no sink, so it runs under any switches and reports no consumer', async () => {
+    const root = await tree({ 'a.ts': '' });
+    const log: string[] = [];
+    const memory = recording('memory', undefined, log);
+    const engine = engineWith({
+      memory: memory.sink,
+      consumers: { store: 'falkor', inspect: true, vscode: true },
+    });
+    const report = await engine.index(
+      { config: { root }, session: null, resumeFrom: null },
+      () => {},
+      new AbortController().signal,
+    );
+    expect(report).toMatchObject({ dryRun: true, consumers: [], target: null });
+    expect(report.walk.filesIndexed).toBe(1);
+    expect(log).toEqual([]);
   });
 });
