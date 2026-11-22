@@ -132,6 +132,24 @@
       ],
       "outputs": ["apps/cli/dist/**"]
     },
+    "//#check:purity": {
+      // Requires the built bin in-process under a Module._load trap (U2c.3). After check:cli-bin,
+      // which builds apps/cli, so dist is current and no two tsc -b race; the --plant run writes
+      // only to packages/engine/out, which no task outputs and every tool ignores.
+      "dependsOn": ["//#check:cli-bin"],
+      "inputs": [
+        "apps/cli/**",
+        "packages/*/src/**",
+        "packages/*/package.json",
+        "packages/*/tsconfig*.json",
+        "tsconfig.base.json",
+        "tools/purity-proof.mjs",
+        "fixtures/ladder/**",
+        "!apps/cli/dist/**",
+        "!**/.tsbuildinfo"
+      ],
+      "outputs": []
+    },
     "//#typecheck:tests": {
       // tsc over every test file and the sources they import; no outputs (noEmit).
       "inputs": [
