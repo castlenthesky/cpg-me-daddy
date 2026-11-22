@@ -43,8 +43,9 @@ const SKIP = new Set(['node_modules', 'dist', 'out', '.git', '.vscode-test', '.d
 // Every way a module specifier is written: `... from 'x'` (import, import type, export {..} from,
 // export * from; `from` may sit on a later line than `import`/`export`, and `\s` spans newlines),
 // a bare side-effect `import 'x'`, `require('x')` and dynamic `import('x')`. Applied to the whole
-// file (not line by line) so a specifier on a line of its own is still seen.
-const SPEC = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"\n]+)['"]/g;
+// file (not line by line) so a specifier on a line of its own is still seen. A keyword right after
+// a quote is a quoted word in a string, never syntax: `declared 'from' set [${x}]` is not an import.
+const SPEC = /(?<![\w'"`])(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"]([^'"\n]+)['"]/g;
 const DOM_GLOBAL = /\b(?:window|document|navigator)\s*\.|\b(?:HTMLElement|customElements)\b/;
 
 const HOST_SDKS = ['vscode', '@modelcontextprotocol/'];

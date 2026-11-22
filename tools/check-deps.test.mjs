@@ -43,6 +43,17 @@ describe('check-deps passes a clean two-tier tree', () => {
     expect(status).toBe(0);
   });
 
+  it('does not read a quoted keyword inside a string as an import', () => {
+    const { status, out } = run({
+      ...CLEAN,
+      'packages/model/src/messages.ts':
+        "export const a = (xs: string[]) => `declared 'from' set [${xs.join(', ')}]`;\n" +
+        "export const b = \"the 'import' and 'require' keywords\";\n",
+    });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
   it('lets packages/engine know more than one sibling', () => {
     const { status } = run({
       ...CLEAN,
