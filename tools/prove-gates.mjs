@@ -251,6 +251,12 @@ const CASES = [
   // rule and specifier form is planted on fixtures in tools/check-deps.test.mjs; the case after
   // these proves `bun run test` runs that file.
   depsCase(
+    'check:deps rejects a value import in a seam contract.ts (contract-types-only)',
+    'packages/resolve/src/__gate_probe/contract.ts',
+    "import { WORKSPACE_ROOT } from '@cpg/model';\nexport type R = typeof WORKSPACE_ROOT;\n",
+    /contract\.ts:1 +\[contract-types-only\]/,
+  ),
+  depsCase(
     'check:deps rejects a vscode import in packages/model (host-sdk)',
     'packages/model/src/__gate_probe.ts',
     "import * as vscode from 'vscode';\nexport const probe = vscode;\n",

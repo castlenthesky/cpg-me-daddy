@@ -20,6 +20,12 @@
     "packages/model": {
       "project": ["src/**/*.ts"]
     },
+    "packages/resolve": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/watch": {
+      "project": ["src/**/*.ts"]
+    },
     "apps/cli": {
       "project": ["src/**/*.ts"]
     }

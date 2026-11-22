@@ -12,5 +12,10 @@
   ],
   "scripts": {
     "build": "tsc -b"
+  },
+  "devDependencies": {
+    "@cpg/model": "*",
+    "@cpg/resolve": "*",
+    "@cpg/watch": "*"
   }
 }

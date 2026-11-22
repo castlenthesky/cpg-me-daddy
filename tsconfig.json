@@ -1,5 +1,11 @@
 {
   // Solution-style: builds nothing itself, so `tsc -b` builds each project into its own dist/.
   "files": [],
-  "references": [{ "path": "packages/model" }, { "path": "apps/vscode" }, { "path": "apps/cli" }]
+  "references": [
+    { "path": "packages/model" },
+    { "path": "packages/resolve" },
+    { "path": "packages/watch" },
+    { "path": "apps/vscode" },
+    { "path": "apps/cli" }
+  ]
 }

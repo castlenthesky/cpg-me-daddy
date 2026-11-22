@@ -133,6 +133,7 @@ milestones:
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
   - id: U1
     name: Vocabulary and seams as data
+    status: done (2026-11-22) — landed via PRs #26, #27, #30, #31, #32, #33, #34, #35, #36 (the C-SINK/MemoryStore gate item moved to U2 on 2026-11-21)
     goal: "The schema registry lives in @cpg/model as data under CI; the model carries revision_id and the seq envelope with an owner-discriminated merge; the resolver and watch seam TYPES exist; contracts agree with each other by compilation."
     why_here: "Everything downstream speaks this vocabulary; the id scheme and path form are the most expensive things to change after the first persisted write (C-WATCH/C-EXTRACT reversal tables). L-22 says order by time-to-first-judgement, and this unit has a human artifact of its own: the regenerated schema table."
     delivers:
@@ -166,6 +167,7 @@ milestones:
         stories:
           - id: U1.1.1
             title: Port nodes/edges/enums/types/schema/validate into packages/model/src/schema
+            delivered: "#26, #27"
             epic: E-SCHEMA
             acceptance:
               - "the six files compile under strict; NODE_LABELS has 14 entries, EDGE_TYPES 15 (incl. SOURCE_FILE); CPG_SCHEMA.version === 3"
@@ -179,6 +181,7 @@ milestones:
             decisions: [DQ-01, ND-5, P-C]
           - id: U1.1.2
             title: The schema generator and the drift check
+            delivered: "#34"
             epic: E-SCHEMA
             acceptance:
               - "`bun run schema:doc` regenerates the BEGIN/END GENERATED region of docs/outline/04-schema.yaml from CPG_SCHEMA; `--check` exits 1 on drift; CI runs --check"
@@ -186,6 +189,7 @@ milestones:
             port_from: ["f18ee71:tools/schema-doc.ts"]
           - id: U1.1.3
             title: Statement-level identity non-foreclosure test
+            delivered: "#31"
             epic: E-SCHEMA
             acceptance:
               - "a test mints a synthetic statement-level id using the :ordinal slot (e.g. file:x.py:STMT:main:3), round-trips it through makeNodeId/parse, and asserts stability under an unrelated insertion above"
@@ -196,6 +200,7 @@ milestones:
         stories:
           - id: U1.2.1
             title: revision_id on nodes, the seq envelope, and the owner-discriminated merge
+            delivered: "#32, #33"
             epic: E-FRESH
             acceptance:
               - "GraphDelta is { seq, file, revision_id, producer: 'filesystem' | 'code', addedNodes, addedEdges, removedNodeIds }; GraphPayload carries seq; no composeDeltas, no edgeId, no removedEdgeIds exist"
@@ -207,6 +212,7 @@ milestones:
             lessons: [L-01, L-08]
           - id: U1.2.2
             title: WorkspacePath and AbsolutePath types with the two adapters named
+            delivered: "#30"
             epic: E-FRESH
             acceptance:
               - "branded types exported from @cpg/model; toWorkspacePath(root, absolute) uses startsWith + slice and throws 'path escapes root'; toAbsolutePath exists only for FilesystemProbe and SourceOpener call sites (documented, and check-deps later verifies the import sites)"
@@ -217,6 +223,7 @@ milestones:
         stories:
           - id: U1.3.1
             title: Port the resolver seam types and the watch layer-A types
+            delivered: "#36"
             epic: E-RESOLVE
             acceptance:
               - "packages/resolve/src/contract.ts is the 218-line resolve.ts with C-RESOLVE's five amendments (ResolveBatch, capabilities, status(), ResolveContext, +5 reasons) — types only, zero imports; packages/watch/src/contract.ts is C-WATCH layer A"
@@ -224,12 +231,14 @@ milestones:
             port_from: ["21754b4:packages/cpg-generator/src/resolve.ts"]
           - id: U1.3.2
             title: contracts-agree.test.ts
+            delivered: "#36"
             epic: E-GATE
             acceptance:
               - "one compile-time file asserts mutual assignability across shared types: RefSite (extract vs resolve), Resolution/EdgeResolution, GraphDelta (model vs sink), NormalizedChange (watch vs cli), CheckResult (cli vs ext), WorkspacePath everywhere; @ts-expect-error negative cases included"
             resolves: [CS-12]
           - id: U1.3.3
             title: Reserve EVAL_TYPE and set the golden policy
+            delivered: "#35"
             epic: E-SCHEMA
             acceptance:
               - "reserved_edges in the schema module lists EVAL_TYPE with producer: none-yet, admitted_at: U8; a test asserts no emitter exists; CALLS.resolvedBy and CALLS.confidence are golden: exclude"

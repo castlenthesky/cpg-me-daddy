@@ -33,6 +33,11 @@
       "bin": {
         "cpg": "./dist/main.js",
       },
+      "devDependencies": {
+        "@cpg/model": "*",
+        "@cpg/resolve": "*",
+        "@cpg/watch": "*",
+      },
     },
     "apps/vscode": {
       "name": "@cpg/vscode-host",
@@ -44,6 +49,20 @@
     "packages/model": {
       "name": "@cpg/model",
       "version": "0.0.1",
+    },
+    "packages/resolve": {
+      "name": "@cpg/resolve",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
+      },
+    },
+    "packages/watch": {
+      "name": "@cpg/watch",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
+      },
     },
   },
   "packages": {
@@ -161,7 +180,11 @@
 
     "@cpg/model": ["@cpg/model@workspace:packages/model"],
 
+    "@cpg/resolve": ["@cpg/resolve@workspace:packages/resolve"],
+
     "@cpg/vscode-host": ["@cpg/vscode-host@workspace:apps/vscode"],
+
+    "@cpg/watch": ["@cpg/watch@workspace:packages/watch"],
 
     "@emnapi/core": ["@emnapi/core@1.11.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA=="],
 

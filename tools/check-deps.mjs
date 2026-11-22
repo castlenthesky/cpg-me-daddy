@@ -31,10 +31,17 @@
 //     allowed to know more than one sibling (L-26, L-28).
 //
 //  6. NO NUL BYTES IN SOURCE (see the comment at the check).
+//
+//  7. SEAM CONTRACTS IMPORT TYPES ONLY. Every packages/**/contract.ts may import only through
+//     statement-level `import type` / `export type ... from` of an allowlisted package
+//     (CONTRACT_IMPORTS, kept here rather than in the package for the same reason as rule 2). The
+//     inline `{ type X }` form is rejected: only the statement-level form is erased under every TS
+//     setting. This rule limits IMPORTS only: a runtime EXPORT from contract.ts or index.ts is caught
+//     by each seam package's src/index.test.ts (Object.keys of the namespace is []), not here.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { builtinModules } from 'node:module';
-import { join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 
 const ROOT = process.argv[2]
   ? resolve(process.argv[2])
@@ -55,6 +62,29 @@ const APP_SDKS = {
   cli: [],
   inspector: [],
 };
+
+// Rule 7's allowlist, per package; '*' is the default.
+const CONTRACT_IMPORTS = { '*': ['@cpg/model'] };
+
+// Rule 7: split a contract.ts into its statement-level type-only imports and everything else.
+// A type-only statement matches the import-clause GRAMMAR, never "anything up to from" (which would
+// run across a semicolon-less statement boundary and swallow a following value import):
+//   import type { A, B } from 'x' | import type * as N from 'x' | import type D from 'x'
+//   export type { A } from 'x'    | export type * from 'x'       | export type * as N from 'x'
+// typeSpecs: the specifier of each such statement, with its 1-based line.
+// rest: the source with each such statement blanked out, newlines kept so line numbers still agree;
+// any SPEC match left in it is a runtime load (value import, side-effect import, require, import()).
+const TYPE_ONLY_STMT =
+  /^[ \t]*(?:import|export)\s+type\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\}|\w+(?:\s*,\s*\{[^}]*\})?)\s+from\s*['"]([^'"\n]+)['"][ \t]*;?/gm;
+// REAL.
+function splitTypeOnly(source) {
+  const typeSpecs = [];
+  const rest = source.replace(TYPE_ONLY_STMT, (stmt, spec, offset) => {
+    typeSpecs.push({ spec, line: source.slice(0, offset).split('\n').length });
+    return stmt.replace(/[^\n]/g, ' ');
+  });
+  return { typeSpecs, rest };
+}
 
 // 'x/' matches any subpath of a scope; 'x' matches x itself and x/anything.
 function matches(spec, entry) {
@@ -125,6 +155,27 @@ for (const file of files) {
         );
       }
     });
+  }
+
+  // Rule 7: SEAM CONTRACTS IMPORT TYPES ONLY.
+  if (!isApp && basename(file) === 'contract.ts') {
+    const allowed = CONTRACT_IMPORTS[pkg] ?? CONTRACT_IMPORTS['*'];
+    const { typeSpecs, rest } = splitTypeOnly(source);
+    for (const { spec, line: at } of typeSpecs)
+      if (!allowed.includes(spec))
+        flag(
+          file,
+          at,
+          'contract-types-only',
+          `${pkg} contract.ts imports "${spec}"; allowed: ${allowed.join(', ')}`,
+        );
+    for (const { spec, line: at } of specifiers(rest))
+      flag(
+        file,
+        at,
+        'contract-types-only',
+        `${pkg} contract.ts loads "${spec}" at runtime; only \`import type\` is allowed`,
+      );
   }
 
   for (const { spec, line: at } of specifiers(source)) {

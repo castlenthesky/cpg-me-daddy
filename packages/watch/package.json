@@ -1,0 +1,18 @@
+{
+  "name": "@cpg/watch",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The C-WATCH seam: types only until layer B and the backends land (U4).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@cpg/model": "*"
+  }
+}
