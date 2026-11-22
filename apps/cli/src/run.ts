@@ -3,7 +3,14 @@
 
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import type { CpgEngine, IndexProgress, StoreTarget } from '@cpg/engine';
+import type {
+  CheckResult,
+  CpgEngine,
+  EngineSession,
+  IndexProgress,
+  StoreTarget,
+  VerifyReport,
+} from '@cpg/engine';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -16,6 +23,7 @@ export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
   | { kind: 'not-built'; verb: string; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
+  | { kind: 'verification'; failures: readonly CheckResult[] }
   | { kind: 'interrupted'; committed: number; pending: number };
 
 // Total (the compiler rejects a kind with no row); the ONLY exit-code decision site.
@@ -23,6 +31,7 @@ const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   usage: EXIT.USAGE,
   'not-built': EXIT.USAGE,
   'engine-unavailable': EXIT.FAILED,
+  verification: EXIT.VERIFY_FAILED,
   interrupted: EXIT.INTERRUPTED,
 };
 export const exitCodeFor = (error: CliError): ExitCode => EXIT_FOR[error.kind];
@@ -48,6 +57,8 @@ export async function run(argv: readonly string[], io: Io, opts: RunOptions): Pr
     if (!(e instanceof Fail)) throw e;
     const { error } = e;
     if (error.kind === 'interrupted') io.err('cpg: interrupted');
+    else if (error.kind === 'verification')
+      io.err(`cpg: verify failed: ${error.failures.map((f) => f.id).join(', ')}`);
     else io.err(`cpg: ${error.message}`);
     if (error.kind === 'usage')
       io.err(error.verb ? `run 'cpg ${error.verb} --help'` : renderUsage());
@@ -85,17 +96,99 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   if (spec.verb === 'index' && values['dry-run'] === true) {
     return runIndexDryRun(opts.engine, values, positionals, io, opts);
   }
+  if (spec.verb === 'verify' && target) {
+    return runVerify(opts.engine, target, values, positionals, io, opts);
+  }
   if (target) {
-    const session = await opts.engine
-      .connect(target, { readOnly: spec.session === 'read' })
-      .catch((e: unknown) => {
-        const endpoint = `${target.host}:${target.port}/${target.graph}`;
-        const message = `cannot reach the graph store at ${endpoint}: ${String(e)}`;
-        throw new Fail({ kind: 'engine-unavailable', endpoint, message });
-      });
+    const session = await connectStore(opts.engine, target, spec.session === 'read');
     await session.close();
   }
   throw seat;
+}
+
+function resolveWorkspaceRoot(
+  verb: string,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): string {
+  const workspace = typeof values['workspace'] === 'string' ? values['workspace'] : undefined;
+  const raw = workspace ?? positionals[0] ?? io.env['CPG_WORKSPACE'] ?? opts.cwd;
+  if (raw === undefined) {
+    throw new Fail({
+      kind: 'usage',
+      verb,
+      message: 'no workspace root: pass --workspace or a root',
+    });
+  }
+  return opts.cwd !== undefined ? resolve(opts.cwd, raw) : raw;
+}
+
+async function connectStore(
+  engine: CpgEngine,
+  target: StoreTarget,
+  readOnly: boolean,
+): Promise<EngineSession> {
+  return engine.connect(target, { readOnly }).catch((e: unknown) => {
+    const endpoint = `${target.host}:${target.port}/${target.graph}`;
+    const message = `cannot reach the graph store at ${endpoint}: ${String(e)}`;
+    throw new Fail({ kind: 'engine-unavailable', endpoint, message });
+  });
+}
+
+function formatDocument(kind: string, body: unknown, io: Io, manifest: Manifest): string {
+  return JSON.stringify({
+    v: 1,
+    kind,
+    tool: `${manifest.bin}@${manifest.version}`,
+    producedAt: new Date(io.now()).toISOString(),
+    body,
+  });
+}
+
+async function runVerify(
+  engine: CpgEngine,
+  target: StoreTarget,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): Promise<ExitCode> {
+  // REAL
+  const root = resolveWorkspaceRoot('verify', values, positionals, io, opts);
+  const session = await connectStore(engine, target, true);
+  let report: VerifyReport;
+  try {
+    report = await engine.verify(session, { root, strict: values['strict'] === true }, null);
+  } finally {
+    await session.close();
+  }
+
+  if (values['format'] === 'json') {
+    io.out(formatDocument('cpg.verify.report', report, io, opts.manifest));
+  } else {
+    io.out(`verify ${report.state}`);
+    for (const check of report.checks) {
+      const where = check.localisedTo.length > 0 ? ` at ${check.localisedTo.join(', ')}` : '';
+      io.out(
+        `${check.id} ${check.state} observed=${check.observed} expected=${check.expected}${where}`,
+      );
+    }
+  }
+
+  io.err(
+    `cpg: verify ${report.state} in ${Math.round(report.durationMs)} ms; consumers: ${report.consumers.join(', ') || 'none'}`,
+  );
+
+  if (report.state === 'fail') {
+    throw new Fail({
+      kind: 'verification',
+      failures: report.checks.filter((c) => c.state === 'fail'),
+    });
+  }
+
+  return EXIT.OK;
 }
 
 async function runIndexDryRun(
@@ -105,16 +198,7 @@ async function runIndexDryRun(
   io: Io,
   opts: RunOptions,
 ): Promise<ExitCode> {
-  const workspace = typeof values['workspace'] === 'string' ? values['workspace'] : undefined;
-  const raw = workspace ?? positionals[0] ?? io.env['CPG_WORKSPACE'] ?? opts.cwd;
-  if (raw === undefined) {
-    throw new Fail({
-      kind: 'usage',
-      verb: 'index',
-      message: 'no workspace root: pass --workspace or a root',
-    });
-  }
-  const root = opts.cwd !== undefined ? resolve(opts.cwd, raw) : raw;
+  const root = resolveWorkspaceRoot('index', values, positionals, io, opts);
   const quiet = values['quiet'] === true;
   const onProgress = (p: IndexProgress): void => {
     if (!quiet) io.status(`index: ${p.phase} ${p.filesTotal} files`);
@@ -126,15 +210,7 @@ async function runIndexDryRun(
   );
 
   if (values['format'] === 'json') {
-    io.out(
-      JSON.stringify({
-        v: 1,
-        kind: 'cpg.index.report',
-        tool: `${opts.manifest.bin}@${opts.manifest.version}`,
-        producedAt: new Date(io.now()).toISOString(),
-        body: report,
-      }),
-    );
+    io.out(formatDocument('cpg.index.report', report, io, opts.manifest));
   } else {
     const { walk } = report;
     io.out(`root ${report.root}`);

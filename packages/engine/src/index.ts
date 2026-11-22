@@ -13,4 +13,5 @@ export { filesystemTier } from './walker/filesystem-tier';
 export type { FilesystemTier } from './walker/filesystem-tier';
 export { createEngine } from './engine';
 export type { EngineConfig, EngineDeps, EngineSink } from './engine';
+export { worstState } from './verify';
 export type * from './port';

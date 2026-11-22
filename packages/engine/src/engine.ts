@@ -15,7 +15,10 @@ import type {
   IndexRequest,
   IndexWalk,
   StoreTarget,
+  VerifyConfig,
+  VerifyReport,
 } from './port';
+import { verifyStore } from './verify';
 import { filesystemTier, type FilesystemTier } from './walker/filesystem-tier';
 import { walkWorkspace } from './walker/walker';
 
@@ -209,6 +212,24 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
         target: req.session?.target ?? null,
         consumers: req.session === null ? [] : deps.sinks.map((s) => s.id),
       };
+    },
+
+    async verify(
+      _session: EngineSession,
+      verifyConfig: VerifyConfig,
+      expected: IndexReport | null,
+    ): Promise<VerifyReport> {
+      // REAL; SEAT: _session is unused because dialling a target is U5 — every session reaches
+      // deps.sinks.
+      if (expected !== null) {
+        throw new Error(
+          'SEAT: verify against an expected IndexReport lands with its first caller (C-CLI Q9)',
+        );
+      }
+      if (deps.sinks.length > 1) {
+        throw new Error('SEAT: verify over more than one store lands with FalkorStore (U5)');
+      }
+      return verifyStore(deps.sinks[0], verifyConfig, languageOf);
     },
   };
 }
