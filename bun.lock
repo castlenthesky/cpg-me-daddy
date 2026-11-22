@@ -37,10 +37,10 @@
       },
       "dependencies": {
         "@cpg/engine": "*",
+        "@cpg/model": "*",
         "@cpg/sink": "*",
       },
       "devDependencies": {
-        "@cpg/model": "*",
         "@cpg/resolve": "*",
         "@cpg/watch": "*",
       },

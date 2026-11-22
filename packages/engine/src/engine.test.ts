@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isWorkspacePath, type WorkspacePath } from '@cpg/model';
+import { CPG_SCHEMA, isWorkspacePath, type WorkspacePath } from '@cpg/model';
 import { BUILTIN_LANGUAGES } from '@cpg/parse';
 import { createMemoryStore } from '@cpg/sink';
 import type { NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
@@ -127,6 +127,13 @@ describe('createEngine', () => {
     await session.close();
     for (const m of [a.memory, b.memory])
       expect(await m.stats().then(String, storeErrorCode)).toBe('STORE_NOT_OPEN');
+  });
+
+  it('schema() is CPG_SCHEMA itself, with no sink opened (U2a.4: what cpg schema prints and checks)', async () => {
+    const a = recording('a');
+    const engine = createEngine({ version: '0' }, { sinks: [a.sink] });
+    expect(engine.schema()).toBe(CPG_SCHEMA);
+    expect(await a.memory.stats().then(String, storeErrorCode)).toBe('STORE_NOT_OPEN');
   });
 });
 

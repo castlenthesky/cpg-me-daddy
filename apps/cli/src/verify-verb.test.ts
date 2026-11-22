@@ -198,6 +198,9 @@ function fakeEngine(state: CheckState = 'pass', reject = false) {
       calls.push({ session, config, expected });
       return reject ? Promise.reject(new Error('boom')) : Promise.resolve(REPORT(state));
     },
+    schema: () => {
+      throw new Error('fakeEngine.schema is not driven by these tests');
+    },
   };
   return { engine, connects, calls, sessions, closed: () => closed };
 }

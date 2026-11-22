@@ -89,6 +89,7 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   }
   // Every flag is validated before anything touches the engine (I-12).
   const target = storeTarget(spec, values);
+  if (spec.verb === 'schema') return runSchema(opts.engine, values, io, opts);
   // SEAT: no verb has a handler until the engine exists (U2a.2+). Until then every verb stops here.
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (!opts.engine) throw seat;
@@ -189,6 +190,16 @@ async function runVerify(
   }
 
   return EXIT.OK;
+}
+
+async function runSchema(
+  _engine: CpgEngine | undefined,
+  _values: Values,
+  _io: Io,
+  _opts: RunOptions,
+): Promise<ExitCode> {
+  // SEAT
+  throw new Error('SEAT: cpg schema lands with U2a.4');
 }
 
 async function runIndexDryRun(

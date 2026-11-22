@@ -59,6 +59,9 @@ function fakeEngine(report: IndexReport = REPORT) {
       return Promise.resolve(report);
     },
     verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
+    schema: () => {
+      throw new Error('fakeEngine.schema is not driven by these tests');
+    },
   };
   return { engine, requests, signals, connects: () => connects };
 }

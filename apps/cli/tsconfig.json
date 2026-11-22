@@ -8,5 +8,9 @@
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "../../packages/engine" }, { "path": "../../packages/sink" }]
+  "references": [
+    { "path": "../../packages/engine" },
+    { "path": "../../packages/model" },
+    { "path": "../../packages/sink" }
+  ]
 }

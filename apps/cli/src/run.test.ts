@@ -18,6 +18,10 @@ function fakeEngine(fail = false) {
     },
     index: () => Promise.reject(new Error('fakeEngine.index is not driven by these tests')),
     verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
+
+    schema: () => {
+      throw new Error('fakeEngine.schema is not driven by these tests');
+    },
   };
   return { engine, connects, closed: () => closed };
 }
@@ -92,9 +96,12 @@ describe('exit codes', () => {
   });
 
   it.each(COMMANDS.map((c) => c.verb))('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
-    // verify is built (U2a.3, verify-verb.test.ts): only without an engine is it still a SEAT.
-    for (const engine of verb === 'verify' ? [undefined] : [undefined, fakeEngine().engine]) {
-      const r = await cli([verb], engine ? { engine } : {});
+    // verify (U2a.3, verify-verb.test.ts) and schema (U2a.4, schema-verb.test.ts) are built: only
+    // without an engine are they still a SEAT. schema needs a mode flag to get that far.
+    const built = verb === 'verify' || verb === 'schema';
+    const argv = verb === 'schema' ? [verb, '--print'] : [verb];
+    for (const engine of built ? [undefined] : [undefined, fakeEngine().engine]) {
+      const r = await cli(argv, engine ? { engine } : {});
       expect(r).toEqual({ code: EXIT.USAGE, out: '', err: `cpg: '${verb}' is not built yet` });
     }
   });

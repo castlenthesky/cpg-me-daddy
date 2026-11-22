@@ -125,6 +125,8 @@
         "packages/*/src/**",
         "tsconfig.base.json",
         "tools/check-cli-bin.mjs",
+        // `cpg schema --check` runs on this repository's doc (U2a.4).
+        "docs/outline/04-schema.yaml",
         "!apps/cli/dist/**",
         "!**/.tsbuildinfo"
       ],
