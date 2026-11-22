@@ -38,10 +38,6 @@ function unavailableCheck(id: VerifyCheckId, asOfSeq: number, detail: string): C
   };
 }
 
-function noStoreCheck(id: VerifyCheckId, asOfSeq: number): CheckResult {
-  return unavailableCheck(id, asOfSeq, 'no store consumer is enabled');
-}
-
 function applyStrict(check: CheckResult, strict: boolean): CheckResult {
   if (!strict || check.state !== 'unavailable') return check;
   const suffix = '--strict counts unavailable as a failure';
@@ -210,44 +206,39 @@ export function worstState(states: readonly CheckState[]): CheckState {
   return worst;
 }
 
-/** Internal to @cpg/engine: runs verify's six read-only checks against one optional store. */
+/** Internal to @cpg/engine: runs verify's six read-only checks against one store. */
 export async function verifyStore(
-  store: StoreSink | undefined,
+  store: StoreSink,
   config: VerifyConfig,
   languageOf: (path: string) => string | undefined,
 ): Promise<VerifyReport> {
   // REAL
   const start = performance.now();
-  const asOfSeq = store !== undefined ? (await store.inspect()).highWaterSeq : -1;
+  const asOfSeq = (await store.inspect()).highWaterSeq;
 
-  const walkPromise = walkWorkspace({
-    root: config.root,
-    languageOf,
-    ...(config.include !== undefined ? { include: config.include } : {}),
-    ...(config.exclude !== undefined ? { exclude: config.exclude } : {}),
-    ...(config.maxFileSizeBytes !== undefined ? { maxFileSizeBytes: config.maxFileSizeBytes } : {}),
-  });
+  const [walkResult, fileStates, keyLists, staleNodes] = await Promise.all([
+    walkWorkspace({
+      root: config.root,
+      languageOf,
+      ...(config.include !== undefined ? { include: config.include } : {}),
+      ...(config.exclude !== undefined ? { exclude: config.exclude } : {}),
+      ...(config.maxFileSizeBytes !== undefined
+        ? { maxFileSizeBytes: config.maxFileSizeBytes }
+        : {}),
+    }),
+    store.fileStates(),
+    Promise.all(NODE_LABELS.map((spec) => store.nodeKeys(spec.label))),
+    store.staleNodes(),
+  ]);
 
-  let fsCheck: CheckResult;
-  let idUniquenessCheck: CheckResult;
-  let revisionCheck: CheckResult;
-
-  if (store === undefined) {
-    await walkPromise;
-    fsCheck = noStoreCheck('filesystem-reconciliation', asOfSeq);
-    idUniquenessCheck = noStoreCheck('id-uniqueness', asOfSeq);
-    revisionCheck = noStoreCheck('revision-reconciliation', asOfSeq);
-  } else {
-    const [walkResult, fileStates, keyLists, staleNodes] = await Promise.all([
-      walkPromise,
-      store.fileStates(),
-      Promise.all(NODE_LABELS.map((spec) => store.nodeKeys(spec.label))),
-      store.staleNodes(),
-    ]);
-    fsCheck = checkFilesystemReconciliation(walkResult.files, fileStates, asOfSeq);
-    idUniquenessCheck = checkIdUniqueness(keyLists, asOfSeq);
-    revisionCheck = checkRevisionReconciliation(walkResult.files, fileStates, staleNodes, asOfSeq);
-  }
+  const fsCheck = checkFilesystemReconciliation(walkResult.files, fileStates, asOfSeq);
+  const idUniquenessCheck = checkIdUniqueness(keyLists, asOfSeq);
+  const revisionCheck = checkRevisionReconciliation(
+    walkResult.files,
+    fileStates,
+    staleNodes,
+    asOfSeq,
+  );
 
   const rawChecks: readonly CheckResult[] = [
     fsCheck,
@@ -258,7 +249,7 @@ export async function verifyStore(
       'identity-invariants is computed from U6c (no code tier yet)',
     ),
     idUniquenessCheck,
-    // SEAT: render-reconciliation needs a renderer consumer (U2b/U3); every EngineSink is a durable store.
+    // SEAT: every runnable switch set is headless because connect refuses inspect (U2b) and vscode (U3).
     unavailableCheck('render-reconciliation', asOfSeq, 'no renderer consumer is enabled (ND-8)'),
     revisionCheck,
     // SEAT: resolution-health is computed from U6c (no ResolveReport yet).
@@ -276,7 +267,7 @@ export async function verifyStore(
   return {
     state,
     checks,
-    consumers: store !== undefined ? [store.id] : [],
+    consumers: [store.id],
     durationMs: performance.now() - start,
   };
 }

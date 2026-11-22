@@ -628,7 +628,7 @@ contracts:
       export function renderUsage(spec: CommandSpec): string;   // the ONLY producer of usage text
       export const RESERVED_TEST_PORT = 6381;  export const DEFAULT_STORE_PORT = 6382;
       export interface Provenanced<T> { readonly value: T; readonly layer: ConfigLayer; readonly source: string; }
-      export interface ResolvedConfig { root: Provenanced<string>; include; exclude; maxFileSizeBytes; consumers: Provenanced<{ inspect: boolean; store: 'memory' | 'falkor'; vscode: boolean }>; store: { host; port; graph; mode: Provenanced<'remote' | 'docker'> }; queryTimeoutMs; resolve: { perFileMs; perSiteMs }; watch: { trailingMs; ceilingMs; bulkThresholdFiles }; }
+      export interface ResolvedConfig { root: Provenanced<string>; include; exclude; maxFileSizeBytes; consumers: { inspect: Provenanced<boolean>; store: Provenanced<'memory' | 'falkor'>; vscode: Provenanced<boolean> }; store: { host; port; graph; mode: Provenanced<'remote' | 'docker'> }; queryTimeoutMs; resolve: { perFileMs; perSiteMs }; watch: { trailingMs; ceilingMs; bulkThresholdFiles }; }
       export function resolveConfig(layers: readonly { layer: ConfigLayer; source: string; values: Record<string, unknown> }[]): ResolvedConfig;   // pure
       export interface Document<K extends string, B> { readonly v: 1; readonly kind: K; readonly tool: string /* cpg@<semver> from the manifest */; readonly producedAt: string; readonly body: B; }
       export type CpgDocument = Document<'cpg.index.report', IndexReport> | Document<'cpg.verify.report', VerifyReport> | Document<'cpg.query.result', QueryResult> | Document<'cpg.config.resolved', ResolvedConfig> | Document<'cpg.doctor.report', DoctorReport> | Document<'cpg.graph.payload', GraphPayload> | Document<'cpg.schema', unknown>;
@@ -647,8 +647,14 @@ contracts:
         now: "deleted; C-WATCH's table is the only one"
       - decision: P-A
         now: "IndexReport and VerifyReport carry `consumers`, the enabled set, so no timing is ever quoted without the configuration that produced it"
+      - decision: "owner decision 1A (2026-11-22, U2c.2)"
+        was: "ResolvedConfig.consumers: Provenanced<{ inspect; store; vscode }>, one value a layer set whole"
+        now: "one Provenanced per switch, so `cpg index --inspect` over a file with `store: falkor` keeps the flag's provenance for inspect and the file's for store"
+      - decision: "owner decision 5 (2026-11-22, U2c.2)"
+        was: "I-2: the CLI package never imports a store, parser or Cypher builder; it sees only CpgEngine"
+        now: "I-2 as below. createEngine builds the built-in sinks from the resolved consumer switches; tools/check-deps.mjs rule cli-runtime-import limits apps/cli's runtime imports to node builtins, @cpg/engine and @cpg/model"
     invariants:
-      - { id: I-2,  class: C+T, text: "the CLI package never imports a store, parser or Cypher builder; it sees only CpgEngine" }
+      - { id: I-2,  class: C+T, text: "The CLI package never imports a store, parser or Cypher builder. It drives all graph work (index, watch, query, verify, inspect) through `CpgEngine`. Besides `createEngine` in its composition root, it may import only pure, I/O-free helpers and types from `@cpg/*` packages." }
       - { id: I-3,  class: T, text: "no source file calls process.exit()" }
       - { id: I-4,  class: T, text: "process.argv read in exactly one file; process.env in exactly one" }
       - { id: I-6,  class: T, text: "the declared bin is EXECUTED by the suite: built artifact spawned, --version exits 0 (the archived bin was never once run)" }

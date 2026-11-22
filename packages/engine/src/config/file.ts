@@ -103,11 +103,6 @@ export function stringifyConfigFile(doc: CpgConfigFile): string {
   return stringify(doc);
 }
 
-// Typed void, not never, so the REAL code after a SEAT call still typechecks (RED only).
-function seat(what: string): void {
-  throw new Error(`SEAT: ${what}`);
-}
-
 /**
  * The file layer: the file's keys mapped to ResolvedConfig paths. `vscodeHost` says whether the
  * front door is the VS Code host, which is what `consumers.vscode: auto` resolves against.
@@ -117,20 +112,16 @@ export function configFileLayer(
   source: string,
   opts: { readonly vscodeHost: boolean },
 ): { readonly layer: ConfigLayerInput; readonly warnings: readonly string[] } {
-  // SEAT: the file's consumer switches map to one key each (owner decision 1A) with U2c.2.
-  if (doc.consumers !== undefined) {
-    seat('configFileLayer: per-switch consumers (owner decision 1A, U2c.2)');
-  }
+  // REAL
   const { consumers, watch, resolve } = doc;
   const falkor = doc.store?.falkor;
   const values = {
     include: doc.include,
     exclude: doc.exclude,
     maxFileSizeBytes: doc.max_file_size_bytes,
-    consumers: consumers && {
-      ...consumers,
-      vscode: consumers.vscode === 'auto' ? opts.vscodeHost : consumers.vscode,
-    },
+    'consumers.inspect': consumers?.inspect,
+    'consumers.store': consumers?.store,
+    'consumers.vscode': consumers?.vscode === 'auto' ? opts.vscodeHost : consumers?.vscode,
     'store.host': falkor?.host,
     'store.port': falkor?.port,
     'store.graph': falkor?.graph,

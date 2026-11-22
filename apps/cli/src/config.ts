@@ -77,10 +77,20 @@ export async function loadConfig(req: LoadConfigRequest): Promise<LoadedConfig> 
   // REAL
   const root = resolveConfig(req.rootLayers).root.value;
 
-  const flagLayers = STORE_SOURCES.flatMap(([flag, , key]) => {
+  const flagLayers: ConfigLayerInput[] = STORE_SOURCES.flatMap(([flag, , key]) => {
     const raw = req.values[flag];
     return typeof raw === 'string' ? [layerOf('flag', `--${flag}`, key, raw)] : [];
   });
+  if (req.values['inspect'] === true) {
+    flagLayers.push({ layer: 'flag', source: '--inspect', values: { 'consumers.inspect': true } });
+  }
+  if (typeof req.values['store'] === 'string') {
+    flagLayers.push({
+      layer: 'flag',
+      source: '--store',
+      values: { 'consumers.store': req.values['store'] },
+    });
+  }
   const envLayers = STORE_SOURCES.flatMap(([, name, key]) => {
     const raw = req.env[name];
     return raw === undefined ? [] : [layerOf('env', name, key, raw)];

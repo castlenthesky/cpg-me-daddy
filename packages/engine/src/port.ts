@@ -126,6 +126,7 @@ export interface IndexReport {
   /** The signal fired before the write: nothing was written and `files` is empty. */
   readonly interrupted: boolean;
   readonly warnings: readonly string[];
+  /** null under --dry-run and while no store dials a target (memory; FalkorStore is U5). */
   readonly target: StoreTarget | null;
   /** The ids of the sinks this run wrote through (P-A); empty under --dry-run. */
   readonly consumers: readonly string[];
@@ -166,7 +167,7 @@ export interface VerifyReport {
   readonly state: CheckState;
   /** All six, once each, in enum order. */
   readonly checks: readonly CheckResult[];
-  /** The ids of the stores this run read (P-A); empty when no store consumer is enabled. */
+  /** The store this run read (P-A). */
   readonly consumers: readonly string[];
   readonly durationMs: number;
 }

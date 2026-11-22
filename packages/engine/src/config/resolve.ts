@@ -5,7 +5,6 @@ import { z } from 'zod';
 import type {
   ConfigLayer,
   ConfigLayerInput,
-  ConsumerSwitches,
   CpgConfigInput,
   Provenanced,
   ResolvedConfig,
@@ -30,7 +29,9 @@ export const CONFIG_DEFAULTS = {
   include: DEFAULT_INCLUDES,
   exclude: DEFAULT_EXCLUDES,
   maxFileSizeBytes: DEFAULT_MAX_FILE_SIZE_BYTES,
-  consumers: { inspect: false, store: 'memory', vscode: false },
+  'consumers.inspect': false,
+  'consumers.store': 'memory',
+  'consumers.vscode': false,
   'store.host': '127.0.0.1',
   'store.port': 6382,
   'store.graph': 'cpg',
@@ -69,11 +70,9 @@ const KEY_SCHEMAS = {
   include: GLOB_LIST,
   exclude: GLOB_LIST,
   maxFileSizeBytes: POSITIVE_INT,
-  consumers: z.strictObject({
-    inspect: z.boolean(),
-    store: CONSUMER_STORE,
-    vscode: z.boolean(),
-  }),
+  'consumers.inspect': z.boolean(),
+  'consumers.store': CONSUMER_STORE,
+  'consumers.vscode': z.boolean(),
   'store.host': NON_EMPTY_STRING,
   'store.port': PORT_SCHEMA,
   'store.graph': NON_EMPTY_STRING,
@@ -94,11 +93,6 @@ function isConfigKey(key: string): key is ConfigKey {
 }
 
 const rankOf = (layer: ConfigLayer): number => CONFIG_PRECEDENCE.indexOf(layer);
-
-function perSwitch(_whole: Provenanced<ConsumerSwitches>): ResolvedConfig['consumers'] {
-  // SEAT: one provenance per consumer switch (owner decision 1A) lands with U2c.2.
-  throw new Error('SEAT: resolveConfig: per-switch consumers (owner decision 1A, U2c.2)');
-}
 
 export function resolveConfig(layers: readonly ConfigLayerInput[]): ResolvedConfig {
   // REAL
@@ -162,7 +156,11 @@ export function resolveConfig(layers: readonly ConfigLayerInput[]): ResolvedConf
     include: pick('include', KEY_SCHEMAS.include),
     exclude: pick('exclude', KEY_SCHEMAS.exclude),
     maxFileSizeBytes: pick('maxFileSizeBytes', KEY_SCHEMAS.maxFileSizeBytes),
-    consumers: perSwitch(pick('consumers', KEY_SCHEMAS.consumers)),
+    consumers: {
+      inspect: pick('consumers.inspect', KEY_SCHEMAS['consumers.inspect']),
+      store: pick('consumers.store', KEY_SCHEMAS['consumers.store']),
+      vscode: pick('consumers.vscode', KEY_SCHEMAS['consumers.vscode']),
+    },
     store: {
       host: pick('store.host', KEY_SCHEMAS['store.host']),
       port: pick('store.port', KEY_SCHEMAS['store.port']),

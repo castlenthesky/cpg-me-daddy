@@ -38,7 +38,6 @@
       "dependencies": {
         "@cpg/engine": "*",
         "@cpg/model": "*",
-        "@cpg/sink": "*",
       },
       "devDependencies": {
         "@cpg/resolve": "*",

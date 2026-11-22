@@ -4,7 +4,7 @@
 import { CPG_SCHEMA, type SchemaDocInput } from '@cpg/model';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
-import type { GraphSink } from '@cpg/sink';
+import { createMemoryStore, type GraphSink } from '@cpg/sink';
 import type { EdgeRow, GraphStore, NodeRow, WriteOp } from '@cpg/store';
 import { createNullGraphStore } from './null-graph-store';
 import type {
@@ -79,15 +79,18 @@ function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
   return { kind: 'merge-filesystem', directories, files, links, moves: [], removals: [] };
 }
 
-// Typed void, not never, so the REAL code after a SEAT call still typechecks (RED only).
-function seat(what: string): void {
-  throw new Error(`SEAT: ${what}`);
+function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
+  const parts: string[] = [];
+  if (consumers.store === 'falkor') parts.push('consumers.store falkor (FalkorStore, U5)');
+  if (consumers.inspect) parts.push('consumers.inspect (the inspector, U2b)');
+  if (consumers.vscode) parts.push('consumers.vscode (the VS Code panel, U3)');
+  return parts;
 }
 
 export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEngine {
-  // SEAT: the engine builds its sinks from config.consumers (owner decision 5a) with U2c.2.
-  seat('createEngine: sinks from consumers (owner decision 5a, U2c.2)');
-  const sinks: readonly EngineSink[] = deps.sinks ?? [];
+  // REAL
+  const memory: EngineSink = deps.memoryStore ?? createMemoryStore({ id: 'memory' });
+  const sinks: readonly EngineSink[] = [memory, ...(deps.sinks ?? [])];
   const registry = createLanguageRegistry();
   for (const lang of BUILTIN_LANGUAGES) {
     registry.register(lang);
@@ -106,6 +109,10 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       target: StoreTarget,
       _opts: { readonly readOnly: boolean },
     ): Promise<EngineSession> {
+      const unbuilt = unbuiltConsumers(config.consumers);
+      if (unbuilt.length > 0) {
+        throw new Error(`SEAT: not built yet: ${unbuilt.join('; ')}`);
+      }
       // SEAT: FalkorStore at U5 — does not dial target.
       /* oxlint-disable no-await-in-loop */
       for (const sink of sinks) {
@@ -172,7 +179,8 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
           dryRun: req.session === null,
           interrupted: true,
           warnings,
-          target: req.session?.target ?? null,
+          // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
+          target: null,
           consumers: [],
         };
       }
@@ -223,7 +231,8 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         dryRun: req.session === null,
         interrupted: false,
         warnings,
-        target: req.session?.target ?? null,
+        // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
+        target: null,
         consumers: req.session === null ? [] : sinks.map((s) => s.id),
       };
     },
@@ -234,16 +243,13 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       expected: IndexReport | null,
     ): Promise<VerifyReport> {
       // REAL; SEAT: _session is unused because dialling a target is U5 — every session reaches
-      // deps.sinks.
+      // the built-in memory store.
       if (expected !== null) {
         throw new Error(
           'SEAT: verify against an expected IndexReport lands with its first caller (C-CLI Q9)',
         );
       }
-      if (sinks.length > 1) {
-        throw new Error('SEAT: verify over more than one store lands with FalkorStore (U5)');
-      }
-      return verifyStore(sinks[0], verifyConfig, languageOf);
+      return verifyStore(memory, verifyConfig, languageOf);
     },
 
     schema(): SchemaDocInput {

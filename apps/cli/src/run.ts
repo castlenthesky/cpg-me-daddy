@@ -11,10 +11,13 @@ import {
   type CheckResult,
   type ConfigLayer,
   type ConfigLayerInput,
+  type ConsumerSwitches,
   type CpgEngine,
   type EngineConfig,
   type EngineSession,
   type IndexProgress,
+  type IndexReport,
+  type Provenanced,
   type ResolvedConfig,
   type StoreTarget,
   type VerifyReport,
@@ -107,33 +110,59 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
     return EXIT.OK;
   }
   // Every flag is validated before anything touches the engine (I-12).
-  // SEAT: run builds the engine from the resolved consumers (owner decision 5a) with U2c.2.
-  const engine =
-    opts.createEngine === undefined
-      ? undefined
-      : seatEngine('run: the engine from the resolved consumers (owner decision 5a, U2c.2)');
-  if (spec.verb === 'schema') return runSchema(spec, engine, values, io, opts);
+  if (spec.verb === 'schema') return runSchema(spec, values, io, opts);
   if (spec.verb === 'config') return runConfig(spec, values, positionals, io, opts);
-  // SEAT: verbs without a handler yet stop here (watch, query, inspect, doctor, index without --dry-run).
+  // SEAT: verbs without a handler yet stop here (watch, query, inspect, doctor).
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
-  if (!engine) throw seat;
+  if (opts.createEngine === undefined) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
-  if (spec.verb === 'index' && values['dry-run'] === true) {
-    return runIndexDryRun(spec, engine, values, positionals, io, opts);
+  if (spec.verb === 'index') {
+    return runIndex(spec, opts.createEngine, values, positionals, io, opts);
   }
   if (spec.verb === 'verify') {
-    return runVerify(spec, engine, values, positionals, io, opts);
+    return runVerify(spec, opts.createEngine, values, positionals, io, opts);
   }
   const target = storeTarget(spec, values);
   if (target) {
+    const engine = opts.createEngine({
+      version: opts.manifest.version,
+      consumers: DEFAULT_CONSUMERS,
+    });
     const session = await connectStore(engine, target, spec.session === 'read');
     await session.close();
   }
   throw seat;
 }
 
-function seatEngine(what: string): CpgEngine {
-  throw new Error(`SEAT: ${what}`);
+const DEFAULT_CONSUMERS: ConsumerSwitches = {
+  inspect: CONFIG_DEFAULTS['consumers.inspect'],
+  store: CONFIG_DEFAULTS['consumers.store'],
+  vscode: CONFIG_DEFAULTS['consumers.vscode'],
+};
+
+const noop = (): void => {};
+
+function describeConsumer(
+  key: 'store' | 'inspect' | 'vscode',
+  entry: Provenanced<unknown>,
+  what: string,
+): string {
+  return `consumers.${key} ${JSON.stringify(entry.value)} from ${entry.layer} ${entry.source} (${what})`;
+}
+
+function refuseUnbuiltConsumers(verb: string, resolved: ResolvedConfig): void {
+  const { store, inspect, vscode } = resolved.consumers;
+  const parts: string[] = [];
+  if (store.value === 'falkor') parts.push(describeConsumer('store', store, 'FalkorStore, U5'));
+  if (inspect.value) parts.push(describeConsumer('inspect', inspect, 'the inspector, U2b'));
+  if (vscode.value) parts.push(describeConsumer('vscode', vscode, 'the VS Code panel, U3'));
+  if (parts.length > 0) {
+    throw new Fail({
+      kind: 'not-built',
+      verb,
+      message: `not built yet: ${parts.join('; ')}`,
+    });
+  }
 }
 
 function rootLayers(
@@ -212,6 +241,12 @@ async function load(
   }
 }
 
+const targetOf = (resolved: ResolvedConfig): StoreTarget => ({
+  host: resolved.store.host.value,
+  port: resolved.store.port.value,
+  graph: resolved.store.graph.value,
+});
+
 async function connectStore(
   engine: CpgEngine,
   target: StoreTarget,
@@ -262,7 +297,7 @@ async function runConfig(
 
 async function runVerify(
   spec: CommandSpec,
-  engine: CpgEngine,
+  buildEngine: (config: EngineConfig) => CpgEngine,
   values: Values,
   positionals: readonly string[],
   io: Io,
@@ -270,19 +305,32 @@ async function runVerify(
 ): Promise<ExitCode> {
   // REAL
   const { resolved } = await load(spec, values, positionals, io, opts);
-  const target: StoreTarget = {
-    host: resolved.store.host.value,
-    port: resolved.store.port.value,
-    graph: resolved.store.graph.value,
-  };
+  refuseUnbuiltConsumers(spec.verb, resolved);
+  const config = toCpgConfigInput(resolved);
+  const engine = buildEngine({ version: opts.manifest.version, consumers: config.consumers });
+  const target = targetOf(resolved);
+  const writeSession = await connectStore(engine, target, false);
+  let indexed: IndexReport;
+  try {
+    indexed = await engine.index(
+      { config, session: writeSession, resumeFrom: null },
+      noop,
+      opts.signal ?? new AbortController().signal,
+    );
+  } finally {
+    await writeSession.close();
+  }
+  for (const w of indexed.warnings) {
+    io.err(`cpg: warning: ${w}`);
+  }
+  if (indexed.interrupted) {
+    throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
+  }
+
   const session = await connectStore(engine, target, true);
   let report: VerifyReport;
   try {
-    report = await engine.verify(
-      session,
-      { ...toCpgConfigInput(resolved), strict: values['strict'] === true },
-      null,
-    );
+    report = await engine.verify(session, { ...config, strict: values['strict'] === true }, null);
   } finally {
     await session.close();
   }
@@ -315,7 +363,6 @@ async function runVerify(
 
 async function runSchema(
   spec: CommandSpec,
-  engine: CpgEngine | undefined,
   values: Values,
   io: Io,
   opts: RunOptions,
@@ -330,9 +377,13 @@ async function runSchema(
       message: 'pass exactly one of --print or --check',
     });
   }
-  if (!engine) {
+  if (opts.createEngine === undefined) {
     throw new Fail({ kind: 'not-built', verb: 'schema', message: "'schema' is not built yet" });
   }
+  const engine = opts.createEngine({
+    version: opts.manifest.version,
+    consumers: DEFAULT_CONSUMERS,
+  });
   if (print) {
     io.out(formatDocument('cpg.schema', engine.schema(), io, opts.manifest));
     return EXIT.OK;
@@ -367,9 +418,9 @@ async function runSchema(
   });
 }
 
-async function runIndexDryRun(
+async function runIndex(
   spec: CommandSpec,
-  engine: CpgEngine,
+  buildEngine: (config: EngineConfig) => CpgEngine,
   values: Values,
   positionals: readonly string[],
   io: Io,
@@ -377,15 +428,29 @@ async function runIndexDryRun(
 ): Promise<ExitCode> {
   // REAL
   const { resolved } = await load(spec, values, positionals, io, opts);
+  const dryRun = values['dry-run'] === true;
+  if (!dryRun) {
+    refuseUnbuiltConsumers(spec.verb, resolved);
+  }
+  const config = toCpgConfigInput(resolved);
+  const engine = buildEngine({ version: opts.manifest.version, consumers: config.consumers });
   const quiet = values['quiet'] === true;
   const onProgress = (p: IndexProgress): void => {
     if (!quiet) io.status(`index: ${p.phase} ${p.filesTotal} files`);
   };
-  const report = await engine.index(
-    { config: toCpgConfigInput(resolved), session: null, resumeFrom: null },
-    onProgress,
-    opts.signal ?? new AbortController().signal,
-  );
+  const signal = opts.signal ?? new AbortController().signal;
+
+  let report: IndexReport;
+  if (dryRun) {
+    report = await engine.index({ config, session: null, resumeFrom: null }, onProgress, signal);
+  } else {
+    const session = await connectStore(engine, targetOf(resolved), false);
+    try {
+      report = await engine.index({ config, session, resumeFrom: null }, onProgress, signal);
+    } finally {
+      await session.close();
+    }
+  }
 
   if (values['format'] === 'json') {
     io.out(formatDocument('cpg.index.report', report, io, opts.manifest));
@@ -450,7 +515,7 @@ function parseFlags(
 
 const isPort = (v: string): boolean => /^\d{1,5}$/.test(v) && Number(v) >= 1 && Number(v) <= 65535;
 
-// SEAT: used only by verbs without a handler yet (watch, query, inspect, index without --dry-run).
+// SEAT: used only by verbs without a handler yet (watch, query, inspect).
 function storeTarget(spec: CommandSpec, values: Values): StoreTarget | null {
   if (spec.session === 'none') return null;
   const str = (k: string, d: string) => (typeof values[k] === 'string' ? values[k] : d);
