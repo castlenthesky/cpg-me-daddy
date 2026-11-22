@@ -155,6 +155,7 @@ resolution:
       - "tsserver with no tsconfig: no $/progress at all; textDocument/definition on an imported call returned the LOCAL IMPORT BINDING (a wrong, plausible answer, not an empty one) 3 of 3 cold runs and at every wait <= 600 ms after didOpen; correct at >= 1000 ms"
       - "tsserver with a tsconfig: $/progress begin/end bracket the project load; answers before `end` were the import binding, after it correct"
       - "tsserver with an unresolvable module (module nodenext, './util' with no extension) also returns the import binding"
+      - "two mitigations, each enough on rung 10: (a) retrying every 250 ms while the answer is a same-file import binding (4 s budget) turned 3/3 wrong into 2/2 right; (b) opening every file of the workspace with didOpen, not only the call site's, gave the right answer with no retry"
     rule: "retry-on-empty (M-RESOLVE-warmup) cannot catch a cold tsserver: its cold answer is not empty. A definition that lands on a same-file import binding is not a resolution (C-RESOLVE Q9)"
   M-RESOLVE-typescript:
     value: UNMEASURED
