@@ -95,6 +95,15 @@ describe('assertDeltaWellFormed (INV-18)', () => {
     expect(thrown(() => assertDeltaWellFormed(d, prior, 'memory', 3))).toBeUndefined();
   });
 
+  it('applies removals before additions: an edge onto a removed-and-re-added node is live', () => {
+    const d = parts({
+      removedNodeIds: ['b'],
+      addedNodes: [{ id: 'b', type: 'METHOD' }],
+      addedEdges: [{ source: 'a', target: 'b', type: 'CALLS' }],
+    });
+    expect(thrown(() => assertDeltaWellFormed(d, prior, 'memory', 3))).toBeUndefined();
+  });
+
   it.each([
     ['a missing target', { addedEdges: [{ source: 'a', target: 'z', type: 'CALLS' }] }],
     ['a missing source', { addedEdges: [{ source: 'z', target: 'a', type: 'CALLS' }] }],

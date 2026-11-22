@@ -1,8 +1,15 @@
 // MemoryStore-specific behaviour beyond the shared GraphSink suite (sink.conformance.test.ts).
 
+import type { WorkspacePath } from '@cpg/model';
+import { isWorkspacePath } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
 import { classifyFailure } from './delta';
 import { createMemoryStore } from './memory-store';
+
+function wp(s: string): WorkspacePath {
+  if (!isWorkspacePath(s)) throw new Error(`not a WorkspacePath: ${s}`);
+  return s;
+}
 
 describe('createMemoryStore', () => {
   it('is a durable sink that degrades rather than resyncing by snapshot (C-SINK Q1)', () => {
@@ -30,6 +37,23 @@ describe('createMemoryStore', () => {
         () => 'resolved',
         (error: unknown) => classifyFailure(error),
       );
-    expect(kind).toBe('permanent');
+    const deltaKind = await store
+      .onDelta(
+        {
+          seq: 0,
+          file: wp('a.py'),
+          revision_id: 'r',
+          producer: 'code',
+          addedNodes: [],
+          addedEdges: [],
+          removedNodeIds: ['x'],
+        },
+        { seq: 0, cause: 'live' },
+      )
+      .then(
+        () => 'resolved',
+        (error: unknown) => classifyFailure(error),
+      );
+    expect([kind, deltaKind]).toEqual(['permanent', 'permanent']);
   });
 });

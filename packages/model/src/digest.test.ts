@@ -34,6 +34,7 @@ describe('graphDigest', () => {
     ['an edge type', { nodes, edges: [e('a', 'b', 'IMPORTS'), e('b', 'a')] }],
     ['an edge direction', { nodes, edges: [e('a', 'b'), e('a', 'b')] }],
     ['a missing edge', { nodes, edges: [e('a', 'b')] }],
+    ['an edge data value', { nodes, edges: [{ ...e('a', 'b'), data: { w: 1 } }, e('b', 'a')] }],
     ['a missing node', { nodes: [n('b')], edges }],
   ])('changes when %s changes', (_label, graph) => {
     expect(graphDigest(graph)).not.toBe(base);

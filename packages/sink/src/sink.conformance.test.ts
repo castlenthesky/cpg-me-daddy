@@ -117,6 +117,8 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
     it('INV-5: a seq at or below highWaterSeq resolves as a no-op', async () => {
       const sink = await seeded(make);
       const before = await sink.inspect();
+      // A true redelivery replays the same delta: it must not be judged as a re-add.
+      await send(sink, delta(0, { addedNodes: [method(A), method(B)], addedEdges: [calls(A, B)] }));
       await send(sink, delta(0, { addedNodes: [method('file:a.py:METHOD:other')] }));
       await send(sink, delta(-1, { removedNodeIds: [A] }));
       expect(await sink.inspect()).toEqual(before);
@@ -133,8 +135,18 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
 
     it('INV-7: removing a node removes every incident edge', async () => {
       const sink = await seeded(make);
-      await send(sink, delta(1, { removedNodeIds: [B] }));
-      expect(counts(await sink.inspect())).toEqual([1, 1, 0]);
+      const C = 'file:a.py:METHOD:h';
+      await send(
+        sink,
+        delta(1, { addedNodes: [method(C)], addedEdges: [calls(B, C), calls(C, A)] }),
+      );
+      // B is the target of A -> B and the source of B -> C; C -> A does not touch it.
+      await send(sink, delta(2, { removedNodeIds: [B] }));
+      const state = await sink.inspect();
+      expect(counts(state)).toEqual([2, 2, 1]);
+      expect(state.digest).toBe(
+        graphDigest({ nodes: [method(A), method(C)], edges: [calls(C, A)] }),
+      );
     });
 
     it('INV-18 + INV-10: a dangling added edge rejects malformed and leaves state identical', async () => {
@@ -142,6 +154,9 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
       const before = await sink.inspect();
       const missing = 'file:a.py:METHOD:missing';
       expect(await rejectionKind(send(sink, delta(1, { addedEdges: [calls(A, missing)] })))).toBe(
+        'malformed',
+      );
+      expect(await rejectionKind(send(sink, delta(1, { addedEdges: [calls(missing, A)] })))).toBe(
         'malformed',
       );
       const ontoRemoved = delta(1, { removedNodeIds: [B], addedEdges: [calls(A, B)] });
@@ -170,9 +185,19 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
           addedNodes: [fileNode('file:a.py', { interface_hash: 'i', content_hash: 'X' })],
         }),
       );
-      const merged = fileNode('file:a.py', { ...fsTier, interface_hash: 'i' });
+      // The filesystem tier re-adds with new hashes and a stray code-owned key: its own keys win,
+      // the code tier's interface_hash survives.
+      const fsTier2 = { path: 'a.py', name: 'a.py', content_hash: 'h2', revision_id: 'h2' };
+      await send(
+        sink,
+        delta(2, {
+          producer: 'filesystem',
+          addedNodes: [fileNode('file:a.py', { ...fsTier2, interface_hash: 'Y' })],
+        }),
+      );
+      const merged = fileNode('file:a.py', { ...fsTier2, interface_hash: 'i' });
       const state = await sink.inspect();
-      expect(counts(state)).toEqual([1, 1, 0]);
+      expect(counts(state)).toEqual([2, 1, 0]);
       expect(state.digest).toBe(graphDigest({ nodes: [merged], edges: [] }));
     });
 
@@ -184,6 +209,12 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
         pending = sink.onDelta(null as unknown as DeliverableDelta, live(1));
       }).not.toThrow();
       expect(await rejectionKind(pending ?? Promise.resolve())).not.toBe('resolved');
+      let snap: Promise<void> | undefined;
+      expect(() => {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- deliberately garbage.
+        snap = sink.onSnapshot(null as unknown as GraphPayload, { seq: 1, cause: 'resync' });
+      }).not.toThrow();
+      expect(await rejectionKind(snap ?? Promise.resolve())).not.toBe('resolved');
     });
 
     it('INV-11: a sink neither mutates nor retains the delivered objects', async () => {
@@ -201,6 +232,20 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
       const edge = live2.addedEdges[0];
       if (edge !== undefined) Object.assign(edge, { target: A });
       expect(await sink.inspect()).toEqual(before);
+
+      // The same for a snapshot and for a node's data.
+      const fresh = make();
+      const snapNode = method(A, { name: 'f' });
+      const snapNodes = [snapNode];
+      const snapshot: GraphPayload = { seq: 0, nodes: snapNodes, edges: [] };
+      await fresh.onSnapshot(snapshot, { seq: 0, cause: 'initial' });
+      const node = method(B, { name: 'g' });
+      await send(fresh, delta(1, { addedNodes: [node] }));
+      const held = await fresh.inspect();
+      Object.assign(snapNode.data ?? {}, { name: 'mutated' });
+      Object.assign(node.data ?? {}, { name: 'mutated' });
+      snapNodes.length = 0;
+      expect(await fresh.inspect()).toEqual(held);
       expect(before.digest).toBe(graphDigest({ nodes, edges: [calls(A, B)] }));
     });
 
@@ -215,7 +260,9 @@ export function verifyGraphSinkContract(name: string, make: () => GraphSink): vo
 
     it('onSnapshot at or below highWaterSeq is a no-op (INV-5)', async () => {
       const sink = await seeded(make);
+      await send(sink, delta(1, { removedNodeIds: [B] }));
       const before = await sink.inspect();
+      await sink.onSnapshot({ seq: 1, nodes: [], edges: [] }, { seq: 1, cause: 'catch-up' });
       await sink.onSnapshot({ seq: 0, nodes: [], edges: [] }, { seq: 0, cause: 'catch-up' });
       expect(await sink.inspect()).toEqual(before);
     });
