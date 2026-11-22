@@ -112,8 +112,10 @@ describe('cpg verify with the real engine (BMO-80)', () => {
       state: 'fail',
       localisedTo: ['b.py'],
     });
+    // only the failing check is named: not a passing one, not an unavailable one
     expect(r.stderr.some((l) => l.includes('revision-reconciliation'))).toBe(true);
     expect(r.stderr.some((l) => l.includes('filesystem-reconciliation'))).toBe(false);
+    expect(r.stderr.some((l) => l.includes('render-reconciliation'))).toBe(false);
   });
 
   it('--strict promotes unavailable to fail: exit 3 on a graph that otherwise passes', async () => {
@@ -133,9 +135,12 @@ describe('cpg verify with the real engine (BMO-80)', () => {
     expect(r.code).toBe(EXIT.VERIFY_FAILED);
     const lines = r.stdout.filter((l) => IDS.some((id) => l.startsWith(`${id} `)));
     expect(lines.map((l) => l.split(' ')[0])).toEqual(IDS);
-    const revision = lines.find((l) => l.startsWith('revision-reconciliation '));
-    expect(revision?.split(' ')[1]).toBe('fail');
-    expect(revision).toContain('b.py');
+    const stateOn = (id: string) => lines.find((l) => l.startsWith(`${id} `))?.split(' ')[1];
+    expect(stateOn('revision-reconciliation')).toBe('fail');
+    expect(stateOn('filesystem-reconciliation')).toBe('pass');
+    expect(stateOn('render-reconciliation')).toBe('unavailable');
+    expect(lines.find((l) => l.startsWith('revision-reconciliation '))).toContain('b.py');
+    expect((await cli(['verify', '--format=text', root], engine)).stdout).toEqual(r.stdout);
   });
 
   it('stdout is byte-identical with isTty true and false (I-9); timing and consumers on stderr', async () => {
@@ -147,7 +152,16 @@ describe('cpg verify with the real engine (BMO-80)', () => {
     expect(tty.stdout).toEqual(pipe.stdout);
     expect(tty.code).toBe(pipe.code);
     expect(pipe.stderr.some((l) => l.includes('consumers: memory'))).toBe(true);
+    expect(pipe.stderr.some((l) => /\b\d+ ms\b/.test(l))).toBe(true);
     expect(pipe.stdout.some((l) => / ms\b/.test(l))).toBe(false);
+  });
+
+  it('--format=json also puts the timing and consumer summary on stderr, not stdout', async () => {
+    const { root, engine } = await indexedWorkspace();
+    const r = await cli(['verify', '--format=json', root], engine);
+    expect(r.stdout).toHaveLength(1);
+    const summary = r.stderr.find((l) => l.includes('consumers: memory'));
+    expect(summary).toMatch(/\b\d+ ms\b/);
   });
 });
 
@@ -220,6 +234,19 @@ describe('cpg verify wiring', () => {
     expect(body(r.stdout).state).toBe(state);
   });
 
+  it.each([['json'], ['text']])(
+    '--format=%s: stdout is byte-identical with isTty true and false (I-9)',
+    async (format) => {
+      const argv = ['verify', `--format=${format}`, '/w'];
+      const [tty, pipe] = [
+        await cli(argv, fakeEngine().engine, { isTty: true }),
+        await cli(argv, fakeEngine().engine, { isTty: false }),
+      ];
+      expect(tty.stdout).toEqual(pipe.stdout);
+      expect(pipe.stdout).toHaveLength(format === 'json' ? 1 : 7);
+    },
+  );
+
   it('the session closes even when verify rejects', async () => {
     const f = fakeEngine('pass', true);
     await expect(cli(['verify', '/w'], f.engine)).rejects.toThrow('boom');
@@ -238,7 +265,9 @@ describe('cpg verify wiring', () => {
     ['then the positional', ['/pos'], { CPG_WORKSPACE: '/env' }, '/pos'],
     ['then CPG_WORKSPACE', [], { CPG_WORKSPACE: '/env' }, '/env'],
     ['then cwd', [], {}, '/cwd'],
-    ['a relative root resolves against cwd', ['sub'], {}, '/cwd/sub'],
+    ['a relative positional resolves against cwd', ['sub'], {}, '/cwd/sub'],
+    ['so does a relative --workspace', ['--workspace', 'ws'], {}, '/cwd/ws'],
+    ['and a relative CPG_WORKSPACE', [], { CPG_WORKSPACE: 'env' }, '/cwd/env'],
   ])('workspace root: %s', async (_, args, env, want) => {
     const f = fakeEngine();
     await cli(['verify', ...args], f.engine, { env, cwd: '/cwd' });

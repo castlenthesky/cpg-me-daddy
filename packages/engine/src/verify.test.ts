@@ -7,7 +7,14 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isWorkspacePath, makeNodeId, type GraphNode, type WorkspacePath } from '@cpg/model';
+import {
+  isWorkspacePath,
+  makeNodeId,
+  NODE_LABELS,
+  type GraphNode,
+  type NodeLabel,
+  type WorkspacePath,
+} from '@cpg/model';
 import { createMemoryStore } from '@cpg/sink';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_EXCLUDES } from './walker/defaults';
@@ -130,11 +137,11 @@ const file = (path: string, text: string): GraphNode => ({
 });
 
 const moduleNode = (id: string): GraphNode => ({ id, type: 'MODULE', data: {} });
-/** A code-tier node owned by a.ts, carrying the revision it was derived from. */
-const ownedByA = (id: string, revision_id: string): GraphNode => ({
+/** A code-tier node owned by `owner`, carrying the revision it was derived from. */
+const owned = (owner: string, id: string, revision_id: string): GraphNode => ({
   id,
   type: 'MODULE',
-  data: { file: 'a.ts', revision_id },
+  data: { file: owner, revision_id },
 });
 
 /** A hand-built graph planted in a MemoryStore as a snapshot at `seq`. */
@@ -214,7 +221,49 @@ describe('VerifyReport (I-21)', () => {
     for (const c of report.checks) expect(c.state).toBe('unavailable');
     expect(report.state).toBe('unavailable');
     expect(report.consumers).toEqual([]);
-    expect((await verify(engine, root, { strict: true })).state).toBe('fail');
+    const strict = await verify(engine, root, { strict: true });
+    for (const c of strict.checks) expect(c.state).toBe('fail');
+    expect(strict.state).toBe('fail');
+  });
+
+  it('asOfSeq is read once, before any store read, even while a writer moves the seq', async () => {
+    const ws = { 'a.ts': 'export const a = 1;\n' };
+    const nodes = [dir('.'), file('a.ts', ws['a.ts'])];
+    const root = await tree(ws);
+    const memory = createMemoryStore();
+    await memory.onSnapshot({ seq: 4, nodes, edges: [] }, { seq: 4, cause: 'initial' });
+    const calls: string[] = [];
+    let seq = 4;
+    // A concurrent writer: every store read lands one more snapshot of the same graph.
+    async function moved(name: string): Promise<void> {
+      calls.push(name);
+      seq += 1;
+      await memory.onSnapshot({ seq, nodes, edges: [] }, { seq, cause: 'catch-up' });
+    }
+    const sink: EngineSink = {
+      ...memory,
+      async inspect() {
+        calls.push('inspect');
+        return memory.inspect();
+      },
+      async fileStates() {
+        await moved('fileStates');
+        return memory.fileStates();
+      },
+      async nodeKeys(label) {
+        await moved('nodeKeys');
+        return memory.nodeKeys(label);
+      },
+      async staleNodes() {
+        await moved('staleNodes');
+        return memory.staleNodes();
+      },
+    };
+    const report = await verify(createEngine({ version: '0' }, { sinks: [sink] }), root);
+    for (const c of report.checks) expect(c.asOfSeq).toBe(4);
+    expect(calls[0]).toBe('inspect');
+    expect(calls.filter((c) => c === 'inspect')).toHaveLength(1);
+    expect(calls).toContain('staleNodes');
   });
 });
 
@@ -285,18 +334,34 @@ describe('filesystem-reconciliation: admitted files vs FILE nodes, per directory
     ]);
   });
 
-  it("verify walks with the config's scope: exclude and maxFileSizeBytes reach its walk", async () => {
-    const root = await tree(FILES);
+  it("verify walks with the config's scope: include, exclude and maxFileSizeBytes reach its walk", async () => {
+    // Each option alone removes one file: include drops r.py, exclude drops notes.txt (which
+    // include admits), maxFileSizeBytes drops src/big.py. Only src/b.py (6 bytes) survives all three.
+    const root = await tree({
+      'r.py': 'r = 1\n',
+      'notes.txt': 'notes\n',
+      'src/b.py': 'b = 2\n',
+      'src/big.py': 'big = 1234567890\n',
+    });
     const engine = createEngine({ version: '0' }, { sinks: [createMemoryStore()] });
-    // Only src/b.py (6 bytes) survives: notes.txt is excluded, the rest are over 10 bytes.
-    const scope = { exclude: [...DEFAULT_EXCLUDES, '**/*.txt'], maxFileSizeBytes: 10 };
+    const include = ['src/**', '**/*.txt'];
+    const exclude = [...DEFAULT_EXCLUDES, '**/*.txt'];
+    const maxFileSizeBytes = 10;
+    const scope = { include, exclude, maxFileSizeBytes };
     await indexInto(engine, root, scope);
     expect(check(await verify(engine, root, scope), 'filesystem-reconciliation')).toMatchObject({
       state: 'pass',
       observed: 1,
       expected: 1,
     });
-    expect(check(await verify(engine, root), 'filesystem-reconciliation').state).toBe('fail');
+    for (const partial of [
+      { exclude, maxFileSizeBytes },
+      { include, maxFileSizeBytes },
+      { include, exclude },
+    ])
+      expect(check(await verify(engine, root, partial), 'filesystem-reconciliation')).toMatchObject(
+        { state: 'fail', expected: 2 },
+      );
   });
 });
 
@@ -329,7 +394,8 @@ describe('id-uniqueness via store.nodeKeys', () => {
     for (const c of report.checks) expect(c.asOfSeq).toBe(4);
   });
 
-  it('every label is checked; each duplicated key is listed once; keys of different labels never collide', async () => {
+  it('every schema label is read through nodeKeys; each duplicated key is listed once, in code-unit order; keys of different labels never collide', async () => {
+    const meta: GraphNode = { id: 'meta', type: 'META_DATA', data: {} };
     const nodes = [
       dir('.'),
       dir('src'),
@@ -337,18 +403,34 @@ describe('id-uniqueness via store.nodeKeys', () => {
       file('a.ts', ws['a.ts']),
       file('a.ts', ws['a.ts']),
       file('src/b.py', ws['src/b.py']),
-      moduleNode('mod:x'),
-      moduleNode('mod:x'),
+      moduleNode('Zm'),
+      moduleNode('Zm'),
       // the string 'src' is also DIRECTORY src's key, but its id is dir:src: not a duplicate
       moduleNode('src'),
+      // META_DATA is the last schema label
+      meta,
+      meta,
     ];
-    const { root, engine } = await planted(ws, nodes);
-    expect(check(await verify(engine, root), 'id-uniqueness')).toMatchObject({
+    const root = await tree(ws);
+    const memory = createMemoryStore();
+    await memory.onSnapshot({ seq: 0, nodes, edges: [] }, { seq: 0, cause: 'initial' });
+    const labels: NodeLabel[] = [];
+    const sink: EngineSink = {
+      ...memory,
+      nodeKeys(label) {
+        labels.push(label);
+        return memory.nodeKeys(label);
+      },
+    };
+    const report = await verify(createEngine({ version: '0' }, { sinks: [sink] }), root);
+    // Keys: DIRECTORY 2 (2 distinct), FILE 4 (2), MODULE 3 (2), META_DATA 2 (1).
+    expect(check(report, 'id-uniqueness')).toMatchObject({
       state: 'fail',
-      observed: 9,
-      expected: 6,
-      localisedTo: ['a.ts', 'mod:x'],
+      observed: 11,
+      expected: 7,
+      localisedTo: ['Zm', 'a.ts', 'meta'],
     });
+    expect(new Set(labels)).toEqual(new Set(NODE_LABELS.map((l) => l.label)));
   });
 });
 
@@ -368,23 +450,41 @@ describe('revision-reconciliation via store.staleNodes() and sha256 on disk', ()
     expect(report.state).toBe('fail');
   });
 
-  it('a :CPG node whose revision_id differs from its FILE (staleNodes) fails, localised to its file', async () => {
-    const ws = { 'a.ts': 'export const a = 1;\n', 'b.ts': 'export const b = 2;\n' };
+  it('a :CPG node whose revision_id differs from its FILE (staleNodes) fails alone, localised to its file', async () => {
+    const ws = { 'a.ts': 'export const a = 1;\n' };
     const nodes = [
       dir('.'),
       file('a.ts', ws['a.ts']),
-      // b.ts's FILE was indexed from older bytes
-      file('b.ts', 'export const b = 1;\n'),
-      ownedByA('mod:a1', 'an-older-revision'),
-      ownedByA('mod:a2', 'another-older-revision'),
-      ownedByA('mod:a3', sha256(ws['a.ts'])),
+      owned('a.ts', 'mod:a1', 'an-older-revision'),
+      owned('a.ts', 'mod:a2', sha256(ws['a.ts'])),
     ];
     const { root, engine } = await planted(ws, nodes);
     expect(check(await verify(engine, root), 'revision-reconciliation')).toMatchObject({
       state: 'fail',
-      observed: 3,
+      observed: 1,
       expected: 0,
-      localisedTo: ['a.ts', 'b.ts'],
+      localisedTo: ['a.ts'],
+    });
+  });
+
+  it('both sources together: every mismatch counts, each file is listed once, in code-unit order', async () => {
+    const ws = { 'a.ts': 'export const a = 1;\n', 'B.ts': 'export const B = 2;\n', 'c.ts': 'c\n' };
+    const nodes = [
+      dir('.'),
+      file('a.ts', ws['a.ts']),
+      // B.ts and c.ts were indexed from older bytes
+      file('B.ts', 'export const B = 1;\n'),
+      file('c.ts', 'old c\n'),
+      // stale against their FILE; by id, c.ts's row comes before a.ts's
+      owned('c.ts', 'mod:1', 'an-older-revision'),
+      owned('a.ts', 'mod:2', 'an-older-revision'),
+    ];
+    const { root, engine } = await planted(ws, nodes);
+    expect(check(await verify(engine, root), 'revision-reconciliation')).toMatchObject({
+      state: 'fail',
+      observed: 4,
+      expected: 0,
+      localisedTo: ['B.ts', 'a.ts', 'c.ts'],
     });
   });
 });
