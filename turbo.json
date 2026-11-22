@@ -88,6 +88,19 @@
       // see (a deleted keeping branch or a shallow clone changes the answer), so never cached.
       "cache": false
     },
+    "//#check:schema": {
+      // The doc is an input because no other task hashes docs/**: without it a hand edit of the
+      // generated region would replay a cached pass.
+      "dependsOn": ["//#typecheck"],
+      "inputs": [
+        "packages/model/src/**",
+        "packages/model/tsconfig*.json",
+        "tsconfig.base.json",
+        "tools/schema-doc.mjs",
+        "docs/outline/04-schema.yaml",
+        "!**/.tsbuildinfo"
+      ]
+    },
     "//#typecheck": {
       "inputs": [
         "apps/**",

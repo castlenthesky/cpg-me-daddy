@@ -39,6 +39,8 @@
     "check:pack": "node tools/check-pack.mjs",
     "check:coords": "node tools/check-archive-coords.mjs",
     "check:cli-bin": "node tools/check-cli-bin.mjs",
+    "schema:doc": "node tools/schema-doc.mjs",
+    "check:schema": "node tools/schema-doc.mjs --check",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "verify": "bun run check",
@@ -69,7 +71,8 @@
     "oxlint-tsgolint": "^7.0.2008",
     "turbo": "^2.11.13",
     "typescript": "^5.9.3",
-    "vitest": "^5.1.1"
+    "vitest": "^5.1.1",
+    "yaml": "2.9.1"
   },
   "packageManager": "bun@1.4.5"
 }

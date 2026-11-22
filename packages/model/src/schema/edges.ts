@@ -16,7 +16,7 @@ export const EDGE_TYPES = [
     write: 'move-rename-only',
     properties: [],
     firstWrittenIn: 'M0.2',
-    doc: 'Filesystem nesting only. Code nesting uses DECLARES; file membership is the `file` property.',
+    doc: 'Filesystem nesting only. Code nesting is DECLARES; file membership is the `file` property plus SOURCE_FILE.',
   },
   {
     type: 'DECLARES',
@@ -26,7 +26,7 @@ export const EDGE_TYPES = [
     write: 'delete-create',
     properties: [],
     firstWrittenIn: 'M0.6',
-    doc: 'Lexical nesting. Extended in M0.7 to MODULE -> IMPORT.',
+    doc: 'Lexical nesting.',
   },
   {
     type: 'HAS_PARAM',
@@ -46,7 +46,7 @@ export const EDGE_TYPES = [
     write: 'delete-create',
     properties: [],
     firstWrittenIn: 'M0.7',
-    doc: '',
+    doc: 'A declaration mints exactly one SYMBOL. Every CALLS/IMPORTS target must have a DEFINES edge or a recorded non-resolved status (verify check `resolution-health`).',
   },
   {
     type: 'CALLS',
@@ -61,11 +61,29 @@ export const EDGE_TYPES = [
         cardinality: 'one',
         enumValues: RESOLUTION_STATUS,
         golden: 'include',
-        doc: 'Shared vocabulary with IMPORTS.status — not a parallel enum.',
+        doc: 'Shared vocabulary with IMPORTS.status.',
       },
-      { name: 'reason', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
-      { name: 'confidence', type: 'float', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
-      { name: 'resolvedBy', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
+      {
+        name: 'reason',
+        type: 'string',
+        cardinality: 'zeroOrOne',
+        golden: 'include',
+        doc: 'Closed enum of resolver reason codes (05-contracts C-RESOLVE).',
+      },
+      {
+        name: 'confidence',
+        type: 'float',
+        cardinality: 'zeroOrOne',
+        golden: 'exclude',
+        doc: 'EXCLUDED from goldens (DQ-09).',
+      },
+      {
+        name: 'resolvedBy',
+        type: 'string',
+        cardinality: 'zeroOrOne',
+        golden: 'exclude',
+        doc: 'EXCLUDED from goldens (DQ-09).',
+      },
     ]),
     firstWrittenIn: 'M0.7',
     doc: 'CALL site to the SYMBOL it resolves to. R2: unresolved rate = one GROUP BY over `status`.',
@@ -116,9 +134,7 @@ export const EDGE_TYPES = [
       },
     ]),
     firstWrittenIn: 'M0.10',
-    doc:
-      "Python's implicit/duck-typed Protocol conformance has no edge to attach to here — an honest, " +
-      'acknowledged v1 limitation (Cross-Language), not a reason to reopen TYPE_DECL usage-site machinery.',
+    doc: 'Python duck-typed Protocol conformance has no edge here: an acknowledged v1 limitation.',
   },
   {
     type: 'MEMBER_OF',
@@ -206,7 +222,7 @@ export const EDGE_TYPES = [
     write: 'delete-create',
     properties: [],
     firstWrittenIn: 'M0.7',
-    doc: 'One per file, from its MODULE root. Written by the indexer alongside the filesystem tier, not by extractDeclarations.',
+    doc: 'Written by the indexer alongside the filesystem tier, not by extraction.',
   },
 ] as const satisfies readonly EdgeTypeSpec[];
 
