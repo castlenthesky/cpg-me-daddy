@@ -26,7 +26,7 @@ What v1 is **not**: a Joern-class Code Property Graph with control-flow and data
 | `08-verification.md` | Why the picture cannot verify correctness, `cpg verify` (six checks, four states), revision reconciliation, the resolver harness, per-milestone gates, CI rules | before declaring anything done |
 | `09-glossary.md` | Terms used throughout | whenever a word is unfamiliar |
 | `10-lessons.yaml` | The 48 lessons from two prior attempts and the 10 seam defects found in specification, each with the rule it implies and where it bites this plan | when a design choice looks arbitrary |
-| `11-salvage.yaml` | Inventory of code on the archive tags worth porting, with exact coordinates, line counts, verdicts, target package and milestone | when a story says `port_from` |
+| `11-salvage.yaml` | Inventory of archived code worth porting, with exact coordinates, line counts, verdicts, target package and milestone | when a story says `port_from` |
 | `12-retirement.md` | How the old documentation is neutralized, the disclaimer text, the citation gate, the 21-question battery that proves this directory is self-contained | when performing or auditing the archive |
 
 ## Reading order by role
@@ -53,7 +53,7 @@ Ids are stable and cross-referenced: decisions `DQ-nn`, `F-n`, `P-A/B/C`, `VD-nn
 
 ## Conventions
 
-- **Archive coordinates.** Code from prior attempts is referenced as `archive/<lineage>-20260916:<path>` and read with `git show <tag>:<path>`. Line numbers appear only where a verbatim quote is pinned. Four archived files contain literal NUL bytes and are invisible to `grep`; use `grep -a` (they are named in `11-salvage.yaml`).
+- **Archive coordinates.** Code from prior attempts is referenced as `<sha>:<path>`, a 7-character commit SHA from `10-lessons.yaml` `archive_commits`, and read with `git show <sha>:<path>`. `tools/check-archive-coords.mjs` resolves every coordinate in `bun run check`. Line numbers appear only where a verbatim quote is pinned. Four archived files contain literal NUL bytes and are invisible to `grep`; use `grep -a` (they are named in `11-salvage.yaml`).
 - **Paths in this directory.** Any statement about the current tree names the commit it describes. Anything that names a package path is a plan, not a fact, until `07-milestones.yaml` marks the story done.
 - **Generated regions.** `04-schema.yaml` carries a generated region that milestone U1's schema generator regenerates from code; drift fails CI from U1 onward. Until U1 lands, it is hand-maintained and this file says so.
 - **Numbers.** Every number in prose is a pointer into `06-measurements.yaml`, which carries the conditions under which it was measured. A number without a boundary is not a fact.

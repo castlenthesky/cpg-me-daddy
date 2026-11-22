@@ -233,6 +233,20 @@ const CASES = [
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
     },
   },
+  {
+    name: 'check:coords rejects an archive coordinate that does not resolve',
+    expectOutput: /__gate_probe\.md:1 +27361a3:packages\/engine\/src\/schema\/nope\.ts/,
+    command: ['bun', 'run', '--silent', 'check:coords'],
+    plant() {
+      writeFileSync(
+        at('docs/outline/__gate_probe.md'),
+        'Port `27361a3:packages/engine/src/schema/nope.ts`.\n',
+      );
+    },
+    cleanup() {
+      rmSync(at('docs/outline/__gate_probe.md'), { force: true });
+    },
+  },
   // check:deps on the real tree: the three tier violations U0.2.2 names, one per rule. Every other
   // rule and specifier form is planted on fixtures in tools/check-deps.test.mjs; the case after
   // these proves `bun run test` runs that file.

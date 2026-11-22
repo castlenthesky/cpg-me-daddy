@@ -30,7 +30,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
+      # Full history: check:coords resolves archive coordinates on other branches' commits.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # Node version comes from .node-version, the single source also hashed by turbo.
       # Bun version comes from package.json "packageManager".
@@ -72,7 +75,10 @@ jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
+      # Full history: check:coords resolves archive coordinates on other branches' commits.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version

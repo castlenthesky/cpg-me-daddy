@@ -13,6 +13,7 @@ const GATES = [
   'knip',
   'check:deps',
   'check:pack',
+  'check:coords',
   'typecheck',
   'typecheck:tests',
   'test:coverage',

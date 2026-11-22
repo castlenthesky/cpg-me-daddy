@@ -37,6 +37,7 @@
     "knip": "knip",
     "check:deps": "node tools/check-deps.mjs",
     "check:pack": "node tools/check-pack.mjs",
+    "check:coords": "node tools/check-archive-coords.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "verify": "bun run check",

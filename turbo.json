@@ -83,6 +83,11 @@
       "dependsOn": ["//#typecheck"],
       "inputs": ["packages/*/dist/**", "packages/*/package.json", "tools/check-pack.mjs"]
     },
+    "//#check:coords": {
+      // Resolves docs/outline coordinates against the git object store, which no input glob can
+      // see (a deleted keeping branch or a shallow clone changes the answer), so never cached.
+      "cache": false
+    },
     "//#typecheck": {
       "inputs": [
         "apps/**",
