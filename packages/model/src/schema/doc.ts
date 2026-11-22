@@ -33,6 +33,8 @@ const ENUM_NAMES: ReadonlyMap<readonly string[], string> = new Map<readonly stri
 
 const PLAIN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const KEYWORDS = new Set(['true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n']);
+/** YAML 1.1's float pattern has an optional mantissa, so a bare exponent (`e0`, `E5`, `e-5`) reads as a number. */
+const BARE_EXPONENT = /^[eE]-?[0-9]+$/;
 /** Characters YAML readers may treat as line breaks or non-printable: written as \u escapes. */
 // oxlint-disable-next-line no-control-regex -- the point is to match and escape control characters.
 const UNSAFE = /[\u007f-\u009f\u2028\u2029\ufeff]/g;
@@ -43,7 +45,7 @@ const quoted = (v: string): string =>
 
 /** Plain when it cannot be read as anything but a string in YAML 1.1 and 1.2, double-quoted otherwise. */
 const scalar = (v: string): string =>
-  PLAIN.test(v) && !KEYWORDS.has(v.toLowerCase()) ? v : quoted(v);
+  PLAIN.test(v) && !KEYWORDS.has(v.toLowerCase()) && !BARE_EXPONENT.test(v) ? v : quoted(v);
 
 const flowList = (xs: readonly string[]): string => `[${xs.map(scalar).join(', ')}]`;
 
