@@ -615,3 +615,37 @@ describe('check-deps: @cosmos.gl/graph is the inspector host SDK (owner decision
     expect(status).toBe(1);
   });
 });
+
+// Owner decision 8a (2026-11-22): apps/inspector may import ws, for its WebSocket server, and no
+// other app gets the exemption.
+describe('check-deps: ws is the inspector WebSocket server (owner decision 8a)', () => {
+  it('lets apps/inspector import ws at runtime and type-only, tests included', () => {
+    const { status, out } = run({
+      ...CLEAN,
+      'apps/inspector/src/server.ts':
+        "import { WebSocketServer } from 'ws';\nexport { WebSocketServer };\n",
+      'apps/inspector/src/types.ts':
+        "import type { WebSocket } from 'ws';\nexport type S = WebSocket;\n",
+      'apps/inspector/src/server.test.ts':
+        "import { WebSocket } from 'ws';\nexport { WebSocket };\n",
+    });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it.each([
+    ['a name it only prefixes in apps/inspector', 'apps/inspector/src/p.ts', 'wss'],
+    ['a scoped look-alike in apps/inspector', 'apps/inspector/src/p.ts', '@types/ws'],
+    ['ws in apps/cli', 'apps/cli/src/p.ts', 'ws'],
+    ['ws in apps/vscode', 'apps/vscode/src/p.ts', 'ws'],
+    ['ws in apps/mcp', 'apps/mcp/src/p.ts', 'ws'],
+  ])('still rejects %s', (_name, path, spec) => {
+    const { status, out } = run({
+      ...CLEAN,
+      [path]: `import { x } from '${spec}';\nexport { x };\n`,
+    });
+    expect(out).toContain('[app-tier]');
+    expect(out).toContain(`"${spec}"`);
+    expect(status).toBe(1);
+  });
+});

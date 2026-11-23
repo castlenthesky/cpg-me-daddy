@@ -1,6 +1,7 @@
 // REAL (U2b.1 part 3a-i, BMO-35): the page's typed boundary for host messages. C-EXT may_not "type
 // the webview boundary loosely": the parser returns a well-formed message or undefined, never a cast.
-// Part 3a-ii adds the host's side (page messages, stdin lines) here.
+// SEAT (U2b.1 part 3a-ii, BMO-35): the inspector process's two boundaries, page -> host
+// (parseWebviewMessage) and stdin -> host (parseInspectorInput).
 
 import {
   CPG_PROTOCOL_VERSION,
@@ -11,6 +12,7 @@ import {
   type HostToWebview,
   type VerificationReport,
   type VerifyCheckId,
+  type WebviewToHost,
 } from '@cpg/model';
 
 /** The host messages the page acts on; `theme` is not among them yet (controller decision 14). */
@@ -114,4 +116,30 @@ function isPageMessage(value: unknown): value is PageMessage {
  */
 export function parsePageMessage(value: unknown): PageMessage | undefined {
   return isPageMessage(value) ? value : undefined;
+}
+
+/**
+ * One NDJSON line on the inspector's stdin (owner decision 9a): a payload, a delta or a verify
+ * report. The host assigns `protocol` and `epoch` itself, so the line carries neither.
+ */
+export type InspectorInput =
+  | { readonly type: 'graph'; readonly payload: GraphPayload }
+  | { readonly type: 'graph-delta'; readonly delta: GraphDelta }
+  | { readonly type: 'verification'; readonly report: Omit<VerificationReport, 'epoch'> };
+
+/**
+ * A `ready` (any numeric protocol: the host decides), `reveal`, `resync` or `render-report` whose
+ * every field has its C-EXT type, or undefined. Never throws.
+ */
+export function parseWebviewMessage(_value: unknown): WebviewToHost | undefined {
+  throw new Error('SEAT: parseWebviewMessage is U2b.1 part 3a-ii');
+}
+
+/**
+ * A stdin line (already JSON-parsed) in one of InspectorInput's three shapes, or undefined. A
+ * verification must carry all six checks, once each, in enum order (C-EXT I-18), since the host
+ * posts it as a VerificationReport. Node and edge fields are not checked (stop-list 55). Never throws.
+ */
+export function parseInspectorInput(_value: unknown): InspectorInput | undefined {
+  throw new Error('SEAT: parseInspectorInput is U2b.1 part 3a-ii');
 }
