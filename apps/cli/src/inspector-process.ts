@@ -65,7 +65,7 @@ export interface SpawnInspectorOptions extends InspectorHandlers {
 const DEFAULT_START_MS = 10_000;
 const DEFAULT_GRACE_MS = 2000;
 
-/* v8 ignore next -- EPIPE only fires when a write races ahead of the child exit event */
+// A write to a child that closed its stdin while alive fails with EPIPE; that line is dropped.
 const noop = (): void => {};
 
 function isRecord(value: unknown): value is Record<string, unknown> {

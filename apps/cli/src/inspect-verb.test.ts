@@ -939,3 +939,36 @@ describe('cpg inspect and cpg index --inspect: round two', () => {
     expect(stops).toBeGreaterThanOrEqual(1);
   });
 });
+
+// Post-implementation (sabotage group B, live.ts #15 survived): a render-report that arrives while
+// the CLI is stopping the inspector is ignored. It prints no render-reconciliation line and sends
+// no verification after Ctrl-C.
+describe('cpg inspect: post-implementation (sabotage group B)', () => {
+  it('a render-report during shutdown is ignored: no line, no verification after Ctrl-C', async () => {
+    const sent: InspectorLine[] = [];
+    let handlers: InspectorHandlers | undefined;
+    const start: StartInspector = (h) => {
+      handlers = h;
+      return Promise.resolve({
+        url: URL,
+        send: (line: InspectorLine) => void sent.push(line),
+        exited: new Promise<InspectorExit>(() => {}),
+        stop: () => {
+          handlers?.onRenderReport({
+            type: 'render-report',
+            epoch: 1,
+            seq: PAYLOAD.seq,
+            report: renderReport({ renderedNodeCount: 0, droppedNodeIds: ['f'] }),
+          });
+          return Promise.resolve();
+        },
+      });
+    };
+    const l = live(['inspect', await payloadFile(envelope(PAYLOAD))], { start });
+    await until(() => sent.length === 2, 'the graph and its verdict');
+    l.abort();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
+    expect(sent.map((line) => line.type)).toEqual(['graph', 'verification']);
+    expect(l.io.stderr.filter((line) => line.includes('render-reconciliation'))).toEqual([]);
+  });
+});
