@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyGraphDelta,
+  CPG_PROTOCOL_VERSION,
   toWorkspacePath,
   type DeltaApplyResult,
   type GraphDelta,
@@ -671,5 +672,11 @@ describe('applyGraphDelta edges', () => {
       ),
     );
     expect(next.edges).toEqual([e1, e2, e1]);
+  });
+});
+
+describe('CPG_PROTOCOL_VERSION (C-EXT)', () => {
+  it('is protocol 1, the version every host message carries', () => {
+    expect(CPG_PROTOCOL_VERSION).toBe(1);
   });
 });

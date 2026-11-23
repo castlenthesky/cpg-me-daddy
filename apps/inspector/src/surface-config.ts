@@ -6,12 +6,21 @@ import { LINK_DISTANCE, SPACE_SIZE } from './layout';
 import { DEFAULT_LINK_COLOR_HEX } from './node-types';
 import type { SurfaceEvents } from './visualizer';
 
+/** Colours the page reads from its own computed style (controller decision 14). */
+export interface PageColours {
+  /** The canvas background: the body's computed background-color. */
+  readonly background: string;
+  /** The hovered point's ring and the hovered link: the body's computed color. */
+  readonly hover: string;
+}
+
 /**
  * The config the page constructs cosmos.gl's Graph with: the archive's physics, sizing and hover
- * settings, with the visualizer's `events` as the callbacks. Its colour literals are the archive's,
- * kept under stop-list 45.
+ * settings, with the visualizer's `events` as the callbacks and `colours` for the canvas and the
+ * hover highlight, so the picture follows light or dark mode (controller decision 14). Node and link
+ * colours stay the registry palette (stop-list 45). SEAT (U2b.1 part 3a-i): `colours` is not used yet.
  */
-export function graphConfig(events: SurfaceEvents): GraphConfig {
+export function graphConfig(events: SurfaceEvents, _colours: PageColours): GraphConfig {
   return {
     backgroundColor: '#1e1e1e',
     spaceSize: SPACE_SIZE,

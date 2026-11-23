@@ -1,8 +1,9 @@
-// REAL (U2b.1 part 2b, BMO-35): port of 21754b4:src/webview/graphApp.ts.
+// REAL (U2b.1 part 2b, BMO-35): port of 21754b4:src/webview/graphApp.ts. SEAT (U2b.1 part 3a-i): the
+// C-EXT protocol (epoch, seq, resync), the render-report and the verification banner.
 
-import type { GraphDelta, GraphPayload, HostToWebview, WebviewToHost } from '@cpg/model';
-import { mountGraphViews, type ViewDocument, type ViewElement } from './dom-views';
-import { GraphVisualizer, type GraphSurface, type SurfaceEvents } from './visualizer';
+import type { WebviewToHost } from '@cpg/model';
+import type { ViewDocument, ViewElement } from './dom-views';
+import type { GraphSurface, GraphVisualizer, SurfaceEvents } from './visualizer';
 
 /**
  * How the page talks to its host: the VS Code webview API (U3) or the inspector's WebSocket
@@ -22,58 +23,28 @@ export interface GraphPage<E extends ViewElement<E>> {
   readonly container: E;
   /** Builds the cosmos.gl Graph on the container with these callbacks (see graphConfig). */
   readonly makeSurface: (events: SurfaceEvents) => GraphSurface;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isGraphPayload(value: unknown): value is GraphPayload {
-  return isRecord(value) && Array.isArray(value['nodes']) && Array.isArray(value['edges']);
-}
-
-function isGraphDelta(value: unknown): value is GraphDelta {
-  return (
-    isRecord(value) &&
-    Array.isArray(value['addedNodes']) &&
-    Array.isArray(value['addedEdges']) &&
-    Array.isArray(value['removedNodeIds'])
-  );
-}
-
-function isHostMessage(message: unknown): message is HostToWebview {
-  if (!isRecord(message)) return false;
-  if (message['type'] === 'graph') return isGraphPayload(message['payload']);
-  if (message['type'] === 'graph-delta') return isGraphDelta(message['delta']);
-  return false;
+  /** The shell's #cpg-verification region, which shows the latest verify report. */
+  readonly banner: E;
+  /** The clock frameMs is measured on; performance.now() by default. */
+  readonly now?: () => number;
 }
 
 /**
- * Mounts the views, builds the visualizer, routes `graph` and `graph-delta` messages to it (anything
- * else is ignored), posts `reveal` with only the node id on a click, and posts `ready` last, once the
- * handler is registered, even when the surface failed to build.
+ * Mounts the views and builds the visualizer, then speaks C-EXT's protocol with the host:
+ * - posts `ready` with CPG_PROTOCOL_VERSION last, once the handler is registered, even when the
+ *   surface failed to build;
+ * - takes only messages parsePageMessage accepts (protocol 1); everything else is ignored;
+ * - `graph`: adopts its epoch and payload, renders, and posts a render-report at its seq;
+ * - `graph-delta`: before any graph, or on another epoch than the page's, posts resync 'stale-epoch';
+ *   otherwise merges it into the held payload with applyGraphDelta: applied draws it and posts a
+ *   render-report, already-applied is ignored, a gap posts resync 'gap', malformed posts resync
+ *   'render-error'. A resync carries the page's own epoch and seq (0 and -1 before any graph);
+ * - `verification`: writes verificationText into the banner;
+ * - a click posts `reveal` with only the node id.
  */
 export function startGraphApp<E extends ViewElement<E>>(
-  page: GraphPage<E>,
-  channel: PageChannel,
+  _page: GraphPage<E>,
+  _channel: PageChannel,
 ): GraphVisualizer {
-  const views = mountGraphViews(page.document, page.container, () => visualizer.fitView());
-  const visualizer = new GraphVisualizer(page.makeSurface, views, {
-    seed: PAGE_SEED,
-    onNodeClick: (node) => channel.post({ type: 'reveal', nodeId: node.id }),
-  });
-
-  channel.onMessage((message) => {
-    if (!isHostMessage(message)) return;
-    if (message.type === 'graph') {
-      visualizer.render(message.payload);
-    } else {
-      visualizer.applyDelta(message.delta);
-    }
-  });
-
-  // Tells the host it is now safe to postMessage — a message sent right after the page HTML is set
-  // can otherwise arrive before the listener above exists.
-  channel.post({ type: 'ready' });
-  return visualizer;
+  throw new Error('SEAT: the C-EXT page protocol is U2b.1 part 3a-i');
 }

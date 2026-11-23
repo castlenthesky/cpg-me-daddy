@@ -713,7 +713,7 @@ contracts:
       export interface GraphSink { onSnapshot(payload: GraphPayload, meta: { seq: Seq; cause: 'initial' | 'catch-up' }): Promise<void>; onDelta(delta: GraphDelta, meta: { seq: Seq; cause: 'live' | 'cascade' | 'bulk' }): Promise<void>; }   // resolves on MERGE, never on paint
       export interface ThemeSnapshot { kind: 'light' | 'dark' | 'high-contrast-light' | 'high-contrast-dark'; nodeColors: Record<string, string>; defaultNodeColor: string; }
       export type HostToWebviewMessage = { type: 'theme'; protocol: 1; epoch; theme } | { type: 'graph'; protocol: 1; epoch; seq; payload } | { type: 'graph-delta'; protocol: 1; epoch; seq; delta } | { type: 'verification'; protocol: 1; epoch; seq; report: VerificationReport };
-      export type WebviewToHostMessage = { type: 'ready'; protocol: number } | { type: 'reveal'; nodeId: string } | { type: 'resync'; epoch; seq; reason: 'gap' | 'stale-epoch' | 'render-error' } | { type: 'render-report'; epoch; seq; report: { payloadNodeCount; renderedNodeCount; renderedEdgeCount; droppedNodeIds: string[] /* capped sample */; frameMs } };
+      export type WebviewToHostMessage = { type: 'ready'; protocol: number } | { type: 'reveal'; nodeId: string } | { type: 'resync'; epoch; seq; reason: 'gap' | 'stale-epoch' | 'render-error' } | { type: 'render-report'; epoch; seq; report: { payloadNodeCount; renderedNodeCount; renderedEdgeCount /* distinct (source, target, type) drawn */; duplicateEdges /* payload edges repeating an earlier edge's key (decision 12a) */; droppedNodeIds: string[] /* capped sample */; frameMs } };
       export interface VerificationReport { epoch; seq; checks: CheckResult[] /* all six, enum order */; state: CheckState; }
       export type RevealOutcome = { ok: true; filePath; target: 'nameRange' | 'range' | 'whole-file' } | { ok: false; reason: 'unknown-node'; nodeId } | { ok: false; reason: 'no-location'; nodeId } | { ok: false; reason: 'open-failed'; nodeId; filePath; error: SerializedError };
       export type ProtocolFault = { kind: 'unknown-message'; received } | { kind: 'bad-epoch'; expected; received } | { kind: 'seq-gap'; expected; received } | { kind: 'post-failed'; seq; error };
@@ -735,6 +735,9 @@ contracts:
       - decision: "owner 11a (2026-11-22)"
         was: "I-28: no literal colour in the shell, with no reading for outside VS Code, where --vscode-* is undefined"
         now: "outside VS Code the var() fallbacks are CSS system-colour keywords (Canvas, CanvasText, GrayText, ...), which are not literal colours"
+      - decision: "owner 12a (2026-11-22)"
+        was: "render-report.renderedEdgeCount with no stated meaning, while the renderer keys edges on (source, target, type) and applyGraphDelta keeps a re-sent edge"
+        now: "renderedEdgeCount counts distinct (source, target, type) edges drawn; render-report adds duplicateEdges, the payload edges that repeat a key, so the dedupe is visible, not silent"
     invariants:
       - { id: I-2,  class: T, text: "nothing posted before the webview sends ready" }
       - { id: I-3,  class: T, text: "ready is answered with exactly one full graph snapshot of merged state, never a delta replay" }

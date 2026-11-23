@@ -2,7 +2,7 @@
 // @cpg/engine's public surface. Types only. This is the slice U2a needs (identity, connect, index,
 // verify, schema); watch, read, inspect and doctor arrive with their units.
 
-import type { SchemaDocInput, WorkspacePath } from '@cpg/model';
+import type { CheckResult, CheckState, SchemaDocInput, WorkspacePath } from '@cpg/model';
 
 export interface StoreTarget {
   readonly host: string;
@@ -138,29 +138,9 @@ export interface IndexProgress {
   readonly filesTotal: number;
 }
 
-/** The shared enum (05-contracts.yaml shared.verify_check_ids), in its order. */
-export type VerifyCheckId =
-  | 'filesystem-reconciliation'
-  | 'identity-invariants'
-  | 'id-uniqueness'
-  | 'render-reconciliation'
-  | 'revision-reconciliation'
-  | 'resolution-health';
-
-/** Worst-of ordering: fail > stale > unavailable > pass. */
-export type CheckState = 'pass' | 'fail' | 'stale' | 'unavailable';
-
-export interface CheckResult {
-  readonly id: VerifyCheckId;
-  readonly state: CheckState;
-  readonly observed: number;
-  readonly expected: number;
-  /** The offending workspace paths (directories or files) or keys, sorted. */
-  readonly localisedTo: readonly string[];
-  readonly detail?: string;
-  /** The graph's seq, snapshotted before the check's first await. */
-  readonly asOfSeq: number;
-}
+// The check vocabulary lives in @cpg/model, shared with C-EXT's VerificationReport (controller
+// decision 13); re-exported so C-CLI's types stay on this surface (Q1).
+export type { CheckResult, CheckState, VerifyCheckId } from '@cpg/model';
 
 export interface VerifyReport {
   /** The worst state of `checks`. */
