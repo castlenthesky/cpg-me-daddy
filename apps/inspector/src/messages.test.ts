@@ -246,6 +246,9 @@ describe('parseWebviewMessage (page -> host)', () => {
     ['the archive resync{haveSeq}', { type: 'resync', haveSeq: 0 }],
     ["resync at epoch '1'", { type: 'resync', epoch: '1', seq: 0, reason: 'gap' }],
     ['resync with no seq', { type: 'resync', epoch: 1, reason: 'gap' }],
+    // Round two (review a10): present but not a number.
+    ["resync at seq '0'", { type: 'resync', epoch: 1, seq: '0', reason: 'gap' }],
+    ["a render-report at epoch '1'", { ...renderReport, epoch: '1' }],
     ['a render-report with no epoch', withField(renderReport, 'epoch', undefined)],
     ["a render-report at seq '0'", { ...renderReport, seq: '0' }],
     ['a render-report with no report', withField(renderReport, 'report', undefined)],
@@ -316,6 +319,7 @@ describe('parseInspectorInput (stdin, decision 9a)', () => {
     ['a graph line carrying a delta', { type: 'graph', delta: D }],
     ['a verification with no report', { type: 'verification' }],
     ['a report with no seq', { type: 'verification', report: withField(report, 'seq', undefined) }],
+    ["a report at seq '0' (review a10)", { type: 'verification', report: { ...report, seq: '0' } }],
     ["a report in state 'green'", { type: 'verification', report: { ...report, state: 'green' } }],
     [
       'a report with no state',

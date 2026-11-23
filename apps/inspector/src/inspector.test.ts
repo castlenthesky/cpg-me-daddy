@@ -98,7 +98,10 @@ async function run(bundle = 'graph.js') {
 function page(port: number) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: `http://127.0.0.1:${port}` });
   const received: unknown[] = [];
-  socket.on('message', (data: Buffer) => received.push(JSON.parse(data.toString('utf8'))));
+  // Round two (review a2): the page drops a binary frame (page-channel.ts), so one must show here.
+  socket.on('message', (data: Buffer, isBinary: boolean) =>
+    received.push(isBinary ? 'a binary frame' : JSON.parse(data.toString('utf8'))),
+  );
   const opened = new Promise<void>((resolve) => socket.on('open', () => resolve()));
   const closed = new Promise<void>((resolve) => socket.on('close', () => resolve()));
   return { socket, received, opened, closed };
@@ -168,9 +171,14 @@ describe('runInspector', () => {
     ]);
   });
 
-  it('reads CRLF lines', async () => {
+  it('reads CRLF lines, and lines split across chunks', async () => {
     const running = await run();
-    running.stdin.write(`${JSON.stringify({ type: 'graph', payload: P })}\r\nnot json\r\n`);
+    // Round two (review a9): one line in three writes, and a CRLF split between \r and \n.
+    const graph = JSON.stringify({ type: 'graph', payload: P });
+    running.stdin.write(graph.slice(0, 10));
+    running.stdin.write(graph.slice(10));
+    running.stdin.write('\r');
+    running.stdin.write('\nnot json\r\n');
     running.stdin.end();
     await running.done;
     expect(running.stderr.lines()).toEqual(['cpg-inspector: stdin line 2: not JSON']);

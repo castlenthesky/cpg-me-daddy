@@ -247,6 +247,25 @@ describe('InspectorHost: deltas', () => {
     ]);
   });
 
+  // Round two (review a6): a removal drops the node and its edges, and a remove-then-add replaces
+  // it, only as the shared merge does it (a private concat keeps both copies).
+  it('holds exactly what applyGraphDelta makes of removals and re-adds (I-8)', () => {
+    const { host, t } = readyHost();
+    const remove = delta(5, { addedNodes: [], addedEdges: [], removedNodeIds: ['f'] });
+    const readd = delta(6, {
+      removedNodeIds: ['d'],
+      addedNodes: [{ id: 'd', type: 'DIRECTORY', name: 'again' }],
+      addedEdges: [],
+    });
+    host.input({ type: 'graph-delta', delta: remove });
+    host.input({ type: 'graph-delta', delta: readd });
+    const expected = merged(P, remove, readd);
+    expect(host.snapshot()).toStrictEqual(expected);
+    expect(expected.nodes.map((node) => node.id)).toEqual(['d']);
+    t.send({ type: 'resync', epoch: 1, seq: 6, reason: 'render-error' });
+    expect(t.posted.at(-1)).toStrictEqual(graphOf(expected));
+  });
+
   it.each([4, 2])('drops an already-applied delta at seq %i silently (at-least-once)', (seq) => {
     const { host, t, faults } = readyHost();
     host.input({ type: 'graph-delta', delta: delta(seq) });
@@ -274,10 +293,15 @@ describe('InspectorHost: deltas', () => {
     expect(host.snapshot()).toBe(P);
   });
 
-  it('records a delta before any graph and holds nothing', () => {
+  it('records a delta before any graph, posts nothing to a ready page, and holds nothing', () => {
     const { host, faults } = makeHost();
+    // Round two (review a8): a ready page, so a delta posted anyway would show.
+    const t = new FakeTransport();
+    host.attach(t);
+    t.send(READY);
     host.input({ type: 'graph-delta', delta: delta(5) });
     expect(faults).toEqual(['delta before any graph at seq 5']);
+    expect(t.posted).toEqual([]);
     expect(host.snapshot()).toBeUndefined();
     expect(host.epoch()).toBe(0);
   });
@@ -298,6 +322,17 @@ describe('InspectorHost: messages from the page', () => {
       ]);
     },
   );
+
+  // Round two (review a7): the page resyncs with its own epoch and seq (graph-app.ts), which lag the
+  // host's after a new graph or before its first; the answer is the same full snapshot.
+  it('answers a resync whatever epoch and seq it carries', () => {
+    const { host, t } = readyHost();
+    const next: GraphPayload = { seq: 9, nodes: [{ id: 'x', type: 'FILE' }], edges: [] };
+    host.input({ type: 'graph', payload: next });
+    t.send({ type: 'resync', epoch: 0, seq: -1, reason: 'stale-epoch' });
+    t.send({ type: 'resync', epoch: 7, seq: 99, reason: 'gap' });
+    expect(t.posted.slice(2)).toStrictEqual([graphOf(next, 2), graphOf(next, 2)]);
+  });
 
   it('does not answer a resync from a page that has not sent ready (I-2)', () => {
     const { host, faults } = makeHost();

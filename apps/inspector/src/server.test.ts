@@ -6,8 +6,9 @@
 // http://127.0.0.1:<port>, is refused with 403. The client is `ws`, which sends an Origin only when
 // told to.
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
+import { connect as tcpConnect } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -60,6 +61,7 @@ function get(
   path: string,
   options: { method?: string; host?: string; headers?: Record<string, string> } = {},
 ): Promise<Response> {
+  // Round two (review d5): a connection that never answers rejects instead of hanging.
   return new Promise((resolve, reject) => {
     const req = request(
       {
@@ -78,8 +80,21 @@ function get(
         );
       },
     );
+    req.setTimeout(2000, () => req.destroy(new Error('timed out')));
     req.on('error', reject);
     req.end();
+  });
+}
+
+/** Round two (review a5): a raw HTTP/1.0 request, which may carry no Host at all; the status line. */
+function rawStatusLine(port: number, text: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = tcpConnect(port, '127.0.0.1', () => socket.end(text));
+    let reply = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => (reply += chunk));
+    socket.on('end', () => resolve(reply.split('\r\n')[0] ?? ''));
+    socket.on('error', reject);
   });
 }
 
@@ -117,7 +132,10 @@ function connect(
     ...(options.host === undefined ? {} : { headers: { Host: options.host } }),
   });
   const received: unknown[] = [];
-  socket.on('message', (data: Buffer) => received.push(JSON.parse(data.toString('utf8'))));
+  // Round two (review a2): the page drops a binary frame (page-channel.ts), so one must show here.
+  socket.on('message', (data: Buffer, isBinary: boolean) =>
+    received.push(isBinary ? 'a binary frame' : JSON.parse(data.toString('utf8'))),
+  );
   const outcome = new Promise<string>((resolve) => {
     socket.on('open', () => resolve('open'));
     socket.on('error', (error) => resolve(error.message));
@@ -138,9 +156,11 @@ async function until(check: () => boolean, what: string): Promise<void> {
 
 /** A page connected from the server's own origin, and the transport attach received for it. */
 async function page(started: Awaited<ReturnType<typeof start>>) {
+  // Round two (review d6): wait for this connection's own attach, not any earlier one.
+  const before = started.transports.length;
   const client = connect(started.server.port, { origin: own(started.server) });
   expect(await client.outcome).toBe('open');
-  await until(() => started.transports.length > 0, 'attach');
+  await until(() => started.transports.length > before, 'attach');
   const transport = started.transports.at(-1);
   if (transport === undefined) throw new Error('no transport');
   return { client, transport };
@@ -160,7 +180,9 @@ describe('startInspectorServer: HTTP', () => {
   it.skipIf(external === undefined)('is unreachable on any address but 127.0.0.1', async () => {
     const { server } = await start();
     const host = external?.address ?? 'unreachable.invalid';
-    await expect(get(server.port, '/', { host })).rejects.toThrow(/ECONNREFUSED/);
+    await expect(get(server.port, '/', { host })).rejects.toThrow(
+      /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|timed out/,
+    );
   });
 
   it("serves the shell at /: its own connect-src, the fixed script path, 'self' styles", async () => {
@@ -178,7 +200,10 @@ describe('startInspectorServer: HTTP', () => {
     const nonces = loads.map((res) => nonceOf(res.body));
     expect(new Set(nonces).size).toBe(3);
     for (const nonce of nonces) {
-      expect(Buffer.from(nonce, 'base64').length).toBeGreaterThanOrEqual(16);
+      // Round two (review a3): canonical base64 of 16 or more bytes, so hex or a counter fails.
+      const bytes = Buffer.from(nonce, 'base64');
+      expect(bytes.toString('base64')).toBe(nonce);
+      expect(bytes.length).toBeGreaterThanOrEqual(16);
     }
   });
 
@@ -209,6 +234,15 @@ describe('startInspectorServer: HTTP', () => {
     }
   });
 
+  it('refuses an HTTP/1.0 request with no Host at all', async () => {
+    const { server } = await start();
+    const ok = `GET / HTTP/1.0\r\nHost: 127.0.0.1:${server.port}\r\n\r\n`;
+    expect(await rawStatusLine(server.port, ok)).toBe('HTTP/1.1 200 OK');
+    expect(await rawStatusLine(server.port, 'GET / HTTP/1.0\r\n\r\n')).toBe(
+      'HTTP/1.1 403 Forbidden',
+    );
+  });
+
   it('serves the bundle at /graph.js as JavaScript, read from disk on each request', async () => {
     const { server, bundlePath } = await start();
     const first = await get(server.port, '/graph.js');
@@ -217,6 +251,15 @@ describe('startInspectorServer: HTTP', () => {
     expect(first.body).toBe(BUNDLE);
     await writeFile(bundlePath, 'rebuilt();\n');
     expect((await get(server.port, '/graph.js')).body).toBe('rebuilt();\n');
+    // Round two (review b3): the query is ignored here too.
+    expect((await get(server.port, '/graph.js?v=2')).body).toBe('rebuilt();\n');
+  });
+
+  // Round two (review a4): C-EXT may_not "use sync fs"; a sync read serves the same bytes, so
+  // only the source can show it.
+  it('uses no sync fs call', async () => {
+    const source = await readFile(join(__dirname, 'server.ts'), 'utf8');
+    expect(source.match(/\b\w+Sync\s*\(/g)).toBeNull();
   });
 
   it('answers a missing bundle with 404 and one log line naming it and the build command', async () => {
@@ -265,15 +308,22 @@ describe('startInspectorServer: the WebSocket transport (decision 8a)', () => {
     expect(client.received).toEqual([graph]);
   });
 
-  it('stops delivering to a handler once its subscription is disposed', async () => {
+  // Round two (review a1): two live subscriptions, so a single overwritten handler, or a dispose
+  // that removes nothing (or the wrong one), fails.
+  it('delivers to every subscription and stops only the disposed one', async () => {
     const { client, transport } = await page(await start());
-    const heard: unknown[] = [];
-    transport.onMessage((message) => heard.push(message)).dispose();
-    const probe: unknown[] = [];
-    transport.onMessage((message) => probe.push(message));
-    client.socket.send(JSON.stringify({ type: 'reveal', nodeId: 'x' }));
-    await until(() => probe.length === 1, 'the probe message');
-    expect(heard).toEqual([]);
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    const subscription = transport.onMessage((message) => first.push(message));
+    transport.onMessage((message) => second.push(message));
+    const a = { type: 'reveal', nodeId: 'a' };
+    const b = { type: 'reveal', nodeId: 'b' };
+    client.socket.send(JSON.stringify(a));
+    await until(() => first.length === 1 && second.length === 1, 'both subscriptions');
+    subscription.dispose();
+    client.socket.send(JSON.stringify(b));
+    await until(() => second.length === 2, 'the second message');
+    expect([first, second]).toEqual([[a], [a, b]]);
   });
 
   it('drops a text frame that is not JSON and a binary frame, each with a log line', async () => {

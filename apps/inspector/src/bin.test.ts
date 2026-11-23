@@ -31,17 +31,23 @@ function spawnBin(args: readonly string[] = []) {
   proc.stderr.setEncoding('utf8');
   proc.stdout.on('data', (chunk: string) => (out += chunk));
   proc.stderr.on('data', (chunk: string) => (err += chunk));
-  const exited = new Promise<number | null>((resolve) => proc.on('exit', (code) => resolve(code)));
+  // Round two (review d1, d2): 'close' waits for stdio to drain, and only complete lines count.
+  const exited = new Promise<number | null>((resolve) => proc.on('close', (code) => resolve(code)));
   return {
     proc,
-    stdout: () => out.split('\n').filter((l) => l !== ''),
+    stdout: () =>
+      out
+        .split('\n')
+        .slice(0, -1)
+        .filter((l) => l !== ''),
     stderr: () => err,
     exited,
   };
 }
 
+// Round two (review d3): 15 seconds, inside each test's 20.
 async function until(check: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 1000; i++) {
+  for (let i = 0; i < 3000; i++) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -77,7 +83,9 @@ describe('the cpg-inspector bin', () => {
         child.proc.stdin.write(`${JSON.stringify({ type: 'graph', payload })}\n`);
         const socket = new WebSocket(`ws://127.0.0.1:${url.port}/ws`, { origin: url.origin });
         const received: unknown[] = [];
-        socket.on('message', (data: Buffer) => received.push(JSON.parse(data.toString('utf8'))));
+        socket.on('message', (data: Buffer, isBinary: boolean) =>
+          received.push(isBinary ? 'a binary frame' : JSON.parse(data.toString('utf8'))),
+        );
         await new Promise<void>((resolve) => socket.on('open', () => resolve()));
         socket.send(JSON.stringify({ type: 'ready', protocol: 1 }));
         await until(() => received.length === 1, 'the graph');
@@ -100,19 +108,37 @@ describe('the cpg-inspector bin', () => {
         await until(() => child.stdout().length === 2, 'the render-report line');
         expect(JSON.parse(child.stdout()[1] ?? '')).toStrictEqual(renderReport);
 
+        // Round two (review b1): the bin serves dist/page/graph.js beside it. `check` doesn't build
+        // the bundle, so either it is served, or the one stderr line names where the bin looked.
+        const bundle = await fetch(new URL('graph.js', url));
+        const bundlePath = join(ROOT, 'dist', 'page', 'graph.js');
+        expect([200, 404]).toContain(bundle.status);
+
         child.proc.stdin.end();
         expect(await child.exited).toBe(0);
-        expect(child.stderr()).toBe('');
+        const lines = child.stderr().split('\n').slice(0, -1);
+        const logged = bundle.status === 200 ? [] : [true];
+        expect(lines.map((line) => line.includes(bundlePath))).toEqual(logged);
       } finally {
         child.proc.kill();
       }
     },
   );
 
-  it('refuses arguments with exit 2 and a stderr line, and serves nothing', async () => {
-    const child = spawnBin(['--port', '8080']);
-    expect(await child.exited).toBe(2);
-    expect(child.stderr()).toBe('cpg-inspector: takes no arguments; it reads NDJSON on stdin\n');
-    expect(child.stdout()).toEqual([]);
-  });
+  it(
+    'refuses arguments with exit 2 and a stderr line, and serves nothing',
+    { timeout: 20_000 },
+    async () => {
+      const child = spawnBin(['--port', '8080']);
+      try {
+        expect(await child.exited).toBe(2);
+        expect(child.stderr()).toBe(
+          'cpg-inspector: takes no arguments; it reads NDJSON on stdin\n',
+        );
+        expect(child.stdout()).toEqual([]);
+      } finally {
+        child.proc.kill();
+      }
+    },
+  );
 });
