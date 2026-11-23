@@ -6,7 +6,15 @@
 // bundle was already there.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,6 +142,16 @@ describe('node tools/build-inspector.mjs', () => {
     expect(cli.dev.out).not.toMatch(/\[WARNING\]/);
     expectDevelopment(files.cliDev);
     expect(existsSync(join(elsewhere, CLI_DEV))).toBe(false);
+  });
+
+  // Post-implementation (sabotage #16): a failed build must fail the command, or a script that
+  // chains `build:inspector` would serve a stale bundle.
+  it('exits 1 when the build fails (an outfile under a regular file)', () => {
+    const blocker = join(dir, 'blocker');
+    writeFileSync(blocker, '');
+    const r = runCli(['--outfile', join(blocker, 'graph.js')], REPO);
+    expect(r.out).toContain('Failed to create output directory');
+    expect(r.status).toBe(1);
   });
 });
 
