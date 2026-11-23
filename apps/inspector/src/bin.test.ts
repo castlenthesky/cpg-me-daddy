@@ -141,4 +141,15 @@ describe('the cpg-inspector bin', () => {
       }
     },
   );
+
+  // Post-implementation (sabotage main #1): one argument is refused too, not only two.
+  it('refuses a single argument with exit 2', { timeout: 20_000 }, async () => {
+    const child = spawnBin(['-']);
+    try {
+      expect(await child.exited).toBe(2);
+      expect(child.stdout()).toEqual([]);
+    } finally {
+      child.proc.kill();
+    }
+  });
 });
