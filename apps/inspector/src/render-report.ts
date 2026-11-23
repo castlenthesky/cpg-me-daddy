@@ -1,7 +1,8 @@
-// SEAT (U2b.1 part 3a-i, BMO-35): the counts render-reconciliation compares (C-EXT I-10, owner
+// REAL (U2b.1 part 3a-i, BMO-35): the counts render-reconciliation compares (C-EXT I-10, owner
 // decision 12a), taken from the payload the page holds and what the renderer actually drew.
 
 import type { GraphPayload, RenderReport } from '@cpg/model';
+import { edgeKey } from './edge-store';
 
 /** At most this many ids in `droppedNodeIds` (C-EXT: "a capped sample"). */
 export const DROPPED_SAMPLE_CAP = 50;
@@ -21,9 +22,43 @@ export interface DrawnGraph {
  * at DROPPED_SAMPLE_CAP; `duplicateEdges` is `payload.edges.length` minus the distinct edge keys.
  */
 export function renderReport(
-  _payload: GraphPayload,
-  _drawn: DrawnGraph,
-  _frameMs: number,
+  payload: GraphPayload,
+  drawn: DrawnGraph,
+  frameMs: number,
 ): RenderReport {
-  throw new Error('SEAT: renderReport is U2b.1 part 3a-i');
+  const seenIds = new Set<string>();
+  const dropped = new Set<string>();
+  const droppedNodeIds: string[] = [];
+  let renderedNodeCount = 0;
+
+  for (const node of payload.nodes) {
+    const { id } = node;
+    if (!seenIds.has(id)) {
+      seenIds.add(id);
+      if (drawn.isDrawn(id)) {
+        renderedNodeCount += 1;
+        continue;
+      }
+    }
+    if (!dropped.has(id)) {
+      dropped.add(id);
+      if (droppedNodeIds.length < DROPPED_SAMPLE_CAP) {
+        droppedNodeIds.push(id);
+      }
+    }
+  }
+
+  const edgeKeys = new Set<string>();
+  for (const edge of payload.edges) {
+    edgeKeys.add(edgeKey(edge));
+  }
+
+  return {
+    payloadNodeCount: payload.nodes.length,
+    renderedNodeCount,
+    renderedEdgeCount: drawn.edgeCount,
+    duplicateEdges: payload.edges.length - edgeKeys.size,
+    droppedNodeIds,
+    frameMs,
+  };
 }

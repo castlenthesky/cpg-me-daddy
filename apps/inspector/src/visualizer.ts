@@ -217,7 +217,10 @@ export class GraphVisualizer {
    * the synthetic root), and edgeCount is the edges drawn, legend toggles ignored (part 3a-i).
    */
   drawn(): DrawnGraph {
-    throw new Error('SEAT: GraphVisualizer.drawn is U2b.1 part 3a-i');
+    return {
+      isDrawn: (id) => this.points.liveIndex(id) !== undefined,
+      edgeCount: this.allLinks.linkEdges.length,
+    };
   }
 
   dispose(): void {
