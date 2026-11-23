@@ -44,6 +44,13 @@
         "@cpg/watch": "*",
       },
     },
+    "apps/inspector": {
+      "name": "@cpg/inspector",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
+      },
+    },
     "apps/vscode": {
       "name": "@cpg/vscode-host",
       "version": "0.0.1",
@@ -224,6 +231,8 @@
     "@cpg/cli": ["@cpg/cli@workspace:apps/cli"],
 
     "@cpg/engine": ["@cpg/engine@workspace:packages/engine"],
+
+    "@cpg/inspector": ["@cpg/inspector@workspace:apps/inspector"],
 
     "@cpg/model": ["@cpg/model@workspace:packages/model"],
 

@@ -1,0 +1,16 @@
+{
+  "name": "@cpg/inspector",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The browser picture of the graph (U2b). Part 1: the seeded radial layout and the node and relationship type registries.",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@cpg/model": "*"
+  }
+}
