@@ -1,6 +1,25 @@
-// SEAT (U2b.1 part 1, BMO-35): the relationship (edge-type) legend registry, ported from
-// 21754b4:packages/graph-visualizer/src/relationshipTypes.ts. Not built yet: every export is a
-// placeholder.
+// REAL (U2b.1 part 1, BMO-35): ported from 21754b4:packages/graph-visualizer/src/relationshipTypes.ts.
+//
+// Legend-only registry for edge (relationship) types — mirrors node-types.ts's
+// role for nodes, but is deliberately NOT what colours a rendered link: the
+// renderer (U2b part 2) draws links with `linkColorInterpolateFromEndpoints`,
+// a gradient between the two endpoint *node* colours, so an edge type never
+// gets its own on-canvas colour. This table only supplies a legend swatch, so
+// the relationship legend reads consistently with the node legend beside it.
+//
+// `GraphEdge.type` is free-form (see `@cpg/model` and the schema in
+// `packages/model/src/schema`, `docs/outline/04-schema.yaml`), so unlike
+// NODE_TYPES this can never be exhaustive. Extend it when a producer's edge
+// type deserves a curated colour; anything else (including an edge with no
+// `type` at all) falls back to DEFAULT_RELATIONSHIP_COLOR under the
+// `UNTYPED_RELATIONSHIP_KEY` bucket.
+//
+// Differences from the archive table, aligned with the schema:
+// - `CONTAINS` became `HAS_ENTRY`: the schema renamed directory/file containment
+//   to `HAS_ENTRY` and reserves `CONTAINS` for Joern's opposite meaning.
+// - `RECEIVER` was dropped because it is not an edge type in the schema.
+// - The archive's receiver-type edge row was dropped because that edge is
+//   reserved until U8 (`packages/model/src/schema/reserved.ts`).
 
 export interface RelationshipTypeDescriptor {
   readonly key: string;
@@ -8,29 +27,51 @@ export interface RelationshipTypeDescriptor {
   readonly color: string;
 }
 
-const seat = (what: string): Error =>
-  new Error(`SEAT: ${what} is not built yet (U2b.1 part 1, BMO-35)`);
+export const RELATIONSHIP_TYPES: readonly RelationshipTypeDescriptor[] = [
+  // Directory/file hierarchy edges (renamed from the archive's CONTAINS).
+  { key: 'HAS_ENTRY', label: 'Has entry', color: '#808080' },
+  // Declaration -> symbol edges.
+  { key: 'DEFINES', label: 'Defines', color: '#DCDCAA' },
+  // Call resolution edges: CALL -> SYMBOL.
+  { key: 'CALLS', label: 'Calls', color: '#CE9178' },
+  // Import resolution edges: IMPORT -> SYMBOL.
+  { key: 'IMPORTS', label: 'Imports', color: '#C586C0' },
+];
 
-// SEAT
-export const RELATIONSHIP_TYPES: readonly RelationshipTypeDescriptor[] = [];
+/**
+ * Legend bucket key for an edge with no `type` — distinct from every real type
+ * string (which are all non-empty) so it can share the same Map/Set-keyed
+ * machinery as a real type instead of needing separate `undefined` handling
+ * throughout the legend and visibility code.
+ */
+export const UNTYPED_RELATIONSHIP_KEY: string = '';
+const UNTYPED_RELATIONSHIP_LABEL = 'Untyped';
 
-// SEAT
-export const UNTYPED_RELATIONSHIP_KEY: string = '\u0000SEAT';
+// Matches DEFAULT_LINK_COLOR_HEX in node-types.ts — the same neutral used when
+// a link's own endpoints don't resolve a colour either.
+export const DEFAULT_RELATIONSHIP_COLOR: string = '#4b4b4b';
 
-// SEAT
-export const DEFAULT_RELATIONSHIP_COLOR: string = '';
+const RELATIONSHIP_TYPES_BY_KEY = new Map(
+  RELATIONSHIP_TYPES.map((descriptor) => [descriptor.key, descriptor]),
+);
 
-// SEAT
-export function relationshipKey(_type: string | undefined): string {
-  throw seat('relationshipKey');
+/** The legend bucket key for an edge — `UNTYPED_RELATIONSHIP_KEY` for one with no `type`. */
+export function relationshipKey(type: string | undefined): string {
+  return type ?? UNTYPED_RELATIONSHIP_KEY;
 }
 
-// SEAT
-export function relationshipLabel(_key: string): string {
-  throw seat('relationshipLabel');
+/** Human-readable legend label for a bucket key, falling back to the raw type string for one not in `RELATIONSHIP_TYPES`. */
+export function relationshipLabel(key: string): string {
+  if (key === UNTYPED_RELATIONSHIP_KEY) {
+    return UNTYPED_RELATIONSHIP_LABEL;
+  }
+  return RELATIONSHIP_TYPES_BY_KEY.get(key)?.label ?? key;
 }
 
-// SEAT
-export function relationshipColor(_key: string): string {
-  throw seat('relationshipColor');
+/** Legend swatch colour for a bucket key, falling back to `DEFAULT_RELATIONSHIP_COLOR`. */
+export function relationshipColor(key: string): string {
+  if (key === UNTYPED_RELATIONSHIP_KEY) {
+    return DEFAULT_RELATIONSHIP_COLOR;
+  }
+  return RELATIONSHIP_TYPES_BY_KEY.get(key)?.color ?? DEFAULT_RELATIONSHIP_COLOR;
 }
