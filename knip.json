@@ -40,6 +40,9 @@
     },
     "apps/cli": {
       "project": ["src/**/*.ts"]
+    },
+    "apps/inspector": {
+      "project": ["src/**/*.ts"]
     }
   },
   // knip's lefthook plugin only counts lefthook as used when CI is set or .git/hooks are
