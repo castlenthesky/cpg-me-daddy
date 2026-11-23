@@ -36,6 +36,7 @@ import type {
 } from './inspector-process';
 import { captureIo } from './io';
 import { EXIT, run } from './run';
+import { COMMANDS } from './spec';
 
 const manifest = { bin: 'cpg', version: '9.8.7' };
 const URL = 'http://127.0.0.1:4100/';
@@ -157,6 +158,8 @@ function live(
     engine?: CpgEngine;
     configs?: EngineConfig[];
     noInspector?: boolean;
+    /** Round two (review b4): a start that is not the fake's. */
+    start?: StartInspector;
   } = {},
 ) {
   const io = captureIo(o.stdin !== undefined ? { stdin: o.stdin } : {});
@@ -169,7 +172,7 @@ function live(
       o.configs?.push(config);
       return o.engine ?? createEngine(config);
     },
-    ...(o.noInspector === true ? {} : { startInspector: inspector.start }),
+    ...(o.noInspector === true ? {} : { startInspector: o.start ?? inspector.start }),
     cwd: o.cwd ?? tmpdir(),
     signal: controller.signal,
   }).then((c) => {
@@ -402,14 +405,19 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     expect(l.inspector.starts()).toBe(0);
   });
 
-  it.each([['--host', 'h'], ['--workspace', '/w'], ['--serve']])(
-    'no store, workspace or serve flag: %s is a usage error',
-    async (...flag) => {
-      const l = live(['inspect', ...flag, '-'], { stdin: envelope(PAYLOAD) });
-      expect(await l.done).toBe(EXIT.USAGE);
-      expect(l.inspector.starts()).toBe(0);
-    },
-  );
+  // Round two (review b3): --format, --port and --graph too
+  it.each([
+    ['--host', 'h'],
+    ['--workspace', '/w'],
+    ['--serve'],
+    ['--format', 'json'],
+    ['--port', '1'],
+    ['--graph', 'g'],
+  ])('no store, workspace or serve flag: %s is a usage error', async (...flag) => {
+    const l = live(['inspect', ...flag, '-'], { stdin: envelope(PAYLOAD) });
+    expect(await l.done).toBe(EXIT.USAGE);
+    expect(l.inspector.starts()).toBe(0);
+  });
 
   it('a file that cannot be read: exit 2 naming the path; nothing starts', async () => {
     const missing = join(await tmp(), 'missing.json');
@@ -522,7 +530,9 @@ const INDEXED: IndexReport = {
 };
 
 /** An engine that logs each call; verify's checks carry `asOfSeq[i]` (default 4). */
-function scriptedEngine(o: { interrupted?: boolean; asOfSeq?: readonly number[] } = {}) {
+function scriptedEngine(
+  o: { interrupted?: boolean; asOfSeq?: readonly number[]; payload?: GraphPayload } = {},
+) {
   const log: string[] = [];
   const sessions: { readOnly: boolean; session: EngineSession }[] = [];
   const verified: EngineSession[] = [];
@@ -567,7 +577,7 @@ function scriptedEngine(o: { interrupted?: boolean; asOfSeq?: readonly number[] 
     inspect: (session, config) => {
       log.push('inspect');
       inspected.push({ session, config });
-      return Promise.resolve(PAYLOAD);
+      return Promise.resolve(o.payload ?? PAYLOAD);
     },
     schema: () => {
       throw new Error('scriptedEngine.schema is not driven by these tests');
@@ -800,5 +810,132 @@ describe('cpg index --inspect (controller decisions 20, 21, 23)', () => {
     l.inspector.exit({ code: 1, signal: null });
     expect(await l.done).toBe(EXIT.FAILED);
     expect(l.inspector.stops()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Round two, after the test review (named defects a1-a5, a8, b3, b4).
+describe('cpg inspect and cpg index --inspect: round two', () => {
+  it('a change within one state still re-sends: fail with other counts, pass gaining duplicates (a1)', async () => {
+    const l = live(['inspect', await payloadFile(envelope(PAYLOAD))]);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    l.inspector.report(4, { renderedNodeCount: 1, droppedNodeIds: ['f'] });
+    await until(() => l.inspector.sent.length >= 3, 'the first fail');
+    l.inspector.report(4, { renderedNodeCount: 0, droppedNodeIds: ['f', 'd'] });
+    await until(() => l.inspector.sent.length >= 4, 'the second fail');
+    expect(renderAt(l.inspector, 3)).toMatchObject({
+      state: 'fail',
+      observed: 0,
+      localisedTo: ['d', 'f'],
+    });
+    l.inspector.report(4);
+    await until(() => l.inspector.sent.length >= 5, 'the pass');
+    l.inspector.report(4, { duplicateEdges: 1 });
+    await until(() => l.inspector.sent.length >= 6, 'the pass with a duplicate edge');
+    expect(renderAt(l.inspector, 5)).toMatchObject({
+      state: 'pass',
+      detail: '1 duplicate edge drawn once',
+    });
+    l.abort();
+    await l.done;
+  });
+
+  it('a payload at seq -1 (a fresh store) is accepted, and its verdict is at seq -1 (a2)', async () => {
+    const fresh = { ...PAYLOAD, seq: -1 };
+    const l = live(['inspect', await payloadFile(envelope(fresh))]);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: fresh });
+    expect(verificationAt(l.inspector, 1).seq).toBe(-1);
+    expect(renderAt(l.inspector, 1)).toEqual(waiting(-1));
+    l.abort();
+    await l.done;
+  });
+
+  it("the render check's asOfSeq (the payload's) counts toward the lowest seq (a3)", async () => {
+    const s = scriptedEngine({ payload: { ...PAYLOAD, seq: 2 } });
+    const l = live(['index', '/w', '--inspect'], { engine: s.engine });
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    expect(renderAt(l.inspector, 1)).toEqual(waiting(2));
+    expect(verificationAt(l.inspector, 1).seq).toBe(2);
+    l.abort();
+    await l.done;
+  });
+
+  it.each([
+    [{ code: null, signal: 'SIGTERM' }, /signal SIGTERM/],
+    [{ code: 0, signal: null }, /code 0/],
+  ])('the child ending %j on its own is exit 1, not 130 or 0 (a4)', async (exit, said) => {
+    const l = live(['inspect', await payloadFile(envelope(PAYLOAD))]);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    l.inspector.exit(exit);
+    expect(await l.done).toBe(EXIT.FAILED);
+    expect(l.io.stderr.join('\n')).toMatch(said);
+  });
+
+  it.each([
+    ['null node data', { ...PAYLOAD, nodes: [{ id: 'f', type: 'FILE', data: null }] }],
+    ['null edge data', { ...PAYLOAD, edges: [{ source: 'd', target: 'f', data: null }] }],
+    ['array edge data', { ...PAYLOAD, edges: [{ source: 'd', target: 'f', data: [] }] }],
+  ])('%s: not a GraphPayload, exit 2 (a5)', async (_name, body) => {
+    const file = await payloadFile(envelope(body));
+    const l = live(['inspect', file]);
+    expect(await l.done).toBe(EXIT.USAGE);
+    expect(l.io.stderr.join('\n')).toContain('not a GraphPayload');
+    expect(l.inspector.starts()).toBe(0);
+  });
+
+  it('the engine is built with the inspect switch on (a8)', async () => {
+    const root = await workspace();
+    const configs: EngineConfig[] = [];
+    const l = live(['index', root, '--inspect'], { configs });
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    expect(configs).toEqual([
+      { version: '9.8.7', consumers: { inspect: true, store: 'memory', vscode: false } },
+    ]);
+    l.abort();
+    await l.done;
+  });
+
+  it('the inspect verb in the flag table: one payload positional, stdin, nothing on stdout, no session (b3)', () => {
+    const spec = COMMANDS.find((c) => c.verb === 'inspect');
+    expect(spec).toMatchObject({
+      positionals: [{ name: 'payload' }],
+      flags: [],
+      stdin: 'optional-document',
+      stdout: 'none',
+      session: 'none',
+    });
+  });
+
+  it('an inspector that cannot start during index --inspect: exit 1, the read session closed (b4)', async () => {
+    const s = scriptedEngine();
+    const inspector = fakeInspector({ failStart: new Error('spawn boom') });
+    const l = live(['index', '/w', '--inspect'], { engine: s.engine, inspector });
+    expect(await l.done).toBe(EXIT.FAILED);
+    expect(l.io.stderr.join('\n')).toMatch(/^cpg: cannot start the inspector: .*spawn boom/m);
+    expect(s.log.at(-1)).toBe('close');
+  });
+
+  it('Ctrl-C while the inspector is starting: once it starts it is stopped, exit 130 (b4)', async () => {
+    let release: (() => void) | undefined;
+    let stops = 0;
+    const start: StartInspector = () =>
+      new Promise((resolve) => {
+        release = () =>
+          resolve({
+            url: URL,
+            send: () => {},
+            exited: new Promise<InspectorExit>(() => {}),
+            stop: () => {
+              stops += 1;
+              return Promise.resolve();
+            },
+          });
+      });
+    const l = live(['inspect', await payloadFile(envelope(PAYLOAD))], { start });
+    await until(() => release !== undefined, 'the start');
+    l.abort();
+    release?.();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
+    expect(stops).toBeGreaterThanOrEqual(1);
   });
 });

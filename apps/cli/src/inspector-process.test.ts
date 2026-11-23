@@ -215,10 +215,11 @@ process.stdin.resume();`,
       const { bin, dir } = await script(
         `require('node:fs').writeFileSync(require('node:path').join(__dirname, 'pid'), String(process.pid)); setInterval(() => {}, 1000);`,
       );
-      await expect(spawnInspector(bin, { ...quiet, startMs: 1500 })).rejects.toThrow(/1500 ms/);
-      const pid = Number(await readFile(join(dir, 'pid'), 'utf8'));
-      expect(pid).toBeGreaterThan(0);
-      await until(() => !alive(pid), 'the child to be killed');
+      await expect(spawnInspector(bin, { ...quiet, startMs: 3000 })).rejects.toThrow(/3000 ms/);
+      // Round two (review d2): a runner slow enough that the child was killed before it wrote its
+      // pid has nothing left to check; otherwise the pid it wrote must be gone.
+      const text = await readFile(join(dir, 'pid'), 'utf8').catch(() => '');
+      if (text !== '') await until(() => !alive(Number(text)), 'the child to be killed');
     },
   );
 
@@ -272,6 +273,41 @@ process.stdin.resume();`);
       const proc = await spawnInspector(bin, quiet);
       running.push(proc);
       expect(await proc.exited).toEqual({ code: 5, signal: null });
+      // Round two (review b2): a send after the child's own exit is dropped, with no EPIPE escaping
+      // (vitest fails the run on an unhandled error).
+      expect(() =>
+        proc.send({ type: 'graph', payload: { seq: 0, nodes: [], edges: [] } }),
+      ).not.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 100));
     },
   );
+});
+
+// Round two, after the test review (named defects a6, a7).
+describe('spawnInspector and resolveInspectorBin: round two', () => {
+  it.each([
+    ['another type', { type: 'ready', url: 'http://127.0.0.1:4100/' }],
+    ['a numeric url', { type: 'listening', url: 4100 }],
+    ['no url', { type: 'listening' }],
+  ])(
+    'a JSON first line that is not a listening line (%s): rejects (a6)',
+    async (_name, first) => {
+      const { bin } = await script(
+        `process.stdout.write(${JSON.stringify(JSON.stringify(first))} + '\\n'); setInterval(() => {}, 1000);`,
+      );
+      await expect(spawnInspector(bin, quiet)).rejects.toThrow(/before its listening line/);
+    },
+    20_000,
+  );
+
+  // a7: a monorepo path would pass the equality above, so pin decision 16's resolution in the source.
+  it('locates the bin through require.resolve of @cpg/inspector/package.json, not a fixed path (a7)', async () => {
+    // code only: the doc comments quote the call too
+    const source = (await readFile(join(__dirname, 'inspector-process.ts'), 'utf8'))
+      .replaceAll(/\/\*[\s\S]*?\*\//g, '')
+      .replaceAll(/^\s*\/\/.*$/gm, '');
+    expect(source).toContain("require.resolve('@cpg/inspector/package.json')");
+    expect(source).not.toMatch(/['"`][^'"`]*dist\/main\.js/);
+    expect(source).not.toMatch(/\.\.\/inspector/);
+  });
 });

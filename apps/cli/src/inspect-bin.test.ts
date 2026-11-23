@@ -67,7 +67,9 @@ async function cpg(args: readonly string[], cwd: string) {
   const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) =>
     proc.on('exit', (code, signal) => resolve({ code, signal })),
   );
-  return { proc, stdout: () => out, stderr: () => err, exited };
+  // Round two (review d1): 'close' waits for stdout and stderr to drain; 'exit' may come first.
+  const closed = new Promise<void>((resolve) => proc.on('close', () => resolve()));
+  return { proc, stdout: () => out, stderr: () => err, exited, closed };
 }
 
 const URL_LINE = /^cpg: inspector at (http:\/\/127\.0\.0\.1:\d+\/) /m;
@@ -185,10 +187,17 @@ describe('cpg inspect through the built bin', () => {
         () => run.stderr().includes('cpg: render-reconciliation pass'),
         'the stderr line',
       );
+      // Round two (review b1): the child's stderr is the CLI's, so its own lines reach the terminal.
+      p.socket.send(JSON.stringify({ type: 'bogus' }));
+      await until(
+        () => run.stderr().includes('cpg-inspector: unknown-message: {"type":"bogus"}'),
+        "the child's stderr line on the CLI's stderr",
+      );
       p.socket.close();
 
       run.proc.kill('SIGINT');
       expect(await run.exited).toEqual({ code: 130, signal: null });
+      await run.closed;
       expect(run.stderr()).toContain('cpg: interrupted');
       // the child was stopped before the CLI exited
       expect(await refused(url)).toBe(true);
@@ -204,7 +213,8 @@ async function indexInspect() {
   await writeFile(join(ws, 'b.py'), 'b = 2\n');
   const run = await cpg(['index', ws, '--inspect'], ws);
   const url = await urlOf(run);
-  expect(run.stdout()).toMatch(/^written nodes=3 edges=2 dryRun=false$/m);
+  // Round two (review d3): stdout is its own pipe, so wait for it rather than assume it came first.
+  await until(() => /^written nodes=3 edges=2 dryRun=false$/m.test(run.stdout()), 'the report');
   return { run, url };
 }
 

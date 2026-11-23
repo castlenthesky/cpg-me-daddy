@@ -65,9 +65,14 @@ describe('MemoryStore.readAll', () => {
     seq: 3,
     nodes: [
       { id: 'd', type: 'DIRECTORY', name: '.', data: { path: '.' } },
-      { id: 'f', type: 'FILE', name: 'a.ts', data: { path: 'a.ts', revision_id: 'r1' } },
+      {
+        id: 'f',
+        type: 'FILE',
+        name: 'a.ts',
+        data: { path: 'a.ts', revision_id: 'r1', location: { span: [1, 2] } },
+      },
     ],
-    edges: [{ source: 'd', target: 'f', type: 'HAS_ENTRY' }],
+    edges: [{ source: 'd', target: 'f', type: 'HAS_ENTRY', data: { weight: { w: 1 } } }],
   };
 
   it('before open() it throws STORE_NOT_OPEN, like every read', async () => {
@@ -107,5 +112,22 @@ describe('MemoryStore.readAll', () => {
     Reflect.set(first.edges, 'length', 0);
     expect(await store.readAll()).toEqual(graph);
     expect((await store.inspect()).edgeCount).toBe(1);
+  });
+
+  // Round two (review a10): every level is copied, not only the top-level arrays.
+  it('nested nodes, edges and their data are copies too', async () => {
+    const store = createMemoryStore();
+    await store.open();
+    await store.onSnapshot(graph, { seq: 3, cause: 'initial' });
+    const first = await store.readAll();
+    const [, file] = first.nodes;
+    const location = file?.data?.['location'];
+    if (typeof location === 'object' && location !== null) Reflect.set(location, 'span', []);
+    const [edge] = first.edges;
+    if (edge !== undefined) Reflect.set(edge, 'source', 'changed');
+    const weight = edge?.data?.['weight'];
+    if (typeof weight === 'object' && weight !== null) Reflect.set(weight, 'w', 2);
+    if (file !== undefined) Reflect.set(file, 'id', 'changed');
+    expect(await store.readAll()).toEqual(graph);
   });
 });

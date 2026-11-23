@@ -117,7 +117,8 @@ describe('the cpg-inspector bin', () => {
         child.proc.stdin.end();
         expect(await child.exited).toBe(0);
         const lines = child.stderr().split('\n').slice(0, -1);
-        const logged = bundle.status === 200 ? [] : [true];
+        // Round two (U2b.1 part 3b review c2): a missing bundle is also named once at startup.
+        const logged = bundle.status === 200 ? [] : [true, true];
         expect(lines.map((line) => line.includes(bundlePath))).toEqual(logged);
       } finally {
         child.proc.kill();

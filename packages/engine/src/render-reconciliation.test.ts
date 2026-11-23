@@ -132,6 +132,18 @@ describe('renderReconciliation (controller decision 21)', () => {
     expect(check(5, { seq: 6, report: report() }).state).toBe('pass');
   });
 
+  // Round two (review a9): a later seq is judged on its counts, and asOfSeq stays the payload's.
+  it('a later-seq report with a dropped node fails; asOfSeq is still the payload seq', () => {
+    const r = report({ renderedNodeCount: 2, droppedNodeIds: ['x'] });
+    expect(check(5, { seq: 6, report: r })).toMatchObject({
+      state: 'fail',
+      observed: 2,
+      expected: 3,
+      localisedTo: ['x'],
+      asOfSeq: 5,
+    });
+  });
+
   it.each([
     [1, '1 duplicate edge drawn once'],
     [2, '2 duplicate edges drawn once'],

@@ -194,14 +194,18 @@ describe('runInspector', () => {
         delta: { ...gap, addedNodes: [], addedEdges: [], removedNodeIds: [] },
       }),
     );
-    await until(() => running.stderr.lines().length === 1, 'the fault');
+    // Round two (U2b.1 part 3b review c1): the missing bundle is named at startup, first.
+    await until(() => running.stderr.lines().length === 2, 'the fault');
     expect((await fetch(`${running.url}graph.js`)).status).toBe(404);
     running.stdin.end();
     await running.done;
-    const [fault, log] = running.stderr.lines();
+    const [missing, fault, log] = running.stderr.lines();
+    expect(missing).toBe(
+      `cpg-inspector: the page bundle ${join(dir, 'missing.js')} is missing; build it with bun run build:inspector`,
+    );
     expect(fault).toBe('cpg-inspector: seq-gap: expected seq 4, got 7');
     expect(log).toMatch(/^cpg-inspector: .*bun run build:inspector/);
-    expect(running.stderr.lines()).toHaveLength(2);
+    expect(running.stderr.lines()).toHaveLength(3);
   });
 
   it('shuts down when stdin ends: it resolves, the page is dropped and the port is closed', async () => {
