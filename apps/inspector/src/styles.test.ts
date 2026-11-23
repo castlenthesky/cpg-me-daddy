@@ -39,21 +39,26 @@ const NON_COLOUR_WORD =
   /^(?:-?\d*\.?\d+(?:px|em|rem|%)?|solid|dashed|dotted|none|currentColor|inherit)$/;
 const LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\(/i;
 
-type Rules = Map<string, Map<string, string>>;
+/** Each rule's selectors and EVERY declaration in order (a repeated property is kept, not merged). */
+type Rule = {
+  readonly selectors: readonly string[];
+  readonly declarations: readonly [string, string][];
+};
 
-function rules(css: string): Rules {
-  const out: Rules = new Map();
-  for (const [, selectors = '', body = ''] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const declarations = new Map<string, string>();
-    for (const declaration of body.split(';')) {
-      const colon = declaration.indexOf(':');
+function parse(css: string): Rule[] {
+  const out: Rule[] = [];
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  for (const [, selectors = '', body = ''] of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const declarations: [string, string][] = [];
+    for (const text of body.split(';')) {
+      const colon = text.indexOf(':');
       if (colon === -1) continue;
-      declarations.set(declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim());
+      declarations.push([text.slice(0, colon).trim(), text.slice(colon + 1).trim()]);
     }
-    for (const selector of selectors.split(',')) {
-      const key = selector.trim().replaceAll("'", '"');
-      out.set(key, new Map([...(out.get(key) ?? []), ...declarations]));
-    }
+    out.push({
+      selectors: selectors.split(',').map((selector) => selector.trim().replaceAll("'", '"')),
+      declarations,
+    });
   }
   return out;
 }
@@ -61,9 +66,9 @@ function rules(css: string): Rules {
 /** Every colour problem in `css`: a literal anywhere, or a colour value that is not themed. */
 function colourProblems(css: string): string[] {
   const problems: string[] = [];
-  for (const [selector, declarations] of rules(css)) {
+  for (const { selectors, declarations } of parse(css)) {
     for (const [property, value] of declarations) {
-      const where = `${selector} { ${property}: ${value} }`;
+      const where = `${selectors.join(', ')} { ${property}: ${value} }`;
       if (LITERAL.test(value)) problems.push(`literal colour: ${where}`);
       if (!COLOUR_PROPERTY.test(property)) continue;
       const rest = value.replace(THEMED, ' ').split(/\s+/).filter(Boolean);
@@ -77,17 +82,22 @@ function colourProblems(css: string): string[] {
 
 /** Colour declarations in `css`, to show the scan saw something. */
 function colourDeclarations(css: string): number {
-  let count = 0;
-  for (const declarations of rules(css).values()) {
-    for (const property of declarations.keys()) if (COLOUR_PROPERTY.test(property)) count += 1;
-  }
-  return count;
+  return parse(css)
+    .flatMap((rule) => rule.declarations)
+    .filter(([property]) => COLOUR_PROPERTY.test(property)).length;
 }
 
-const shellCss = (): string => {
-  const html = graphShellHtml({ scriptUri: '/graph.js', cspSource: "'self'", nonce: 'bm9uY2U' });
-  return [...html.matchAll(/<style>([^<]*)<\/style>/g)].map((m) => m[1] ?? '').join('\n');
-};
+/** All of a page's CSS: every <style> element, and every style attribute as a rule of its own. */
+function pageCss(html: string): string {
+  const sheets = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1] ?? '');
+  const inline = [...html.matchAll(/\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(
+    (m) => `[style] { ${m[1] ?? m[2] ?? ''} }`,
+  );
+  return [...sheets, ...inline].join('\n');
+}
+
+const shellCss = (): string =>
+  pageCss(graphShellHtml({ scriptUri: '/graph.js', cspSource: "'self'", nonce: 'bm9uY2U' }));
 
 describe('the colour scan itself', () => {
   it.each([
@@ -101,6 +111,9 @@ describe('the colour scan itself', () => {
     'a { color: var(--vscode-foreground); }',
     'a { background: transparent; }',
     'a { box-shadow: 0 0 2px hsl(0 0% 0%); }',
+    // Round two (review a4): an overridden literal, and a declaration behind a comment.
+    'a { background: #1e1e1e; background: var(--vscode-editor-background, Canvas); }',
+    'a { /* note */ background: transparent; }',
   ])('rejects %s', (css) => {
     expect(colourProblems(css)).not.toEqual([]);
   });
@@ -112,6 +125,15 @@ describe('the colour scan itself', () => {
     'a { font-family: var(--vscode-font-family, sans-serif); opacity: 0.45; }',
   ])('accepts %s', (css) => {
     expect(colourProblems(css)).toEqual([]);
+  });
+
+  // Round two (review a5): a page's colours can also sit in a style attribute or an attributed tag.
+  it.each([
+    '<body style="background: #1e1e1e"></body>',
+    '<div id="x" style=\'color: #ccc\'></div>',
+    '<style media="screen">a { color: white; }</style>',
+  ])('finds the colour in %s', (html) => {
+    expect(colourProblems(pageCss(html))).not.toEqual([]);
   });
 });
 
@@ -129,9 +151,18 @@ describe.each([
   });
 });
 
-const css = (): Rules => rules(GRAPH_VISUALIZER_STYLES);
-const declaration = (selector: string, property: string): string | undefined =>
-  css().get(selector)?.get(property);
+/** The last value `selector` gives `property` in the component styles (as the cascade would). */
+function declaration(selector: string, property: string): string | undefined {
+  let value: string | undefined;
+  for (const rule of parse(GRAPH_VISUALIZER_STYLES)) {
+    if (!rule.selectors.includes(selector)) continue;
+    for (const [name, v] of rule.declarations) if (name === property) value = v;
+  }
+  return value;
+}
+
+const hasRule = (selector: string): boolean =>
+  parse(GRAPH_VISUALIZER_STYLES).some((rule) => rule.selectors.includes(selector));
 
 describe('GRAPH_VISUALIZER_STYLES', () => {
   it('styles every element mountGraphViews creates', () => {
@@ -144,7 +175,7 @@ describe('GRAPH_VISUALIZER_STYLES', () => {
       '.legend-swatch',
       '.legend-label',
       '#node-tooltip',
-    ].filter((selector) => !css().has(selector));
+    ].filter((selector) => !hasRule(selector));
     expect(missing).toEqual([]);
   });
 

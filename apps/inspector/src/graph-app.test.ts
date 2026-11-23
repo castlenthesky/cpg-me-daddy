@@ -261,11 +261,37 @@ describe('startGraphApp', () => {
     { type: 'graph-delta', delta: { addedNodes: [], addedEdges: [] } },
     { type: 'graph-delta', delta: { addedNodes: [], addedEdges: {}, removedNodeIds: [] } },
     { type: 'graph-delta', payload: P1 },
-  ])('ignores %j: draws nothing and posts nothing', (message) => {
+    // Round two (review a8): truthy primitives where an object belongs.
+    { type: 'graph', payload: 'x' },
+    { type: 'graph-delta', delta: 1 },
+    // Round two (review a7): iterable non-arrays, which the visualizer would iterate.
+    { type: 'graph', payload: { nodes: 'ab', edges: [] } },
+    { type: 'graph', payload: { nodes: [], edges: 'x' } },
+    { type: 'graph-delta', delta: { addedNodes: 'h', addedEdges: [], removedNodeIds: [] } },
+    { type: 'graph-delta', delta: { addedNodes: [], addedEdges: 'x', removedNodeIds: [] } },
+    { type: 'graph-delta', delta: { addedNodes: [], addedEdges: [], removedNodeIds: 'd' } },
+  ])('ignores %j: never reaches the visualizer, draws nothing, posts nothing', (message) => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const page = start();
+    const render = vi.spyOn(page.visualizer, 'render');
+    const applyDelta = vi.spyOn(page.visualizer, 'applyDelta');
     page.channel.deliver(message);
+    expect(render).not.toHaveBeenCalled();
+    expect(applyDelta).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
     expect(page.surface.positions).toBeUndefined();
     expect(page.channel.posted).toStrictEqual([{ type: 'ready' }]);
+  });
+
+  it('hands a well-formed message to the visualizer exactly once', () => {
+    const page = start();
+    const render = vi.spyOn(page.visualizer, 'render');
+    const applyDelta = vi.spyOn(page.visualizer, 'applyDelta');
+    page.channel.deliver({ type: 'graph', payload: P1 });
+    const added = delta({ addedEdges: [edge('f', 'g', 'IMPORTS')] });
+    page.channel.deliver({ type: 'graph-delta', delta: added });
+    expect(render.mock.calls).toEqual([[P1]]);
+    expect(applyDelta.mock.calls).toEqual([[added]]);
   });
 
   it('ignores a malformed delta after a render, keeping the picture', () => {

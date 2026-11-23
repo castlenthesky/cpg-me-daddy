@@ -132,6 +132,14 @@ describe('graphShellHtml', () => {
     '*',
     "'none' ws://127.0.0.1:8080",
     '',
+    // Round two (review a1): forms a Number()-based port check would admit.
+    'ws://127.0.0.1: 8080',
+    'ws://127.0.0.1:8080 ',
+    'ws://127.0.0.1:+80',
+    'ws://127.0.0.1:0x50',
+    'ws://127.0.0.1:1e2',
+    // The server's port in decimal, as it prints it: no leading zero.
+    'ws://127.0.0.1:080',
   ])('rejects the connect source %j (no remote origin, no injected directive)', (connectSrc) => {
     const call = (): string => graphShellHtml({ ...BASE, connectSrc });
     expect(call).toThrow(/connect-src/);
@@ -168,6 +176,29 @@ describe('graphShellHtml', () => {
     expect(region?.[1]).toMatch(/liveness check/i);
     // Present before the script runs, so the page can find it (part 3 fills it).
     expect(html.indexOf(`id="${VERIFICATION_ID}"`)).toBeLessThan(html.indexOf('<script'));
+  });
+
+  // Round two (review a2): the script looks the container up at load, so both elements precede it.
+  it.each([undefined, 'mount'])(
+    'orders the body: the region, then the container (%s), then the script',
+    (containerId) => {
+      const html = graphShellHtml(containerId === undefined ? BASE : { ...BASE, containerId });
+      const region = html.indexOf(`id="${VERIFICATION_ID}"`);
+      const container = html.indexOf(`<div id="${containerId ?? GRAPH_CONTAINER_ID}"></div>`);
+      const script = html.indexOf('<script');
+      expect(region).toBeGreaterThan(html.indexOf('<body'));
+      expect(container).toBeGreaterThan(region);
+      expect(script).toBeGreaterThan(container);
+    },
+  );
+
+  // Round two (review a3).
+  it("allows styles from the caller's own origin, whatever it is", () => {
+    const html = graphShellHtml({ ...BASE, cspSource: 'http://127.0.0.1:43117' });
+    expect(csp(html).directives.get('style-src')).toEqual([
+      'http://127.0.0.1:43117',
+      "'unsafe-inline'",
+    ]);
   });
 
   it('carries the nonce and script URI through unchanged per call', () => {

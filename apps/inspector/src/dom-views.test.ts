@@ -112,14 +112,37 @@ describe('mountGraphViews', () => {
   });
 });
 
-describe('the legend view', () => {
-  it('writes one row button per node-type row into #legend', () => {
+type Show = (
+  views: GraphViews,
+  rows: readonly LegendRow[],
+  onToggle: (key: string) => void,
+) => void;
+const noop = (): void => {};
+const texts = (element: FakeElement): (string | null | undefined)[] =>
+  element.children.map((item) => item.children[1]?.textContent);
+
+// Round two (review a6): both legends get the whole row contract, not only the node one.
+describe.each<[string, Show, string, string]>([
+  [
+    'node types',
+    (views, rows, onToggle) => views.legend.showNodeTypes(rows, onToggle),
+    'legend',
+    'relationship-legend',
+  ],
+  [
+    'relationship types',
+    (views, rows, onToggle) => views.legend.showRelationshipTypes(rows, onToggle),
+    'relationship-legend',
+    'legend',
+  ],
+])('the legend view: %s', (_name, show, id, otherId) => {
+  it(`writes one row button per row into #${id}, and leaves #${otherId} alone`, () => {
     const { container, views } = mount();
-    views.legend.showNodeTypes(
-      [row('DIRECTORY', 'Directories (1)'), row('FILE', 'Files (2)', false)],
-      () => {},
-    );
-    const items = container.find('legend').children;
+    const other: Show = (v, r, t) =>
+      id === 'legend' ? v.legend.showRelationshipTypes(r, t) : v.legend.showNodeTypes(r, t);
+    other(views, [row('HAS_ENTRY', 'Has entry (2)')], noop);
+    show(views, [row('DIRECTORY', 'Directories (1)'), row('FILE', 'Files (2)', false)], noop);
+    const items = container.find(id).children;
     expect(items).toHaveLength(2);
     for (const [index, expected] of [
       {
@@ -145,59 +168,36 @@ describe('the legend view', () => {
       expect(label?.className).toBe('legend-label');
       expect(label?.textContent).toBe(expected.text);
     }
-    expect(container.find('relationship-legend').children).toEqual([]);
+    expect(texts(container.find(otherId))).toEqual(['Has entry (2)']);
   });
 
   it("reports a clicked row's key, and only that key", () => {
     const { container, views } = mount();
     const toggled: string[] = [];
-    views.legend.showNodeTypes(
-      [row('DIRECTORY', 'Directories (1)'), row('FILE', 'Files (2)')],
-      (key) => toggled.push(key),
+    show(views, [row('DIRECTORY', 'Directories (1)'), row('FILE', 'Files (2)')], (key) =>
+      toggled.push(key),
     );
-    container.find('legend').children[1]?.click();
+    container.find(id).children[1]?.click();
     expect(toggled).toEqual(['FILE']);
   });
 
-  it('writes relationship rows into #relationship-legend and leaves #legend alone', () => {
+  it('replaces the rows on every show: more with fewer, then none', () => {
     const { container, views } = mount();
-    views.legend.showNodeTypes([row('FILE', 'Files (2)')], () => {});
-    const toggled: string[] = [];
-    views.legend.showRelationshipTypes([row('HAS_ENTRY', 'Has entry (2)')], (key) =>
-      toggled.push(key),
-    );
-    const relationship = container.find('relationship-legend').children;
-    expect(relationship.map((item) => item.children[1]?.textContent)).toEqual(['Has entry (2)']);
-    expect(container.find('legend').children.map((item) => item.children[1]?.textContent)).toEqual([
-      'Files (2)',
-    ]);
-    relationship[0]?.click();
-    expect(toggled).toEqual(['HAS_ENTRY']);
-  });
-
-  it('replaces the rows on every show, down to none', () => {
-    const { container, views } = mount();
-    views.legend.showNodeTypes(
-      [row('DIRECTORY', 'Directories (1)'), row('FILE', 'Files (2)')],
-      () => {},
-    );
-    views.legend.showNodeTypes([row('FILE', 'Files (3)')], () => {});
-    const legend = container.find('legend');
-    expect(legend.children.map((item) => item.children[1]?.textContent)).toEqual(['Files (3)']);
-    views.legend.showNodeTypes([], () => {});
+    show(views, [row('DIRECTORY', 'Directories (1)'), row('FILE', 'Files (2)')], noop);
+    show(views, [row('FILE', 'Files (3)')], noop);
+    const legend = container.find(id);
+    expect(texts(legend)).toEqual(['Files (3)']);
+    show(views, [], noop);
     expect(legend.children).toEqual([]);
-    views.legend.showRelationshipTypes([row('HAS_ENTRY', 'Has entry (1)')], () => {});
-    views.legend.showRelationshipTypes([], () => {});
-    expect(container.find('relationship-legend').children).toEqual([]);
   });
 
   it('calls the latest toggle after a re-show', () => {
     const { container, views } = mount();
     const first: string[] = [];
     const second: string[] = [];
-    views.legend.showNodeTypes([row('FILE', 'Files (1)')], (key) => first.push(key));
-    views.legend.showNodeTypes([row('FILE', 'Files (1)', false)], (key) => second.push(key));
-    container.find('legend').children[0]?.click();
+    show(views, [row('FILE', 'Files (1)')], (key) => first.push(key));
+    show(views, [row('FILE', 'Files (1)', false)], (key) => second.push(key));
+    container.find(id).children[0]?.click();
     expect(first).toEqual([]);
     expect(second).toEqual(['FILE']);
   });
