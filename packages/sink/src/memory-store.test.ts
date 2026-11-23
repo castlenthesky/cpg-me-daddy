@@ -57,3 +57,55 @@ describe('createMemoryStore', () => {
     expect([kind, deltaKind]).toEqual(['permanent', 'permanent']);
   });
 });
+
+// U2b.1 part 3b: readAll, the whole-graph read C-CLI Q6 names ("MemoryStore's readFile/readAll"),
+// which CpgEngine.inspect reads. A store-half read, so it needs open() like the others.
+describe('MemoryStore.readAll', () => {
+  const graph = {
+    seq: 3,
+    nodes: [
+      { id: 'd', type: 'DIRECTORY', name: '.', data: { path: '.' } },
+      { id: 'f', type: 'FILE', name: 'a.ts', data: { path: 'a.ts', revision_id: 'r1' } },
+    ],
+    edges: [{ source: 'd', target: 'f', type: 'HAS_ENTRY' }],
+  };
+
+  it('before open() it throws STORE_NOT_OPEN, like every read', async () => {
+    await expect(createMemoryStore().readAll()).rejects.toMatchObject({
+      name: 'StoreError',
+      code: 'STORE_NOT_OPEN',
+    });
+  });
+
+  it('after close() it throws STORE_NOT_OPEN', async () => {
+    const store = createMemoryStore();
+    await store.open();
+    await store.close();
+    await expect(store.readAll()).rejects.toMatchObject({ code: 'STORE_NOT_OPEN' });
+  });
+
+  it('a fresh store is the empty graph at seq -1', async () => {
+    const store = createMemoryStore();
+    await store.open();
+    expect(await store.readAll()).toEqual({ seq: -1, nodes: [], edges: [] });
+  });
+
+  it('returns the whole graph: every node and edge, and the seq', async () => {
+    const store = createMemoryStore();
+    await store.open();
+    await store.onSnapshot(graph, { seq: 3, cause: 'initial' });
+    expect(await store.readAll()).toEqual(graph);
+  });
+
+  it('is a deep copy: changing the result changes nothing in the store', async () => {
+    const store = createMemoryStore();
+    await store.open();
+    await store.onSnapshot(graph, { seq: 3, cause: 'initial' });
+    const first = await store.readAll();
+    const [node] = first.nodes;
+    if (node?.data !== undefined) Reflect.set(node.data, 'path', 'changed');
+    Reflect.set(first.edges, 'length', 0);
+    expect(await store.readAll()).toEqual(graph);
+    expect((await store.inspect()).edgeCount).toBe(1);
+  });
+});

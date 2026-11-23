@@ -279,6 +279,7 @@ function fakeEngine(
       calls.push({ session, config, expected });
       return reject ? Promise.reject(new Error('boom')) : Promise.resolve(REPORT(state));
     },
+    inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
     schema: () => {
       throw new Error('fakeEngine.schema is not driven by these tests');
     },
@@ -353,7 +354,14 @@ describe('cpg verify wiring', () => {
       undefined,
       ['consumers.store "falkor"', '--store', 'U5'],
     ],
-    ['--inspect', ['--inspect'], undefined, ['consumers.inspect true', '--inspect', 'U2b']],
+    // U2b.1 part 3b: verify does not start the inspector, so the switch is refused with the verb
+    // that does (design note 9)
+    [
+      '--inspect',
+      ['--inspect'],
+      undefined,
+      ['consumers.inspect true', '--inspect', 'cpg index --inspect'],
+    ],
     [
       'a file with vscode: true',
       [],
@@ -365,7 +373,14 @@ describe('cpg verify wiring', () => {
       'a file with store: falkor, plus --inspect',
       ['--inspect'],
       'version: 1\nconsumers: { store: falkor }\n',
-      ['consumers.store "falkor"', 'cpg.config.yaml', 'U5', 'consumers.inspect true', '--inspect'],
+      [
+        'consumers.store "falkor"',
+        'cpg.config.yaml',
+        'U5',
+        'consumers.inspect true',
+        '--inspect',
+        'cpg index --inspect',
+      ],
     ],
   ] as const)(
     '%s: exit 2 "not built yet" naming the switch and its source; no engine, no connect',

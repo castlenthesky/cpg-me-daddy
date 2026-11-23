@@ -1,6 +1,6 @@
 // cpg verify's six checks (C-CLI VerifyReport, 08-verification.md §3, BMO-80).
 
-import { NODE_LABELS, WORKSPACE_ROOT } from '@cpg/model';
+import { NODE_LABELS, WORKSPACE_ROOT, type RenderReport } from '@cpg/model';
 import type { GraphSink } from '@cpg/sink';
 import type { FileState, GraphStore, StaleNode } from '@cpg/store';
 import type { CheckResult, CheckState, VerifyCheckId, VerifyConfig, VerifyReport } from './port';
@@ -204,6 +204,42 @@ export function worstState(states: readonly CheckState[]): CheckState {
     }
   }
   return worst;
+}
+
+/** The latest render-report the page sent, as the front door saw it (the message's seq and body). */
+export interface RenderObservation {
+  readonly seq: number;
+  readonly report: RenderReport;
+}
+
+export interface RenderReconciliationInput {
+  /** The seq of the payload the renderer was sent: the check's `asOfSeq`. */
+  readonly payloadSeq: number;
+  /** The latest render-report, or null before the page has sent one. */
+  readonly latest: RenderObservation | null;
+  /** Where the picture is served. The `unavailable` detail names it, so the human knows what to open. */
+  readonly url: string;
+}
+
+/**
+ * render-reconciliation from the renderer's render-report (08-verification §3.1, C-EXT I-10, I-19;
+ * controller decision 21). Pure and I/O-free: the front door that runs the renderer calls it with
+ * the latest report. `asOfSeq` is `payloadSeq`.
+ *
+ * - No report: `unavailable`, observed 0, expected 0, detail `no render-report yet: open <url>`.
+ * - `latest.seq < payloadSeq`: `stale` (never pass at a lagging seq), no localisedTo, detail
+ *   `render-report at seq <r> lags the payload's seq <p>`. A later seq is judged, not stale.
+ * - Otherwise `pass` iff `renderedNodeCount === payloadNodeCount` and `droppedNodeIds` is empty,
+ *   else `fail`, with the dropped ids (distinct, sorted) in `localisedTo` and
+ *   `<rendered> of <payload> payload nodes drawn` in `detail`.
+ *
+ * With a report, `observed` is `renderedNodeCount` and `expected` is `payloadNodeCount`.
+ * `duplicateEdges > 0` adds `<n> duplicate edge(s) drawn once` to `detail` and never changes the
+ * state (owner decision 12a: visible, not silent).
+ */
+export function renderReconciliation(input: RenderReconciliationInput): CheckResult {
+  // SEAT: U2b.1 part 3b
+  throw new Error(`SEAT: renderReconciliation at seq ${String(input.payloadSeq)} (U2b.1 part 3b)`);
 }
 
 /** Internal to @cpg/engine: runs verify's six read-only checks against one store. */

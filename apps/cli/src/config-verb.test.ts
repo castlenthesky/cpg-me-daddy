@@ -182,6 +182,7 @@ function fakeEngine() {
       verifies.push(config);
       return Promise.resolve(VERIFIED);
     },
+    inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
     schema: () => {
       throw new Error('fakeEngine.schema is not driven by these tests');
     },
@@ -680,8 +681,8 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     expect(f.verifies[0]?.include).toEqual(['named/**']);
   });
 
-  // index without --dry-run is built since U2c.2 (index-verb.test.ts).
-  it.each([['watch'], ['inspect']])(
+  // index without --dry-run is built since U2c.2 (index-verb.test.ts), inspect since U2b.1 part 3b.
+  it.each([['watch']])(
     'the SEAT verb %s loads no config: built-in store, still "not built yet"',
     async (verb) => {
       const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nincludes: [typo]\n' });

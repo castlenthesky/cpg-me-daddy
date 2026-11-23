@@ -15,7 +15,7 @@ import {
   type NodeLabel,
   type WorkspacePath,
 } from '@cpg/model';
-import { createMemoryStore } from '@cpg/sink';
+import { createMemoryStore, type MemoryStore } from '@cpg/sink';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_EXCLUDES } from './walker/defaults';
 import type { EngineSink } from './engine';
@@ -44,7 +44,7 @@ const TARGET: StoreTarget = { host: 'localhost', port: 6382, graph: 'cpg' };
 /** The CLI's switches: memory only, no renderer (owner decision 5a builds the sinks from these). */
 const HEADLESS: ConsumerSwitches = { inspect: false, store: 'memory', vscode: false };
 /** An engine whose built-in memory store is `memory` (a test plants graphs in it). */
-const engineOn = (memory: EngineSink, sinks: readonly EngineSink[] = []): CpgEngine =>
+const engineOn = (memory: MemoryStore, sinks: readonly EngineSink[] = []): CpgEngine =>
   createEngine({ version: '0', consumers: HEADLESS }, { memoryStore: memory, sinks });
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -269,7 +269,7 @@ describe('VerifyReport (I-21)', () => {
       seq += 1;
       await memory.onSnapshot({ seq, nodes, edges: [] }, { seq, cause: 'catch-up' });
     }
-    const sink: EngineSink = {
+    const sink: MemoryStore = {
       ...memory,
       async inspect() {
         calls.push('inspect');
@@ -444,7 +444,7 @@ describe('id-uniqueness via store.nodeKeys', () => {
     const memory = createMemoryStore();
     await memory.onSnapshot({ seq: 0, nodes, edges: [] }, { seq: 0, cause: 'initial' });
     const labels: NodeLabel[] = [];
-    const sink: EngineSink = {
+    const sink: MemoryStore = {
       ...memory,
       nodeKeys(label) {
         labels.push(label);
@@ -523,7 +523,7 @@ describe('verify is a read', () => {
     const root = await tree(FILES);
     const memory = createMemoryStore();
     const writes: string[] = [];
-    const sink: EngineSink = {
+    const sink: MemoryStore = {
       ...memory,
       write(op) {
         writes.push(op.kind);

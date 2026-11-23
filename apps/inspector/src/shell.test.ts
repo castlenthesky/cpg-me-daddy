@@ -207,3 +207,40 @@ describe('graphShellHtml', () => {
     expect(html).toContain('<script nonce="c2Vjb25k" src="/graph.js"></script>');
   });
 });
+
+// U2b.1 part 3b, the controller's Chromium run: the banner plus the graph overflowed the window by a
+// few pixels, so the page scrolled. The picture must fit the window with no scrollbar. The page,
+// and the graph container, clip; the canvas is a block, since an inline canvas sits on a line box
+// whose descender gap pushes past its container.
+function shellRules(html: string): Map<string, Map<string, string>> {
+  const css = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+  const rules = new Map<string, Map<string, string>>();
+  for (const block of css.split('}')) {
+    const [selector, body] = block.split('{');
+    if (selector === undefined || body === undefined) continue;
+    const decls = new Map<string, string>();
+    for (const decl of body.split(';')) {
+      const [prop, ...value] = decl.split(':');
+      if (prop !== undefined && prop.trim() !== '') decls.set(prop.trim(), value.join(':').trim());
+    }
+    rules.set(selector.trim().replace(/\s+/g, ' '), decls);
+  }
+  return rules;
+}
+
+describe('graphShellHtml: the picture fits the window, no scrollbar', () => {
+  it.each([
+    [undefined, 'graph-container'],
+    ['g', 'g'],
+  ])(
+    'containerId %s: html/body and the container clip; the canvas is a block',
+    (containerId, id) => {
+      const rules = shellRules(graphShellHtml({ ...BASE, ...(containerId && { containerId }) }));
+      expect(rules.get('html, body')?.get('overflow')).toBe('hidden');
+      expect(rules.get('html, body')?.get('height')).toBe('100%');
+      expect(rules.get(`#${id}`)?.get('overflow')).toBe('hidden');
+      expect(rules.get(`#${id}`)?.get('min-height')).toBe('0');
+      expect(rules.get(`#${id} canvas`)?.get('display')).toBe('block');
+    },
+  );
+});

@@ -77,6 +77,7 @@ function fakeEngine(report: IndexReport = REPORT) {
       return Promise.resolve(report);
     },
     verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
+    inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
     schema: () => {
       throw new Error('fakeEngine.schema is not driven by these tests');
     },
@@ -334,24 +335,19 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
   it('the engine is built with the resolved switches: flags over the file, per switch', async () => {
     const root = await workspace('version: 1\nconsumers: { store: falkor, vscode: false }\n');
     const configs: EngineConfig[] = [];
-    // --dry-run reaches no consumer, so switches that are not built yet do not stop it
-    const r = await cli(
-      ['index', '--dry-run', '--inspect', '--store', 'memory', root],
-      createEngine,
-      {
-        configs,
-      },
-    );
+    // --dry-run reaches no consumer, so switches that are not built yet do not stop it. U2b.1 part
+    // 3b: --inspect left out, since --dry-run refuses it (inspect-verb.test.ts).
+    const r = await cli(['index', '--dry-run', '--store', 'memory', root], createEngine, {
+      configs,
+    });
     expect(r.code).toBe(EXIT.OK);
-    expect(configs).toEqual([
-      { version: '9.8.7', consumers: { inspect: true, store: 'memory', vscode: false } },
-    ]);
+    expect(configs).toEqual([{ version: '9.8.7', consumers: HEADLESS }]);
   });
 
   it('--dry-run under switches that are not built still runs, and reaches no consumer', async () => {
     const root = await workspace('version: 1\nconsumers: { vscode: true }\n');
     const r = await cli(
-      ['index', '--dry-run', '--inspect', '--store', 'falkor', '--format', 'json', root],
+      ['index', '--dry-run', '--store', 'falkor', '--format', 'json', root],
       createEngine,
     );
     expect(r.code).toBe(EXIT.OK);
@@ -365,7 +361,6 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
       undefined,
       ['consumers.store', 'falkor', '--store', 'U5'],
     ],
-    ['--inspect', ['--inspect'], undefined, ['consumers.inspect true', '--inspect', 'U2b']],
     [
       'a file with store: falkor',
       [],
@@ -396,14 +391,28 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
   );
 
   it('every switch that is not built is named, each with its own source', async () => {
-    const root = await workspace('version: 1\nconsumers: { store: falkor }\n');
-    const r = await cli(['index', '--inspect', root], fakeEngine().engine);
+    const root = await workspace('version: 1\nconsumers: { vscode: true }\n');
+    const r = await cli(['index', '--store', 'falkor', root], fakeEngine().engine);
     expect(r.code).toBe(EXIT.USAGE);
     const err = r.stderr.join('\n');
-    expect(err).toContain('consumers.inspect');
-    expect(err).toContain('--inspect');
+    expect(err).toContain('consumers.vscode');
+    expect(err).toContain(join(root, 'cpg.config.yaml'));
+    expect(err).toContain('consumers.store');
+    expect(err).toContain('--store');
+  });
+
+  // U2b.1 part 3b: the inspector is built, so --inspect is never on the not-built list (stop-list
+  // 44, the CLI copy); the switch that is not built still stops the run before any engine.
+  it('--inspect beside a switch that is not built: only that switch is named', async () => {
+    const root = await workspace('version: 1\nconsumers: { store: falkor }\n');
+    const configs: EngineConfig[] = [];
+    const r = await cli(['index', '--inspect', root], fakeEngine().engine, { configs });
+    expect(r.code).toBe(EXIT.USAGE);
+    const err = r.stderr.join('\n');
     expect(err).toContain('consumers.store');
     expect(err).toContain(join(root, 'cpg.config.yaml'));
+    expect(err).not.toContain('consumers.inspect');
+    expect(configs).toEqual([]);
   });
 
   it('--store with a value outside memory|falkor is a usage error before any engine (I-12)', async () => {

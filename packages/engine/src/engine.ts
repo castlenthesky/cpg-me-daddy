@@ -1,16 +1,17 @@
 // createEngine: the engine's one constructor. Only a front door (apps/*) calls it (03-architecture §2
 // rule 3, check-deps rule engine-call-site); this package defines it and never calls it.
 
-import { CPG_SCHEMA, type SchemaDocInput } from '@cpg/model';
+import { CPG_SCHEMA, type GraphPayload, type SchemaDocInput } from '@cpg/model';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
-import { createMemoryStore, type GraphSink } from '@cpg/sink';
+import { createMemoryStore, type GraphSink, type MemoryStore } from '@cpg/sink';
 import type { EdgeRow, GraphStore, NodeRow, WriteOp } from '@cpg/store';
 import { createNullGraphStore } from './null-graph-store';
 import type {
   ConsumerSwitches,
   CpgEngine,
   EngineSession,
+  IndexConfig,
   IndexedFile,
   IndexProgress,
   IndexReport,
@@ -37,8 +38,11 @@ export type EngineSink = GraphSink & GraphStore;
 export interface EngineDeps {
   /** Host-adapter sinks (e.g. the VS Code panel's, U3), written after the built-in ones. */
   readonly sinks?: readonly EngineSink[];
-  /** The instance to use as the built-in memory store; a test plants graphs in it. */
-  readonly memoryStore?: EngineSink;
+  /**
+   * The instance to use as the built-in memory store; a test plants graphs in it. A MemoryStore,
+   * because inspect reads it whole (`readAll`).
+   */
+  readonly memoryStore?: MemoryStore;
   /** SEAT: accepted and unused until the resolver chain (U6c). */
   readonly resolvers?: readonly Resolver[];
   /** SEAT: accepted and unused until the LSP driver (U8). */
@@ -89,7 +93,7 @@ function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
 
 export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEngine {
   // REAL
-  const memory: EngineSink = deps.memoryStore ?? createMemoryStore({ id: 'memory' });
+  const memory: MemoryStore = deps.memoryStore ?? createMemoryStore({ id: 'memory' });
   const sinks: readonly EngineSink[] = [memory, ...(deps.sinks ?? [])];
   const registry = createLanguageRegistry();
   for (const lang of BUILTIN_LANGUAGES) {
@@ -250,6 +254,11 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         );
       }
       return verifyStore(memory, verifyConfig, languageOf);
+    },
+
+    async inspect(_session: EngineSession, _config: IndexConfig): Promise<GraphPayload> {
+      // SEAT: U2b.1 part 3b
+      throw new Error('SEAT: inspect reads the memory store (U2b.1 part 3b)');
     },
 
     schema(): SchemaDocInput {

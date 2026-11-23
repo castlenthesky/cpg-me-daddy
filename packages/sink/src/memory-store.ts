@@ -13,7 +13,7 @@ import type {
 } from './contract';
 import type { GraphStore } from '@cpg/store';
 import { assertDeltaWellFormed, sinkError } from './delta';
-import { createStoreHalf, MEMORY_TIER_CAPABILITIES } from './memory-graph-store';
+import { createStoreHalf, MEMORY_TIER_CAPABILITIES, type StoreHalf } from './memory-graph-store';
 
 export interface MemoryStoreOptions {
   /** Default 'memory'. */
@@ -22,8 +22,11 @@ export interface MemoryStoreOptions {
   readonly now?: () => number;
 }
 
-/** C-SINK's and C-STORE's capabilities share a name but no field, so one object carries both. */
-export type MemoryStore = GraphSink & GraphStore;
+/**
+ * C-SINK's and C-STORE's capabilities share a name but no field, so one object carries both.
+ * `readAll` is the store half's whole-graph read (C-CLI Q6), outside both contracts.
+ */
+export type MemoryStore = GraphSink & GraphStore & Pick<StoreHalf, 'readAll'>;
 
 const MEMORY_STORE_CAPABILITIES: SinkCapabilities = {
   durability: 'durable',

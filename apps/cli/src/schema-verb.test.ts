@@ -42,6 +42,7 @@ function fakeEngine(schema: SchemaDocInput) {
     connect: () => Promise.reject(new Error('cpg schema never connects')),
     index: () => Promise.reject(new Error('cpg schema never indexes')),
     verify: () => Promise.reject(new Error('cpg schema never verifies')),
+    inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
     schema: () => {
       calls++;
       return schema;

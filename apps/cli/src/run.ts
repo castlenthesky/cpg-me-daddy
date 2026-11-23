@@ -24,6 +24,7 @@ import {
 } from '@cpg/engine';
 import { checkSchemaDoc } from '@cpg/model';
 import { loadConfig } from './config';
+import type { StartInspector } from './inspector-process';
 import type { Io, Manifest } from './io';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
@@ -61,6 +62,11 @@ export interface RunOptions {
    * resolved, so the engine builds only the sinks the resolved consumer switches enable.
    */
   readonly createEngine?: (config: EngineConfig) => CpgEngine;
+  /**
+   * The composition root's inspector launcher (owner decision 9a): main.ts spawns the cpg-inspector
+   * bin. `cpg inspect` and `cpg index --inspect` call it once they hold a payload.
+   */
+  readonly startInspector?: StartInspector;
   readonly signal?: AbortSignal;
   /** The process working directory, read in main.ts: the last workspace-root fallback (C-CLI). */
   readonly cwd?: string;

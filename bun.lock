@@ -38,6 +38,7 @@
       },
       "dependencies": {
         "@cpg/engine": "*",
+        "@cpg/inspector": "*",
         "@cpg/model": "*",
       },
       "devDependencies": {
@@ -48,6 +49,9 @@
     "apps/inspector": {
       "name": "@cpg/inspector",
       "version": "0.0.1",
+      "bin": {
+        "cpg-inspector": "./dist/main.js",
+      },
       "dependencies": {
         "@cosmos.gl/graph": "3.6.0",
         "@cpg/model": "*",

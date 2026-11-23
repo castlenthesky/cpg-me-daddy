@@ -19,6 +19,7 @@ function fakeEngine(fail = false) {
     index: () => Promise.reject(new Error('fakeEngine.index is not driven by these tests')),
     verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
 
+    inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
     schema: () => {
       throw new Error('fakeEngine.schema is not driven by these tests');
     },
@@ -104,11 +105,12 @@ describe('exit codes', () => {
   // config (U2c.1, config-verb.test.ts) needs no engine, so it is never a SEAT.
   const seats = COMMANDS.map((c) => c.verb).filter((v) => v !== 'config');
   it.each(seats)('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
-    // verify (U2a.3, verify-verb.test.ts), schema (U2a.4, schema-verb.test.ts) and index (U2c.2,
-    // index-verb.test.ts) are built: only without an engine are they still a SEAT. schema needs a
-    // mode flag to get that far.
-    const built = verb === 'verify' || verb === 'schema' || verb === 'index';
-    const argv = verb === 'schema' ? [verb, '--print'] : [verb];
+    // verify (U2a.3, verify-verb.test.ts), schema (U2a.4, schema-verb.test.ts), index (U2c.2,
+    // index-verb.test.ts) and inspect (U2b.1 part 3b, inspect-verb.test.ts) are built: only without
+    // an engine (inspect: an inspector) are they still a SEAT. schema needs a mode flag and inspect a
+    // payload to get that far.
+    const built = verb === 'verify' || verb === 'schema' || verb === 'index' || verb === 'inspect';
+    const argv = verb === 'schema' ? [verb, '--print'] : verb === 'inspect' ? [verb, '-'] : [verb];
     for (const engine of built ? [undefined] : [undefined, fakeEngine().engine]) {
       const r = await cli(argv, engine ? { engine } : {});
       expect(r).toEqual({ code: EXIT.USAGE, out: '', err: `cpg: '${verb}' is not built yet` });
