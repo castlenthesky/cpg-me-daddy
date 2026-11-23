@@ -31,6 +31,12 @@ describe('edgeKey', () => {
     expect(edgeKey(edge('a', 'bc', 'X'))).not.toBe(edgeKey(edge('ab', 'c', 'X')));
     expect(edgeKey(edge('a', 'b', 'cX'))).not.toBe(edgeKey(edge('a', 'bc', 'X')));
   });
+
+  // round two (review a5): a printable separator collides on ids that contain it, and real ids do.
+  it.each([':', '/', '|', ',', '"'])('keeps ids apart that contain %s', (sep) => {
+    expect(edgeKey(edge('a', `b${sep}c`, 'X'))).not.toBe(edgeKey(edge(`a${sep}b`, 'c', 'X')));
+    expect(edgeKey(edge('a', 'b', `c${sep}X`))).not.toBe(edgeKey(edge('a', `b${sep}c`, 'X')));
+  });
 });
 
 describe('EdgeStore', () => {
@@ -74,10 +80,13 @@ describe('EdgeStore', () => {
 
   it('skips an edge whose endpoint has no index, keeps it, and draws it once the endpoint arrives', () => {
     const store = new EdgeStore();
-    store.replace([edge('a', 'z', 'CALLS'), edge('a', 'b', 'HAS_ENTRY')]);
-    expect(store.size).toBe(2);
+    // round two (review a6): a missing source is skipped as well as a missing target.
+    store.replace([edge('a', 'z', 'CALLS'), edge('a', 'b', 'HAS_ENTRY'), edge('y', 'a', 'CALLS')]);
+    expect(store.size).toBe(3);
     expect(pairs(store.build(indexer('a', 'b'), [1, 1]))).toEqual([0, 1]);
-    expect(pairs(store.build(indexer('a', 'b', 'z'), [1, 1, 1]))).toEqual([0, 2, 0, 1]);
+    expect(pairs(store.build(indexer('a', 'b', 'z', 'y'), [1, 1, 1, 1]))).toEqual([
+      0, 2, 0, 1, 3, 0,
+    ]);
   });
 
   it('replace discards the previous set', () => {

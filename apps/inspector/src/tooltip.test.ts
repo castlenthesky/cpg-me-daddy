@@ -75,4 +75,16 @@ describe('linkTooltipText', () => {
     const resolvedSource: GraphNode = { ...a, data: resolution('resolved') };
     expect(linkTooltipText(imports, resolvedSource, b)).toBe('Imports: a.ts → b.ts');
   });
+
+  // round two (review a7): the edge's resolution goes through readEdgeResolution as well.
+  it('formats an edge resolution like a node one: no reason, an empty reason, or malformed', () => {
+    expect(linkTooltipText({ ...imports, data: resolution('resolved') }, a, b)).toBe(
+      'Imports: a.ts → b.ts — resolved',
+    );
+    expect(linkTooltipText({ ...imports, data: resolution('external', '') }, a, b)).toBe(
+      'Imports: a.ts → b.ts — external',
+    );
+    const noResolver: GraphEdge = { ...imports, data: { resolution: { status: 'resolved' } } };
+    expect(linkTooltipText(noResolver, a, b)).toBe('Imports: a.ts → b.ts');
+  });
 });

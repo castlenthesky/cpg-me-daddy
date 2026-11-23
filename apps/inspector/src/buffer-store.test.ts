@@ -259,17 +259,40 @@ describe('BufferStore.applyDelta additions', () => {
     expect(store.sizes[3]).toBeCloseTo(17.6, 5);
   });
 
+  // round two (review a2): childPointSize floors at 4, so a size-4 parent has a size-4 child.
+  it('floors a seeded size at 4 under a smallest parent', () => {
+    const store = new BufferStore();
+    store.load(
+      layoutOf([{ id: 'p', type: 'FILE', x: 10, y: 10, size: 4 }]),
+      payloadOf([node('p')]),
+    );
+    store.applyDelta(add(node('c')), new Map([['c', 'p']]), always(0.5));
+    expect(xy(store, 1)).toEqual([10, 10]);
+    expect(store.sizes[1]).toBe(4);
+  });
+
+  // round two (review a3): the archive kept a tombstoned parent's size (visualizer.ts:582-583).
+  it('treats a parent tombstoned by an earlier delta as not locatable', () => {
+    const store = loaded();
+    store.applyDelta(remove('f'), new Map(), scripted());
+    store.applyDelta(add(node('h')), new Map([['h', 'f']]), scripted(0.75, 0.25));
+    expect(xy(store, 3)).toEqual([2058, 2038]);
+    expect(store.sizes[3]).toBeCloseTo(17.6, 5);
+  });
+
   it('restores a tombstoned id at its old index, seeded beside its parent', () => {
     const store = loaded();
     store.applyDelta(remove('f'), new Map(), scripted());
-    const again = node('f', 'FILE', 'f2.ts');
+    // round two (review a1): remove-then-add may change the type, so type and colour are restored too.
+    const again = node('f', 'DIRECTORY', 'f2');
     store.applyDelta(add(again), new Map([['f', 'd']]), scripted(0.25, 0.75));
     expect(store.length).toBe(3);
     expect(xy(store, 1)).toEqual([90, 210]);
     expect(store.sizes[1]).toBeCloseTo(17.6, 5);
+    expect(rgba(store, 1)).toEqual(f32(DIRECTORY_RGBA));
     expect(store.nodeAt(1)).toBe(again);
     expect(store.liveIndex('f')).toBe(1);
-    expect(store.liveTypes()).toEqual(['DIRECTORY', 'FILE', 'FILE']);
+    expect(store.liveTypes()).toEqual(['DIRECTORY', 'DIRECTORY', 'FILE']);
   });
 
   it('restores in place when one delta removes and re-adds an id', () => {
@@ -287,12 +310,16 @@ describe('BufferStore.applyDelta additions', () => {
 
   it('keeps the point, position and size of a re-added live id and updates its node', () => {
     const store = loaded();
-    const again = node('f', 'FILE', 'f2.ts');
-    store.applyDelta(add(again), new Map([['f', 'd']]), always(0.75));
+    // round two (review a1): a new type and colour are taken, and no random number is drawn
+    // (scripted() throws on the first draw).
+    const again = node('f', 'MODULE', 'f2.ts');
+    store.applyDelta(add(again), new Map([['f', 'd']]), scripted());
     expect(store.length).toBe(3);
     expect(xy(store, 1)).toEqual([300, 400]);
     expect(store.sizes[1]).toBe(9);
+    expect(rgba(store, 1)).toEqual(f32(GREY));
     expect(store.nodeAt(1)).toBe(again);
+    expect(store.liveTypes()).toEqual(['DIRECTORY', 'MODULE', 'FILE']);
   });
 });
 
@@ -306,6 +333,9 @@ describe('BufferStore.syncLive', () => {
   it('keeps the base wherever either live coordinate is not finite', () => {
     const store = loaded();
     store.syncLive([NaN, NaN, 7, NaN, 5, 6]);
+    expect(Array.from(store.positions)).toEqual([100, 200, 300, 400, 5, 6]);
+    // round two (review a4): NaN on x alone, and infinities, are not finite either.
+    store.syncLive([NaN, 8, Infinity, 6, 1, -Infinity]);
     expect(Array.from(store.positions)).toEqual([100, 200, 300, 400, 5, 6]);
   });
 

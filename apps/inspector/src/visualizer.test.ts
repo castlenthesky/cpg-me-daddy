@@ -154,7 +154,10 @@ interface Mounted {
   readonly setNow: (ms: number) => void;
 }
 
-function mount(seed = 7): Mounted {
+function mount(
+  seed = 7,
+  layout: Pick<GraphVisualizerOptions, 'hierarchyEdgeType' | 'fallbackParentEdgeTypes'> = {},
+): Mounted {
   const surface = new FakeSurface();
   const legend = new FakeLegend();
   const tooltip = new FakeTooltip();
@@ -163,6 +166,7 @@ function mount(seed = 7): Mounted {
   const box: { events?: SurfaceEvents } = {};
   const options: GraphVisualizerOptions = {
     seed,
+    ...layout,
     onNodeClick: (node) => {
       clicks.push(node);
     },
@@ -229,6 +233,14 @@ function delta(
 }
 const edgeOnly = (...addedEdges: GraphEdge[]): GraphDelta => delta({ addedEdges });
 
+/** Moves f to (500, 600), adds h under it, and returns h's offset from there. */
+function deltaOffset(m: Mounted): number[] {
+  m.surface.live[2] = 500;
+  m.surface.live[3] = 600;
+  m.viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('f', 'h')] }));
+  return [(m.surface.positions[6] ?? NaN) - 500, (m.surface.positions[7] ?? NaN) - 600];
+}
+
 function expectClose(actual: readonly number[], expected: readonly number[], digits = 4): void {
   expect(actual).toHaveLength(expected.length);
   expected.forEach((value, i) => expect(actual[i]).toBeCloseTo(value, digits));
@@ -289,6 +301,8 @@ describe('GraphVisualizer.render', () => {
       expect(at(push)).toBeLessThan(at('render'));
     }
     expect(at('setPinnedPoints')).toBeGreaterThan(at('setPointPositions'));
+    // round two (review a9): a pin set after render() is not applied on that render.
+    expect(at('setPinnedPoints')).toBeLessThan(at('render'));
     expect(surface.pinned).toEqual([0]);
     expect(at('start')).toBeGreaterThan(at('render'));
     expect(surface.starts).toEqual([1]);
@@ -320,6 +334,16 @@ describe('GraphVisualizer.render', () => {
     viz.render(P1);
     expect(tooltip.visible).toBe(false);
     expect(legend.texts('node')).toEqual(['Directories (1)', 'Files (2)']);
+    expect(legend.texts('relationship')).toEqual(['Has entry (2)']);
+  });
+
+  // round two (review a11): a render replaces the edge set, it does not merge into it.
+  it('drops the edges a delta added when a fresh payload renders', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    viz.render(P1);
+    expect(surface.links).toEqual([0, 1, 0, 2]);
     expect(legend.texts('relationship')).toEqual(['Has entry (2)']);
   });
 
@@ -375,6 +399,8 @@ describe('GraphVisualizer.applyDelta', () => {
       expect(at(push)).toBeLessThan(at('render'));
     }
     expect(at('setPinnedPoints')).toBeGreaterThan(at('setPointPositions'));
+    // round two (review a9)
+    expect(at('setPinnedPoints')).toBeLessThan(at('render'));
     expect(surface.pinned).toEqual([0]);
     expect(at('unpause')).toBeGreaterThan(at('render'));
     expect(at('start')).toBeGreaterThan(at('render'));
@@ -447,6 +473,72 @@ describe('GraphVisualizer.applyDelta', () => {
     expect(two.surface.positions).toEqual(one.surface.positions);
   });
 
+  // round two (review a8): the jitter is the seed's, non-zero, and restarts with every render.
+  it('jitters a delta node by the seed, and re-seeds the jitter on every render', () => {
+    const seven = mount(7);
+    const eight = mount(8);
+    seven.viz.render(P1);
+    eight.viz.render(P1);
+    const first = deltaOffset(seven);
+    expect(first.every((offset) => offset !== 0 && Math.abs(offset) <= 20)).toBe(true);
+    expect(deltaOffset(eight)).not.toEqual(first);
+    seven.viz.render(P1);
+    expect(deltaOffset(seven)).toEqual(first);
+  });
+
+  // round two (review b1): the hierarchy and fallback options reach the layout and the delta seeding.
+  it('lays out and seeds deltas by the configured hierarchy and fallback edge types', () => {
+    const options = { hierarchyEdgeType: 'CONTAINS', fallbackParentEdgeTypes: new Set(['REF']) };
+    const m = mount(7, options);
+    const chain: GraphPayload = {
+      seq: 0,
+      nodes: [D, F, G],
+      edges: [edge('d', 'f', 'CONTAINS'), edge('f', 'g', 'CONTAINS')],
+    };
+    m.viz.render(chain);
+    // Under the default HAS_ENTRY all three would be roots around a synthetic fourth point.
+    expect(m.surface.positions).toEqual(
+      Array.from(layoutPayload(chain, { seed: 7, ...options }).positions),
+    );
+    expect(m.surface.positions).toHaveLength(6);
+    m.surface.live[4] = 900;
+    m.surface.live[5] = 900;
+    m.viz.applyDelta(
+      delta({
+        addedNodes: [node('h'), node('i')],
+        addedEdges: [edge('g', 'h', 'CONTAINS'), entry('d', 'i'), edge('g', 'i', 'REF')],
+      }),
+    );
+    for (const at of [6, 7, 8, 9]) {
+      expect(Math.abs((m.surface.positions[at] ?? NaN) - 900)).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it('seeds a delta node by the default DEFINES fallback when it has no hierarchy edge', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    surface.live[2] = 500;
+    surface.live[3] = 600;
+    viz.applyDelta(
+      delta({ addedNodes: [node('s', 'SYMBOL')], addedEdges: [edge('f', 's', 'DEFINES')] }),
+    );
+    expect(Math.abs((surface.positions[6] ?? NaN) - 500)).toBeLessThanOrEqual(20);
+    expect(Math.abs((surface.positions[7] ?? NaN) - 600)).toBeLessThanOrEqual(20);
+  });
+
+  // round two (review b2)
+  it('keeps a hidden relationship type hidden through a delta, new edges of that type included', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    legend.toggleRelationship('HAS_ENTRY');
+    viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('d', 'h'), IMPORTS] }));
+    expect(surface.links).toEqual([1, 2]);
+    expect(legend.relationshipRows.map((row) => [row.text, row.pressed])).toEqual([
+      ['Has entry (3)', false],
+      ['Imports (1)', true],
+    ]);
+  });
+
   it('keeps a hidden node type hidden through a delta, new nodes of that type included', () => {
     const { viz, surface, legend } = mount();
     viz.render(P1);
@@ -477,6 +569,8 @@ describe('GraphVisualizer legend toggles', () => {
     expect(surface.positions.slice(0, 2).every(Number.isFinite)).toBe(true);
     expect(surface.log.indexOf('render')).toBeGreaterThan(surface.log.indexOf('setPointPositions'));
     expect(surface.log.indexOf('unpause')).toBeGreaterThan(surface.log.indexOf('render'));
+    // round two (review a9): a start before render() is paused again by the position transition.
+    expect(surface.log.indexOf('start')).toBeGreaterThan(surface.log.indexOf('render'));
     expect(surface.starts).toEqual([1, 0.1]);
     expect(legend.nodeRows.find((row) => row.key === 'FILE')?.pressed).toBe(false);
     expect(legend.texts('node')).toEqual(['Directories (1)', 'Files (2)']);
@@ -583,12 +677,14 @@ describe('GraphVisualizer tooltips', () => {
   });
 
   it('reads a link hover index against the visible links, not all of them', () => {
-    const { viz, events, tooltip, legend } = mount();
+    const { viz, surface, events, tooltip, legend } = mount();
     viz.render(P1);
     viz.applyDelta(edgeOnly(IMPORTS));
     legend.toggleRelationship('HAS_ENTRY');
+    // round two (review a10): the endpoints come from the visible link too, not from all links.
+    surface.live.splice(2, 4, 100, 200, 300, 600);
     events.onLinkMouseOver(0);
-    expect(tooltip.shown?.text).toBe('Imports: f.ts → g.ts');
+    expect(tooltip.shown).toEqual({ text: 'Imports: f.ts → g.ts', left: 400, top: 1200 - 6 });
   });
 
   it('hides for a link with an absent endpoint or an index past the visible links', () => {
@@ -669,6 +765,27 @@ describe('GraphVisualizer camera', () => {
     setNow(20_000);
     events.onSimulationTick();
     expect(surface.fits).toEqual([250, undefined, 250, 250]);
+  });
+
+  // round two (review b3): an unbound performance.now throws ERR_INVALID_THIS, so it is wrapped.
+  it('defaults the camera clock to performance.now', () => {
+    const box: { events?: SurfaceEvents } = {};
+    const surface = new FakeSurface();
+    const viz = new GraphVisualizer(
+      (events) => {
+        box.events = events;
+        return surface;
+      },
+      { legend: new FakeLegend(), tooltip: new FakeTooltip() },
+      { seed: 1 },
+    );
+    viz.render(P1);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const events = box.events;
+    if (events === undefined) throw new Error('makeSurface was not called');
+    events.onSimulationTick();
+    expect(now).toHaveBeenCalled();
+    expect(surface.fits).toEqual([250]);
   });
 
   it('fitView reframes the surface and dispose destroys it', () => {
