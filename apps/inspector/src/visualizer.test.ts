@@ -1,0 +1,682 @@
+// The visualizer (BMO-35 line 2: the split of 21754b4:packages/graph-visualizer/src/visualizer.ts,
+// with the edge-only early return at :290 removed). A fake surface records what cosmos.gl would be
+// handed; its getPointPositions reads back the last positions pushed, which a test may move to
+// stand in for the simulation. Payload P1 is d (DIRECTORY) holding f and g (FILEs): the layout puts
+// d at index 0, then f, then g, with sizes 20, 17.6, 17.6, so each HAS_ENTRY link is
+// (20 + 17.6) / 2 * 0.2 = 3.76 wide. The fake maps space (x, y) to screen (2x, 3y), radius r to 10r,
+// and every point radius is 1.5.
+
+import {
+  isWorkspacePath,
+  type GraphDelta,
+  type GraphEdge,
+  type GraphNode,
+  type GraphPayload,
+  type WorkspacePath,
+} from '@cpg/model';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { layoutPayload } from './layout';
+import type { LegendRow } from './legend';
+import {
+  GraphVisualizer,
+  type GraphSurface,
+  type GraphVisualizerOptions,
+  type LegendView,
+  type SurfaceEvents,
+  type TooltipView,
+} from './visualizer';
+
+class FakeSurface implements GraphSurface {
+  readonly log: string[] = [];
+  failOn: string | undefined;
+  live: number[] = [];
+  positions: number[] = [];
+  colors: number[] = [];
+  sizes: number[] = [];
+  links: number[] = [];
+  linkWidths: number[] = [];
+  pinned: number[] | null = null;
+  readonly starts: (number | undefined)[] = [];
+  readonly fits: (number | undefined)[] = [];
+  readonly framed: { positions: number[]; duration: number | undefined }[] = [];
+  destroyed = false;
+
+  private record(name: string): void {
+    this.log.push(name);
+    if (name === this.failOn) throw new Error(`fake ${name} failed`);
+  }
+  setPointPositions(pointPositions: Float32Array): void {
+    this.record('setPointPositions');
+    this.positions = Array.from(pointPositions);
+    this.live = Array.from(pointPositions);
+  }
+  setPointColors(pointColors: Float32Array): void {
+    this.record('setPointColors');
+    this.colors = Array.from(pointColors);
+  }
+  setPointSizes(pointSizes: Float32Array): void {
+    this.record('setPointSizes');
+    this.sizes = Array.from(pointSizes);
+  }
+  setLinks(links: Float32Array): void {
+    this.record('setLinks');
+    this.links = Array.from(links);
+  }
+  setLinkWidths(linkWidths: Float32Array): void {
+    this.record('setLinkWidths');
+    this.linkWidths = Array.from(linkWidths);
+  }
+  setPinnedPoints(pinnedIndices: number[] | null): void {
+    this.record('setPinnedPoints');
+    this.pinned = pinnedIndices === null ? null : [...pinnedIndices];
+  }
+  render(): void {
+    this.record('render');
+  }
+  start(alpha?: number): void {
+    this.record('start');
+    this.starts.push(alpha);
+  }
+  unpause(): void {
+    this.record('unpause');
+  }
+  fitView(duration?: number): void {
+    this.record('fitView');
+    this.fits.push(duration);
+  }
+  fitViewByPointPositions(positions: number[], duration?: number): void {
+    this.record('fitViewByPointPositions');
+    this.framed.push({ positions: [...positions], duration });
+  }
+  getPointPositions(): number[] {
+    return [...this.live];
+  }
+  spaceToScreenPosition(spacePosition: [number, number]): [number, number] {
+    return [spacePosition[0] * 2, spacePosition[1] * 3];
+  }
+  spaceToScreenRadius(spaceRadius: number): number {
+    return spaceRadius * 10;
+  }
+  getPointRadiusByIndex(_index: number): number | undefined {
+    return 1.5;
+  }
+  destroy(): void {
+    this.destroyed = true;
+  }
+}
+
+class FakeLegend implements LegendView {
+  nodeRows: readonly LegendRow[] = [];
+  relationshipRows: readonly LegendRow[] = [];
+  private nodeToggle: ((key: string) => void) | undefined;
+  private relationshipToggle: ((key: string) => void) | undefined;
+
+  showNodeTypes(rows: readonly LegendRow[], onToggle: (key: string) => void): void {
+    this.nodeRows = rows;
+    this.nodeToggle = onToggle;
+  }
+  showRelationshipTypes(rows: readonly LegendRow[], onToggle: (key: string) => void): void {
+    this.relationshipRows = rows;
+    this.relationshipToggle = onToggle;
+  }
+  toggleNode(key: string): void {
+    if (this.nodeToggle === undefined) throw new Error('no node legend yet');
+    this.nodeToggle(key);
+  }
+  toggleRelationship(key: string): void {
+    if (this.relationshipToggle === undefined) throw new Error('no relationship legend yet');
+    this.relationshipToggle(key);
+  }
+  texts(which: 'node' | 'relationship'): string[] {
+    return (which === 'node' ? this.nodeRows : this.relationshipRows).map((row) => row.text);
+  }
+}
+
+class FakeTooltip implements TooltipView {
+  shown: { text: string; left: number; top: number } | undefined;
+  visible = false;
+  show(text: string, left: number, top: number): void {
+    this.shown = { text, left, top };
+    this.visible = true;
+  }
+  hide(): void {
+    this.visible = false;
+  }
+}
+
+interface Mounted {
+  readonly viz: GraphVisualizer;
+  readonly surface: FakeSurface;
+  readonly events: SurfaceEvents;
+  readonly legend: FakeLegend;
+  readonly tooltip: FakeTooltip;
+  readonly clicks: GraphNode[];
+  readonly setNow: (ms: number) => void;
+}
+
+function mount(seed = 7): Mounted {
+  const surface = new FakeSurface();
+  const legend = new FakeLegend();
+  const tooltip = new FakeTooltip();
+  const clicks: GraphNode[] = [];
+  const clock = { now: 0 };
+  const box: { events?: SurfaceEvents } = {};
+  const options: GraphVisualizerOptions = {
+    seed,
+    onNodeClick: (node) => {
+      clicks.push(node);
+    },
+    now: () => clock.now,
+  };
+  const viz = new GraphVisualizer(
+    (events) => {
+      box.events = events;
+      return surface;
+    },
+    { legend, tooltip },
+    options,
+  );
+  const events = box.events;
+  if (events === undefined) throw new Error('makeSurface was not called');
+  const setNow = (ms: number): void => {
+    clock.now = ms;
+  };
+  return { viz, surface, events, legend, tooltip, clicks, setNow };
+}
+
+const failingSurface = (): GraphSurface => {
+  throw new Error('no WebGL');
+};
+
+function workspacePath(value: string): WorkspacePath {
+  if (!isWorkspacePath(value)) throw new Error(`not a workspace path: ${value}`);
+  return value;
+}
+
+const node = (id: string, type = 'FILE', name?: string): GraphNode =>
+  name === undefined ? { id, type } : { id, type, name };
+const edge = (source: string, target: string, type?: string): GraphEdge =>
+  type === undefined ? { source, target } : { source, target, type };
+const entry = (source: string, target: string): GraphEdge => edge(source, target, 'HAS_ENTRY');
+
+const D = node('d', 'DIRECTORY');
+const F = node('f', 'FILE', 'f.ts');
+const G = node('g', 'FILE', 'g.ts');
+const P1: GraphPayload = { seq: 0, nodes: [D, F, G], edges: [entry('d', 'f'), entry('d', 'g')] };
+/** d holds f, and f DEFINES s: the layout adopts s under f, and double-counts that edge in its links. */
+const P2: GraphPayload = {
+  seq: 0,
+  nodes: [D, F, node('s', 'SYMBOL', 'sym')],
+  edges: [entry('d', 'f'), edge('f', 's', 'DEFINES')],
+};
+/** Two roots: index 0 is the synthetic centre, then a and b. */
+const P3: GraphPayload = { seq: 0, nodes: [node('a', 'FILE', 'a.ts'), node('b')], edges: [] };
+const IMPORTS = edge('f', 'g', 'IMPORTS');
+
+function delta(
+  parts: Partial<Pick<GraphDelta, 'addedNodes' | 'addedEdges' | 'removedNodeIds'>>,
+): GraphDelta {
+  return {
+    seq: 1,
+    file: workspacePath('src/f.ts'),
+    revision_id: 'r1',
+    producer: 'filesystem',
+    addedNodes: [],
+    addedEdges: [],
+    removedNodeIds: [],
+    ...parts,
+  };
+}
+const edgeOnly = (...addedEdges: GraphEdge[]): GraphDelta => delta({ addedEdges });
+
+function expectClose(actual: readonly number[], expected: readonly number[], digits = 4): void {
+  expect(actual).toHaveLength(expected.length);
+  expected.forEach((value, i) => expect(actual[i]).toBeCloseTo(value, digits));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('GraphVisualizer construction', () => {
+  it('survives a surface that fails to build, then logs instead of drawing', () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue(undefined);
+    const legend = new FakeLegend();
+    const viz = new GraphVisualizer(
+      failingSurface,
+      { legend, tooltip: new FakeTooltip() },
+      { seed: 1 },
+    );
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(() => viz.render(P1)).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(() => viz.applyDelta(edgeOnly(IMPORTS))).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(3);
+    expect(() => {
+      viz.fitView();
+      viz.dispose();
+    }).not.toThrow();
+    expect(legend.nodeRows).toEqual([]);
+  });
+});
+
+describe('GraphVisualizer.render', () => {
+  it('pushes the layout, with links built from the edge set rather than the layout links', () => {
+    const { viz, surface } = mount();
+    viz.render(P2);
+    const layout = layoutPayload(P2, { seed: 7 });
+    expect(surface.colors).toEqual(Array.from(layout.colors));
+    expect(surface.sizes).toEqual(Array.from(layout.sizes));
+    expect(surface.positions).toEqual(Array.from(layout.positions));
+    // The layout carries f→s twice (tree link plus the DEFINES union, stop-list 49); the edge set once.
+    expect(layout.links).toHaveLength(6);
+    expect(surface.links).toEqual([0, 1, 1, 2]);
+    expectClose(surface.linkWidths, [3.76, ((17.6 + 17.6 * 0.88) / 2) * 0.2]);
+  });
+
+  it('pins point 0 after the positions, renders after every push, frames, then starts at alpha 1', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    const at = (name: string): number => surface.log.indexOf(name);
+    for (const push of [
+      'setPointColors',
+      'setPointSizes',
+      'setLinks',
+      'setLinkWidths',
+      'setPointPositions',
+    ]) {
+      expect(at(push)).toBeGreaterThanOrEqual(0);
+      expect(at(push)).toBeLessThan(at('render'));
+    }
+    expect(at('setPinnedPoints')).toBeGreaterThan(at('setPointPositions'));
+    expect(surface.pinned).toEqual([0]);
+    expect(at('start')).toBeGreaterThan(at('render'));
+    expect(surface.starts).toEqual([1]);
+    expect(surface.framed).toEqual([
+      { positions: Array.from(layoutPayload(P1, { seed: 7 }).positions), duration: 0 },
+    ]);
+    expect(surface.links).toEqual([0, 1, 0, 2]);
+    expectClose(surface.linkWidths, [3.76, 3.76]);
+  });
+
+  it('draws the same payload and seed identically, and a different seed elsewhere', () => {
+    const one = mount(7);
+    const two = mount(7);
+    const other = mount(8);
+    for (const m of [one, two, other]) m.viz.render(P1);
+    expect(two.surface.positions).toEqual(one.surface.positions);
+    expect(two.surface.colors).toEqual(one.surface.colors);
+    expect(two.surface.sizes).toEqual(one.surface.sizes);
+    expect(two.surface.links).toEqual(one.surface.links);
+    expect(two.surface.linkWidths).toEqual(one.surface.linkWidths);
+    expect(other.surface.positions).not.toEqual(one.surface.positions);
+  });
+
+  it('hides the tooltip and refreshes both legends', () => {
+    const { viz, events, legend, tooltip } = mount();
+    viz.render(P1);
+    events.onPointMouseOver(1, [10, 20]);
+    expect(tooltip.visible).toBe(true);
+    viz.render(P1);
+    expect(tooltip.visible).toBe(false);
+    expect(legend.texts('node')).toEqual(['Directories (1)', 'Files (2)']);
+    expect(legend.texts('relationship')).toEqual(['Has entry (2)']);
+  });
+
+  it('leaves the synthetic root out of the node legend', () => {
+    const { viz, legend } = mount();
+    viz.render(P3);
+    expect(legend.texts('node')).toEqual(['Files (2)']);
+  });
+
+  it('never calls Math.random, in a render or a delta', () => {
+    const random = vi.spyOn(Math, 'random');
+    const { viz } = mount();
+    viz.render(P1);
+    viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('f', 'h')] }));
+    viz.applyDelta(delta({ addedNodes: [node('i')] }));
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it('logs and survives an error thrown by the surface', () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue(undefined);
+    const { viz, surface } = mount();
+    surface.failOn = 'setPointColors';
+    expect(() => viz.render(P1)).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GraphVisualizer.applyDelta', () => {
+  it('delivers an edge-only delta (C-EXT I-6; the archive returned early at :290)', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    expect(surface.links).toEqual([0, 1, 0, 2, 1, 2]);
+    expectClose(surface.linkWidths, [3.76, 3.76, 17.6 * 0.2]);
+    expect(legend.texts('relationship')).toEqual(['Has entry (2)', 'Imports (1)']);
+  });
+
+  it('pushes, re-pins point 0, renders, unpauses and reheats gently', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    surface.log.length = 0;
+    surface.pinned = null;
+    viz.applyDelta(edgeOnly(IMPORTS));
+    const at = (name: string): number => surface.log.indexOf(name);
+    for (const push of [
+      'setPointColors',
+      'setPointSizes',
+      'setLinks',
+      'setLinkWidths',
+      'setPointPositions',
+    ]) {
+      expect(at(push)).toBeGreaterThanOrEqual(0);
+      expect(at(push)).toBeLessThan(at('render'));
+    }
+    expect(at('setPinnedPoints')).toBeGreaterThan(at('setPointPositions'));
+    expect(surface.pinned).toEqual([0]);
+    expect(at('unpause')).toBeGreaterThan(at('render'));
+    expect(at('start')).toBeGreaterThan(at('render'));
+    expect(surface.starts).toEqual([1, 0.1]);
+  });
+
+  it('keeps every point where the simulation left it (the archive pushed stale seed positions)', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    const seeded = [...surface.positions];
+    surface.live[2] = 500;
+    surface.live[3] = 600;
+    viz.applyDelta(edgeOnly(IMPORTS));
+    expect(surface.positions).toEqual([seeded[0], seeded[1], 500, 600, seeded[4], seeded[5]]);
+  });
+
+  it("tombstones a removed node, drops its links and lowers its type's count", () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    viz.applyDelta(delta({ removedNodeIds: ['g'] }));
+    expect(surface.positions.slice(4)).toEqual([NaN, NaN]);
+    expect(surface.links).toEqual([0, 1]);
+    expect(legend.texts('node')).toEqual(['Directories (1)', 'Files (1)']);
+    expect(legend.texts('relationship')).toEqual(['Has entry (1)']);
+  });
+
+  it('draws a re-delivered edge once (the archive appended, so link springs stacked)', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    viz.applyDelta(edgeOnly(IMPORTS, entry('d', 'f')));
+    expect(surface.links).toEqual([0, 1, 0, 2, 1, 2]);
+  });
+
+  it('draws an edge that arrived before its endpoint once the endpoint arrives', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(edge('g', 'h', 'CALLS')));
+    expect(surface.links).toEqual([0, 1, 0, 2]);
+    viz.applyDelta(delta({ addedNodes: [node('h')] }));
+    expect(surface.links).toEqual([0, 1, 0, 2, 2, 3]);
+  });
+
+  it('seeds an added node within one link distance of where its parent is now, and links it', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    surface.live[2] = 500;
+    surface.live[3] = 600;
+    viz.applyDelta(
+      delta({ addedNodes: [node('h', 'FILE', 'h.ts')], addedEdges: [entry('f', 'h')] }),
+    );
+    expect(surface.positions).toHaveLength(8);
+    expect(Math.abs((surface.positions[6] ?? NaN) - 500)).toBeLessThanOrEqual(20);
+    expect(Math.abs((surface.positions[7] ?? NaN) - 600)).toBeLessThanOrEqual(20);
+    expect(surface.sizes[3]).toBeCloseTo(17.6 * 0.88, 4);
+    expect(surface.colors.slice(12)).toEqual(
+      Array.from(Float32Array.from([77 / 255, 179 / 255, 1, 1])),
+    );
+    expect(surface.links).toEqual([0, 1, 0, 2, 1, 3]);
+  });
+
+  it('places a delta node the same way for the same seed', () => {
+    const one = mount(7);
+    const two = mount(7);
+    for (const m of [one, two]) {
+      m.viz.render(P1);
+      m.viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('f', 'h')] }));
+    }
+    expect(two.surface.positions).toEqual(one.surface.positions);
+  });
+
+  it('keeps a hidden node type hidden through a delta, new nodes of that type included', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    legend.toggleNode('FILE');
+    viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('d', 'h')] }));
+    expect(surface.positions.slice(2)).toEqual([NaN, NaN, NaN, NaN, NaN, NaN]);
+    expect(Number.isFinite(surface.positions[0])).toBe(true);
+    expect(legend.texts('node')).toEqual(['Directories (1)', 'Files (3)']);
+  });
+
+  it('logs and survives an error thrown by the surface', () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue(undefined);
+    const { viz, surface } = mount();
+    viz.render(P1);
+    surface.failOn = 'setLinks';
+    expect(() => viz.applyDelta(edgeOnly(IMPORTS))).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GraphVisualizer legend toggles', () => {
+  it('hides a node type by NaN position and reheats gently', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    surface.log.length = 0;
+    legend.toggleNode('FILE');
+    expect(surface.positions.slice(2)).toEqual([NaN, NaN, NaN, NaN]);
+    expect(surface.positions.slice(0, 2).every(Number.isFinite)).toBe(true);
+    expect(surface.log.indexOf('render')).toBeGreaterThan(surface.log.indexOf('setPointPositions'));
+    expect(surface.log.indexOf('unpause')).toBeGreaterThan(surface.log.indexOf('render'));
+    expect(surface.starts).toEqual([1, 0.1]);
+    expect(legend.nodeRows.find((row) => row.key === 'FILE')?.pressed).toBe(false);
+    expect(legend.texts('node')).toEqual(['Directories (1)', 'Files (2)']);
+  });
+
+  it('brings a re-shown type back where it was when hidden (the archive restored its seed)', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    surface.live[2] = 500;
+    surface.live[3] = 600;
+    legend.toggleNode('FILE');
+    legend.toggleNode('FILE');
+    expect(surface.positions.slice(2, 4)).toEqual([500, 600]);
+    expect(legend.nodeRows.find((row) => row.key === 'FILE')?.pressed).toBe(true);
+  });
+
+  it('keeps a hidden node type hidden across a render, and frames the unmasked layout', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    legend.toggleNode('FILE');
+    viz.render(P1);
+    expect(surface.positions.slice(2)).toEqual([NaN, NaN, NaN, NaN]);
+    expect(surface.starts.at(-1)).toBe(1);
+    expect(surface.framed.at(-1)?.positions.every(Number.isFinite)).toBe(true);
+    expect(legend.nodeRows.find((row) => row.key === 'FILE')?.pressed).toBe(false);
+  });
+
+  it('hides a relationship type by dropping its links, without moving a point', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    surface.log.length = 0;
+    legend.toggleRelationship('HAS_ENTRY');
+    expect(surface.links).toEqual([1, 2]);
+    expectClose(surface.linkWidths, [17.6 * 0.2]);
+    expect(surface.log).not.toContain('setPointPositions');
+    expect(surface.log).toContain('render');
+    expect(legend.relationshipRows.map((row) => [row.text, row.pressed])).toEqual([
+      ['Has entry (2)', false],
+      ['Imports (1)', true],
+    ]);
+    legend.toggleRelationship('HAS_ENTRY');
+    expect(surface.links).toEqual([0, 1, 0, 2, 1, 2]);
+  });
+
+  it('keeps a hidden relationship type hidden across a render', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    legend.toggleRelationship('HAS_ENTRY');
+    viz.render(P1);
+    expect(surface.links).toEqual([]);
+    expect(legend.relationshipRows.map((row) => row.pressed)).toEqual([false]);
+  });
+});
+
+describe('GraphVisualizer tooltips', () => {
+  it('shows TYPE: name just above a hovered point, and hides on mouse-out', () => {
+    const { viz, events, tooltip } = mount();
+    viz.render(P1);
+    events.onPointMouseOver(1, [10, 20]);
+    expect(tooltip.shown).toEqual({ text: 'FILE: f.ts', left: 20, top: 60 - 15 - 6 });
+    expect(tooltip.visible).toBe(true);
+    events.onPointMouseOut();
+    expect(tooltip.visible).toBe(false);
+  });
+
+  it('hides for the synthetic root, an absent point or a hidden type', () => {
+    const { viz, events, tooltip, legend } = mount();
+    viz.render(P3);
+    const shown = (): void => {
+      events.onPointMouseOver(1, [1, 1]);
+      expect(tooltip.visible).toBe(true);
+    };
+    shown();
+    events.onPointMouseOver(0, [2048, 2048]);
+    expect(tooltip.visible).toBe(false);
+    shown();
+    events.onPointMouseOver(2, [NaN, NaN]);
+    expect(tooltip.visible).toBe(false);
+    shown();
+    legend.toggleNode('FILE');
+    events.onPointMouseOver(2, [1, 1]);
+    expect(tooltip.visible).toBe(false);
+  });
+
+  it('hides for a tombstone', () => {
+    const { viz, events, tooltip } = mount();
+    viz.render(P1);
+    viz.applyDelta(delta({ removedNodeIds: ['f'] }));
+    events.onPointMouseOver(2, [1, 1]);
+    expect(tooltip.visible).toBe(true);
+    events.onPointMouseOver(1, [1, 1]);
+    expect(tooltip.visible).toBe(false);
+  });
+
+  it("anchors a link tooltip at the endpoints' live midpoint, and hides on mouse-out", () => {
+    const { viz, surface, events, tooltip } = mount();
+    viz.render(P1);
+    surface.live.splice(0, 4, 300, 400, 100, 200);
+    events.onLinkMouseOver(0);
+    expect(tooltip.shown).toEqual({ text: 'Has entry: d → f.ts', left: 400, top: 900 - 6 });
+    events.onLinkMouseOut();
+    expect(tooltip.visible).toBe(false);
+  });
+
+  it('reads a link hover index against the visible links, not all of them', () => {
+    const { viz, events, tooltip, legend } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    legend.toggleRelationship('HAS_ENTRY');
+    events.onLinkMouseOver(0);
+    expect(tooltip.shown?.text).toBe('Imports: f.ts → g.ts');
+  });
+
+  it('hides for a link with an absent endpoint or an index past the visible links', () => {
+    const { viz, surface, events, tooltip } = mount();
+    viz.render(P1);
+    events.onLinkMouseOver(1);
+    expect(tooltip.visible).toBe(true);
+    events.onLinkMouseOver(2);
+    expect(tooltip.visible).toBe(false);
+    events.onLinkMouseOver(1);
+    surface.live[4] = NaN;
+    events.onLinkMouseOver(1);
+    expect(tooltip.visible).toBe(false);
+  });
+});
+
+describe('GraphVisualizer clicks', () => {
+  it('hands a click on a live, shown node to onNodeClick', () => {
+    const { viz, events, clicks } = mount();
+    viz.render(P1);
+    events.onPointClick(1);
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0]).toBe(F);
+  });
+
+  it('ignores a click on the synthetic root, a hidden type or a tombstone', () => {
+    const { viz, events, clicks, legend } = mount();
+    viz.render(P3);
+    events.onPointClick(0);
+    legend.toggleNode('FILE');
+    events.onPointClick(1);
+    viz.render(P1);
+    legend.toggleNode('FILE');
+    viz.applyDelta(delta({ removedNodeIds: ['g'] }));
+    events.onPointClick(2);
+    expect(clicks).toEqual([]);
+    events.onPointClick(1);
+    expect(clicks).toEqual([F]);
+  });
+
+  it('needs no onNodeClick', () => {
+    const box: { events?: SurfaceEvents } = {};
+    const viz = new GraphVisualizer(
+      (events) => {
+        box.events = events;
+        return new FakeSurface();
+      },
+      { legend: new FakeLegend(), tooltip: new FakeTooltip() },
+      { seed: 1 },
+    );
+    viz.render(P1);
+    expect(() => box.events?.onPointClick(1)).not.toThrow();
+  });
+});
+
+describe('GraphVisualizer camera', () => {
+  it('follows the settling simulation, throttled, until the user zooms; a render follows again', () => {
+    const { viz, surface, events, setNow } = mount();
+    viz.render(P1);
+    setNow(300);
+    events.onSimulationTick();
+    expect(surface.fits).toEqual([250]);
+    setNow(400);
+    events.onSimulationTick();
+    expect(surface.fits).toEqual([250]);
+    events.onSimulationEnd();
+    expect(surface.fits).toEqual([250, undefined]);
+    events.onZoomStart(undefined, false);
+    setNow(1000);
+    events.onSimulationTick();
+    expect(surface.fits).toEqual([250, undefined, 250]);
+    events.onZoomStart(undefined, true);
+    setNow(10_000);
+    events.onSimulationTick();
+    events.onSimulationEnd();
+    expect(surface.fits).toEqual([250, undefined, 250]);
+    viz.render(P1);
+    setNow(20_000);
+    events.onSimulationTick();
+    expect(surface.fits).toEqual([250, undefined, 250, 250]);
+  });
+
+  it('fitView reframes the surface and dispose destroys it', () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    viz.fitView();
+    expect(surface.fits).toEqual([undefined]);
+    viz.dispose();
+    expect(surface.destroyed).toBe(true);
+  });
+});

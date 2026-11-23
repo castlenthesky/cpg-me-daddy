@@ -576,3 +576,42 @@ describe('rule 9: apps/cli loads only builtins, @cpg/engine and @cpg/model at ru
     expect(status).toBe(0);
   });
 });
+
+// Owner decision 7a (2026-11-22): apps/inspector may import the archived renderer's library,
+// @cosmos.gl/graph, and nothing else gets the exemption.
+describe('check-deps: @cosmos.gl/graph is the inspector host SDK (owner decision 7a)', () => {
+  it('lets apps/inspector import @cosmos.gl/graph at runtime and type-only, tests included', () => {
+    const { status, out } = run({
+      ...CLEAN,
+      'apps/inspector/src/surface.ts':
+        "import type { Graph } from '@cosmos.gl/graph' with { 'resolution-mode': 'import' };\nexport type S = Graph;\n",
+      'apps/inspector/src/page.ts':
+        "import { Graph } from '@cosmos.gl/graph';\nexport { Graph };\n",
+      'apps/inspector/src/page.test.ts':
+        "import { Graph } from '@cosmos.gl/graph';\nexport { Graph };\n",
+    });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it.each([
+    ['one of its own dependencies in apps/inspector', 'apps/inspector/src/p.ts', 'd3-zoom'],
+    [
+      'another package of its scope in apps/inspector',
+      'apps/inspector/src/p.ts',
+      '@cosmos.gl/other',
+    ],
+    ['a name it only prefixes in apps/inspector', 'apps/inspector/src/p.ts', '@cosmos.gl/graphx'],
+    ['@cosmos.gl/graph in apps/cli', 'apps/cli/src/p.ts', '@cosmos.gl/graph'],
+    ['@cosmos.gl/graph in apps/vscode', 'apps/vscode/src/p.ts', '@cosmos.gl/graph'],
+    ['@cosmos.gl/graph in apps/mcp', 'apps/mcp/src/p.ts', '@cosmos.gl/graph'],
+  ])('still rejects %s', (_name, path, spec) => {
+    const { status, out } = run({
+      ...CLEAN,
+      [path]: `import { x } from '${spec}';\nexport { x };\n`,
+    });
+    expect(out).toContain('[app-tier]');
+    expect(out).toContain(`"${spec}"`);
+    expect(status).toBe(1);
+  });
+});
