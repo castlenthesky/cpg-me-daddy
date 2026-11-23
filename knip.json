@@ -41,7 +41,9 @@
     "apps/cli": {
       "project": ["src/**/*.ts"]
     },
+    // The page bundle's entry, built by tools/build-inspector.mjs.
     "apps/inspector": {
+      "entry": ["src/graph-page.ts"],
       "project": ["src/**/*.ts"]
     }
   },

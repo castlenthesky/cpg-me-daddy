@@ -7,6 +7,7 @@
     "rootDir": "src"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
+  // graph-page.ts is the bundle entry: DOM and ESM-only cosmos.gl at runtime (tsconfig.page.json).
+  "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts", "src/graph-page.ts"],
   "references": [{ "path": "../../packages/model" }]
 }

@@ -419,6 +419,24 @@ const CASES = [
       rmSync(at('packages/model/dist/__gate_probe.js.map'), { force: true });
     },
   },
+  (() => {
+    // tsc -b skips the page bundle's entry (DOM and ESM-only cosmos.gl at runtime), so `typecheck`
+    // also runs tsconfig.page.json. TS2322 (not "cannot find name") proves the DOM lib is in force.
+    const file = at('apps/inspector/src/graph-page.ts');
+    let original = '';
+    return {
+      name: 'typecheck rejects a type error in the inspector page entry (tsconfig.page.json)',
+      expectOutput: /graph-page\.ts\(\d+,\d+\): error TS2322/,
+      command: ['bun', 'run', '--silent', 'typecheck'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        writeFileSync(file, `${original}\nexport const probe: number = document.title;\n`);
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+      },
+    };
+  })(),
   {
     name: 'bun run test fails on a failing test (and a glob matching nothing is not a pass)',
     expectOutput: /__gate_probe\.test\.ts/,

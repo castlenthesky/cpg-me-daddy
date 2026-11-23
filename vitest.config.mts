@@ -17,11 +17,13 @@ export default defineConfig({
       include: ['packages/*/src/**', 'apps/*/src/**'],
       // apps/cli/src/main.ts is the process wrapper: tools/check-cli-bin.mjs spawns it, vitest cannot.
       // apps/vscode/src/extension.ts needs the VS Code host to run; it is checked by F5, not vitest.
+      // apps/inspector/src/graph-page.ts is the page bundle's entry: it needs a browser and WebGL.
       exclude: [
         '**/*.test.ts',
         '**/*.test-d.ts',
         'apps/cli/src/main.ts',
         'apps/vscode/src/extension.ts',
+        'apps/inspector/src/graph-page.ts',
       ],
       reporter: ['text-summary', 'lcov', 'json-summary'],
       // Thresholds ONLY RATCHET UP. Set to measured coverage rounded down to the
