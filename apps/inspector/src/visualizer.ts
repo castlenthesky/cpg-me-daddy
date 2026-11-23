@@ -247,7 +247,8 @@ export class GraphVisualizer {
   }
 
   private toggleNodeType(surface: GraphSurface, key: string): void {
-    // Sync before updating hiddenTypes so hiding snapshots live coordinates before they turn NaN.
+    // Snapshot live positions before the masked push turns the hidden ones NaN (the archive
+    // snapshotted after toggling, so a just-hidden type came back at its seed).
     this.points.syncLive(surface.getPointPositions());
     toggleSet(this.hiddenTypes, key);
     surface.setPointPositions(this.points.masked(this.hiddenTypes));
