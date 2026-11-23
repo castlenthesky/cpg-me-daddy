@@ -194,14 +194,18 @@ describe('runInspector', () => {
         delta: { ...gap, addedNodes: [], addedEdges: [], removedNodeIds: [] },
       }),
     );
-    await until(() => running.stderr.lines().length === 1, 'the fault');
+    // Round two (U2b.1 part 3b review c1): the missing bundle is named at startup, first.
+    await until(() => running.stderr.lines().length === 2, 'the fault');
     expect((await fetch(`${running.url}graph.js`)).status).toBe(404);
     running.stdin.end();
     await running.done;
-    const [fault, log] = running.stderr.lines();
+    const [missing, fault, log] = running.stderr.lines();
+    expect(missing).toBe(
+      `cpg-inspector: the page bundle ${join(dir, 'missing.js')} is missing; build it with bun run build:inspector`,
+    );
     expect(fault).toBe('cpg-inspector: seq-gap: expected seq 4, got 7');
     expect(log).toMatch(/^cpg-inspector: .*bun run build:inspector/);
-    expect(running.stderr.lines()).toHaveLength(2);
+    expect(running.stderr.lines()).toHaveLength(3);
   });
 
   it('shuts down when stdin ends: it resolves, the page is dropped and the port is closed', async () => {
@@ -220,5 +224,26 @@ describe('runInspector', () => {
     running.stdin.destroy(boom);
     await expect(running.done).rejects.toBe(boom);
     await expect(fetch(running.url)).rejects.toThrow('fetch failed');
+  });
+});
+
+// U2b.1 part 3b: `cpg index --inspect` finds a built bundle or says how to build one. The child's
+// stderr is the CLI's, so the line reaches the terminal at startup, before any page asks for it.
+describe('runInspector: the page bundle at startup', () => {
+  it('a missing bundle: one stderr line naming its path and bun run build:inspector', async () => {
+    const running = await run('missing.js');
+    const want = `cpg-inspector: the page bundle ${join(dir, 'missing.js')} is missing; build it with bun run build:inspector\n`;
+    await until(() => running.stderr.text.includes(want), 'the missing-bundle line');
+    expect(running.stderr.text.split(want)).toHaveLength(2);
+    running.stdin.end();
+    await running.done;
+  });
+
+  it('a built bundle: no such line', async () => {
+    const running = await run();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(running.stderr.text).not.toContain('is missing');
+    running.stdin.end();
+    await running.done;
   });
 });

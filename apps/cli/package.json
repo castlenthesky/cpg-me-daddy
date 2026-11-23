@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@cpg/engine": "*",
+    "@cpg/inspector": "*",
     "@cpg/model": "*"
   }
 }

@@ -2,13 +2,23 @@
 // decision 9a). It needs the built dist/main.js, which `tsc -b` writes before vitest runs in
 // `bun run check`. A `ws` client plays the page; nothing here needs the page bundle.
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
 const ROOT = join(__dirname, '..');
+
+// Post-implementation (U2b.1 part 3b, sabotage group A): a failing assertion must not leave a bin
+// running, or the vitest worker cannot exit and the run hangs. Every bin still running after its
+// test is SIGKILLed.
+const spawned: ChildProcess[] = [];
+afterEach(() => {
+  for (const p of spawned.splice(0)) {
+    if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL');
+  }
+});
 
 function binPath(): string {
   const pkg: unknown = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -25,6 +35,7 @@ function binPath(): string {
 
 function spawnBin(args: readonly string[] = []) {
   const proc = spawn(process.execPath, [binPath(), ...args], { stdio: 'pipe' });
+  spawned.push(proc);
   let out = '';
   let err = '';
   proc.stdout.setEncoding('utf8');
@@ -117,7 +128,8 @@ describe('the cpg-inspector bin', () => {
         child.proc.stdin.end();
         expect(await child.exited).toBe(0);
         const lines = child.stderr().split('\n').slice(0, -1);
-        const logged = bundle.status === 200 ? [] : [true];
+        // Round two (U2b.1 part 3b review c2): a missing bundle is also named once at startup.
+        const logged = bundle.status === 200 ? [] : [true, true];
         expect(lines.map((line) => line.includes(bundlePath))).toEqual(logged);
       } finally {
         child.proc.kill();

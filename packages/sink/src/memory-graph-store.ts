@@ -34,7 +34,18 @@ export interface GraphCell {
   set(next: GraphPayload): void;
 }
 
-export type StoreHalf = Omit<GraphStore, 'capabilities'>;
+/**
+ * The GraphStore half, plus `readAll`: the whole-graph read C-CLI Q6 names ("MemoryStore's
+ * readFile/readAll"), which CpgEngine.inspect reads (U2b.1 part 3b). It is not part of C-STORE's
+ * GraphStore.
+ */
+export type StoreHalf = Omit<GraphStore, 'capabilities'> & {
+  /**
+   * A deep copy of the whole graph, `{ seq, nodes, edges }`: mutating it never changes the store.
+   * Like every read, it throws STORE_NOT_OPEN before open() or after close().
+   */
+  readAll(): Promise<GraphPayload>;
+};
 
 export const MEMORY_TIER_CAPABILITIES: StoreCapabilities = {
   tier: 'memory',
@@ -300,6 +311,12 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
         if (node.type === label) keys.push(nodeKey(node));
       }
       return keys;
+    },
+
+    async readAll(): Promise<GraphPayload> {
+      // REAL
+      assertOpen();
+      return structuredClone(cell.get());
     },
 
     async stats(): Promise<{ nodeCount: number; edgeCount: number; beyondMeasuredScale: boolean }> {

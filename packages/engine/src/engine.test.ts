@@ -3,16 +3,16 @@
 // (NullGraphStore backs --dry-run). Revision ids are an independent sha256 of the bytes.
 // U2c.2 (BMO-41, owner decision 5a): createEngine builds its own sinks from the consumer switches.
 // The memory store is always on (03-architecture §8); `memoryStore` substitutes its instance so a
-// test can record it; `sinks` are host-adapter sinks, written after it. falkor (U5), inspect (U2b)
-// and vscode (U3) are SEATs that connect() refuses before opening anything.
+// test can record it; `sinks` are host-adapter sinks, written after it. falkor (U5) and vscode (U3)
+// are SEATs that connect() refuses before opening anything; inspect is built (U2b.1 part 3b).
 
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { CPG_SCHEMA, isWorkspacePath, type WorkspacePath } from '@cpg/model';
+import { CPG_SCHEMA, isWorkspacePath, makeNodeId, type WorkspacePath } from '@cpg/model';
 import { BUILTIN_LANGUAGES } from '@cpg/parse';
-import { createMemoryStore } from '@cpg/sink';
+import { createMemoryStore, type MemoryStore } from '@cpg/sink';
 import type { NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
 import { storeErrorCode } from '@cpg/store';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -54,7 +54,7 @@ const HEADLESS: ConsumerSwitches = { inspect: false, store: 'memory', vscode: fa
 
 interface EngineOptions {
   /** Substitutes the built-in memory store's instance. */
-  readonly memory?: EngineSink | undefined;
+  readonly memory?: MemoryStore | undefined;
   /** Host-adapter sinks. */
   readonly sinks?: readonly EngineSink[];
   readonly consumers?: Partial<ConsumerSwitches>;
@@ -70,7 +70,7 @@ const engineWith = (o: EngineOptions = {}) =>
   );
 
 interface Recorded {
-  readonly sink: EngineSink;
+  readonly sink: MemoryStore;
   readonly memory: ReturnType<typeof createMemoryStore>;
   readonly ops: WriteOp[];
   readonly calls: string[];
@@ -81,7 +81,7 @@ function recording(id = 'memory', receipt?: Partial<WriteReceipt>, log: string[]
   const memory = createMemoryStore({ id });
   const ops: WriteOp[] = [];
   const calls = log;
-  const sink: EngineSink = {
+  const sink: MemoryStore = {
     ...memory,
     async open() {
       calls.push(`${id}.open`);
@@ -113,7 +113,7 @@ function recording(id = 'memory', receipt?: Partial<WriteReceipt>, log: string[]
 
 async function index(
   root: string,
-  memory: EngineSink | undefined,
+  memory: MemoryStore | undefined,
   o: {
     dryRun?: boolean;
     config?: Partial<IndexRequest['config']>;
@@ -514,7 +514,6 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
 
   it.each([
     ['store falkor', { store: 'falkor' }, /consumers\.store falkor.*FalkorStore.*U5/],
-    ['inspect', { inspect: true }, /consumers\.inspect.*inspector.*U2b/],
     ['vscode', { vscode: true }, /consumers\.vscode.*VS Code panel.*U3/],
   ] as const)(
     '%s: connect refuses with a labelled SEAT and opens no sink',
@@ -569,8 +568,9 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
       () => '',
       (e: unknown) => String(e),
     );
-    for (const key of ['consumers.store', 'consumers.inspect', 'consumers.vscode'])
-      expect(refusal).toContain(key);
+    for (const key of ['consumers.store', 'consumers.vscode']) expect(refusal).toContain(key);
+    // U2b.1 part 3b: the inspector is built, so it is never named (stop-list 44, the engine copy)
+    expect(refusal).not.toContain('consumers.inspect');
   });
 
   it('a dry run opens no sink, so it runs under any switches and reports no consumer', async () => {
@@ -589,5 +589,115 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
     expect(report).toMatchObject({ dryRun: true, consumers: [], target: null });
     expect(report.walk.filesIndexed).toBe(1);
     expect(log).toEqual([]);
+  });
+});
+
+// U2b.1 part 3b (BMO-35, controller decision 20): CpgEngine.inspect(session, config), C-CLI's
+// declared signature, reads the built-in memory store whole, as verify does.
+const dirId = (path: string): string => makeNodeId({ form: 'directory', path: wp(path) });
+const fileId = (path: string): string => makeNodeId({ form: 'file', path: wp(path) });
+const byCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const byId = (a: { id: string }, b: { id: string }): number => byCodeUnits(a.id, b.id);
+const edgeKey = (e: { source: string; target: string; type?: string }): string =>
+  `${e.source} ${e.type ?? ''} ${e.target}`;
+
+describe('CpgEngine.inspect', () => {
+  it('after index it returns what the memory store holds: DIRECTORY and FILE nodes, HAS_ENTRY', async () => {
+    const root = await tree({ 'a.ts': '', 'src/b.py': '' });
+    const engine = engineWith();
+    const w = await engine.connect(TARGET, { readOnly: false });
+    await engine.index(
+      { config: { root }, session: w, resumeFrom: null },
+      () => {},
+      AbortSignal.timeout(60_000),
+    );
+    await w.close();
+    const r = await engine.connect(TARGET, { readOnly: true });
+    const payload = await engine.inspect(r, { root });
+    await r.close();
+    // merge-filesystem folds no delta, so the store is still at the fresh seq (C-SINK: -1)
+    expect(payload.seq).toBe(-1);
+    expect(payload.nodes.map((n) => `${n.type} ${n.id}`).toSorted(byCodeUnits)).toEqual(
+      [
+        `DIRECTORY ${dirId('.')}`,
+        `DIRECTORY ${dirId('src')}`,
+        `FILE ${fileId('a.ts')}`,
+        `FILE ${fileId('src/b.py')}`,
+      ].toSorted(byCodeUnits),
+    );
+    expect(payload.edges.map(edgeKey).toSorted(byCodeUnits)).toEqual(
+      [
+        `${dirId('.')} HAS_ENTRY ${fileId('a.ts')}`,
+        `${dirId('.')} HAS_ENTRY ${dirId('src')}`,
+        `${dirId('src')} HAS_ENTRY ${fileId('src/b.py')}`,
+      ].toSorted(byCodeUnits),
+    );
+  });
+
+  it('a planted memory store is returned whole, its seq included', async () => {
+    const memory = createMemoryStore();
+    const planted = {
+      seq: 7,
+      nodes: [
+        { id: 'n1', type: 'FILE', name: 'a.ts', data: { path: 'a.ts' } },
+        { id: 'n2', type: 'DIRECTORY' },
+      ],
+      edges: [{ source: 'n2', target: 'n1', type: 'HAS_ENTRY' }],
+    };
+    await memory.onSnapshot(planted, { seq: 7, cause: 'initial' });
+    const engine = engineWith({ memory });
+    const session = await engine.connect(TARGET, { readOnly: true });
+    const payload = await engine.inspect(session, { root: '/w' });
+    await session.close();
+    expect({ ...payload, nodes: payload.nodes.toSorted(byId) }).toEqual(planted);
+  });
+
+  it('reads the built-in memory store, never a host sink', async () => {
+    const memory = createMemoryStore();
+    const host = recording('host');
+    await memory.onSnapshot(
+      { seq: 1, nodes: [{ id: 'mem', type: 'FILE' }], edges: [] },
+      { seq: 1, cause: 'initial' },
+    );
+    await host.memory.onSnapshot(
+      { seq: 2, nodes: [{ id: 'host', type: 'FILE' }], edges: [] },
+      { seq: 2, cause: 'initial' },
+    );
+    const engine = engineWith({ memory, sinks: [host.sink] });
+    const session = await engine.connect(TARGET, { readOnly: true });
+    const payload = await engine.inspect(session, { root: '/w' });
+    await session.close();
+    expect(payload.nodes.map((n) => n.id)).toEqual(['mem']);
+    expect(payload.seq).toBe(1);
+  });
+
+  it('the payload is a copy: changing it does not change what inspect returns next', async () => {
+    const memory = createMemoryStore();
+    await memory.onSnapshot(
+      { seq: 0, nodes: [{ id: 'a', type: 'FILE' }], edges: [] },
+      { seq: 0, cause: 'initial' },
+    );
+    const engine = engineWith({ memory });
+    const session = await engine.connect(TARGET, { readOnly: true });
+    const first = await engine.inspect(session, { root: '/w' });
+    const [node] = first.nodes;
+    if (node !== undefined) Reflect.set(node, 'id', 'changed');
+    Reflect.set(first.nodes, 'length', 0);
+    const second = await engine.inspect(session, { root: '/w' });
+    await session.close();
+    expect(second.nodes.map((n) => n.id)).toEqual(['a']);
+  });
+
+  it('with the inspect switch on, connect opens the sinks and index writes memory', async () => {
+    const root = await tree({ 'a.ts': '' });
+    const engine = engineWith({ consumers: { inspect: true } });
+    const session = await engine.connect(TARGET, { readOnly: false });
+    const report = await engine.index(
+      { config: { root }, session, resumeFrom: null },
+      () => {},
+      new AbortController().signal,
+    );
+    await session.close();
+    expect(report.consumers).toEqual(['memory']);
   });
 });

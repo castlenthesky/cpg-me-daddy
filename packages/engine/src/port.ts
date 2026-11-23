@@ -1,8 +1,14 @@
 // The CpgEngine port (C-CLI): the one surface a front door sees. C-CLI Q1 puts the contract types in
-// @cpg/engine's public surface. Types only. This is the slice U2a needs (identity, connect, index,
-// verify, schema); watch, read, inspect and doctor arrive with their units.
+// @cpg/engine's public surface. Types only. This is the slice built so far (identity, connect,
+// index, verify, inspect, schema); watch, read and doctor arrive with their units.
 
-import type { CheckResult, CheckState, SchemaDocInput, WorkspacePath } from '@cpg/model';
+import type {
+  CheckResult,
+  CheckState,
+  GraphPayload,
+  SchemaDocInput,
+  WorkspacePath,
+} from '@cpg/model';
 
 export interface StoreTarget {
   readonly host: string;
@@ -176,6 +182,12 @@ export interface CpgEngine {
     config: VerifyConfig,
     expected: IndexReport | null,
   ): Promise<VerifyReport>;
+  /**
+   * Read-only: the whole graph the session's store holds, as one payload (C-CLI; U2b.1 part 3b,
+   * controller decision 20). `cpg index --inspect` sends it to the browser inspector. `config` is
+   * the walk scope; the memory store holds one workspace, so it does not narrow the read.
+   */
+  inspect(session: EngineSession, config: IndexConfig): Promise<GraphPayload>;
   /**
    * The graph schema (CPG_SCHEMA). C-CLI types it `unknown`; the port narrows it to the part the CLI
    * reads: `cpg schema --check` renders its doc region, and `--print` serialises the whole object.

@@ -22,22 +22,28 @@ import {
   type StoreTarget,
   type VerifyReport,
 } from '@cpg/engine';
-import { checkSchemaDoc } from '@cpg/model';
+import { checkSchemaDoc, type GraphPayload } from '@cpg/model';
 import { loadConfig } from './config';
+import type { StartInspector } from './inspector-process';
 import type { Io, Manifest } from './io';
+import { parsePayloadDocument, savedPayloadChecks, serveLive, type LiveEnd } from './live';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
 
 export const EXIT = { OK: 0, FAILED: 1, USAGE: 2, VERIFY_FAILED: 3, INTERRUPTED: 130 } as const;
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 
-// The C-CLI CliError kinds this skeleton can raise, plus 'not-built' for reserved verbs and SEAT
-// handlers (exit 2; its message tells it apart from the 'unknown command' error) and 'schema-check'
-// for `cpg schema --check` failures (CLI-local like 'not-built', exit 1).
+// The C-CLI CliError kinds this skeleton can raise, plus CLI-local kinds: 'not-built' for reserved
+// verbs and SEAT handlers (exit 2; its message tells it apart from the 'unknown command' error),
+// 'schema-check' for `cpg schema --check` failures (exit 1), 'payload' for invalid or unreadable
+// saved payload inputs (exit 2), and 'inspector' for inspector start or unexpected exit failures
+// (exit 1).
 export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
   | { kind: 'config'; key: string; layer: ConfigLayer; message: string }
   | { kind: 'not-built'; verb: string; message: string }
+  | { kind: 'payload'; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
+  | { kind: 'inspector'; message: string }
   | { kind: 'verification'; failures: readonly CheckResult[] }
   | { kind: 'schema-check'; message: string }
   | { kind: 'interrupted'; committed: number; pending: number };
@@ -47,7 +53,9 @@ const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   usage: EXIT.USAGE,
   config: EXIT.USAGE,
   'not-built': EXIT.USAGE,
+  payload: EXIT.USAGE,
   'engine-unavailable': EXIT.FAILED,
+  inspector: EXIT.FAILED,
   verification: EXIT.VERIFY_FAILED,
   'schema-check': EXIT.FAILED,
   interrupted: EXIT.INTERRUPTED,
@@ -61,6 +69,11 @@ export interface RunOptions {
    * resolved, so the engine builds only the sinks the resolved consumer switches enable.
    */
   readonly createEngine?: (config: EngineConfig) => CpgEngine;
+  /**
+   * The composition root's inspector launcher (owner decision 9a): main.ts spawns the cpg-inspector
+   * bin. `cpg inspect` and `cpg index --inspect` call it once they hold a payload.
+   */
+  readonly startInspector?: StartInspector;
   readonly signal?: AbortSignal;
   /** The process working directory, read in main.ts: the last workspace-root fallback (C-CLI). */
   readonly cwd?: string;
@@ -112,7 +125,8 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   // Every flag is validated before anything touches the engine (I-12).
   if (spec.verb === 'schema') return runSchema(spec, values, io, opts);
   if (spec.verb === 'config') return runConfig(spec, values, positionals, io, opts);
-  // SEAT: verbs without a handler yet stop here (watch, query, inspect, doctor).
+  if (spec.verb === 'inspect') return runInspect(spec, positionals, io, opts);
+  // SEAT: verbs without a handler yet stop here (watch, query, doctor).
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (opts.createEngine === undefined) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
@@ -154,7 +168,15 @@ function refuseUnbuiltConsumers(verb: string, resolved: ResolvedConfig): void {
   const { store, inspect, vscode } = resolved.consumers;
   const parts: string[] = [];
   if (store.value === 'falkor') parts.push(describeConsumer('store', store, 'FalkorStore, U5'));
-  if (inspect.value) parts.push(describeConsumer('inspect', inspect, 'the inspector, U2b'));
+  if (verb === 'verify' && inspect.value) {
+    parts.push(
+      describeConsumer(
+        'inspect',
+        inspect,
+        'cpg verify does not start the inspector; use cpg index --inspect',
+      ),
+    );
+  }
   if (vscode.value) parts.push(describeConsumer('vscode', vscode, 'the VS Code panel, U3'));
   if (parts.length > 0) {
     throw new Fail({
@@ -418,6 +440,97 @@ async function runSchema(
   });
 }
 
+function readErrorDetail(error: unknown): string {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string'
+  ) {
+    return error.code;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function runLive(
+  payload: GraphPayload,
+  checks: readonly CheckResult[],
+  io: Io,
+  opts: RunOptions,
+  start: StartInspector,
+): Promise<ExitCode> {
+  let end: LiveEnd;
+  try {
+    end = await serveLive({
+      payload,
+      checks,
+      start,
+      io,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Fail({ kind: 'inspector', message: `cannot start the inspector: ${message}` });
+  }
+  if (end.kind === 'interrupted') {
+    throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
+  }
+  const { code, signal } = end.exit;
+  const how = signal !== null ? `signal ${signal}` : `code ${String(code)}`;
+  throw new Fail({ kind: 'inspector', message: `the inspector exited unexpectedly (${how})` });
+}
+
+async function runInspect(
+  spec: CommandSpec,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): Promise<ExitCode> {
+  // REAL
+  const arg = positionals[0];
+  if (arg === undefined) {
+    throw new Fail({
+      kind: 'usage',
+      verb: spec.verb,
+      message: 'pass a cpg.graph.payload file, or - for stdin',
+    });
+  }
+  if (opts.startInspector === undefined) {
+    throw new Fail({ kind: 'not-built', verb: spec.verb, message: "'inspect' is not built yet" });
+  }
+  const source = arg === '-' ? 'stdin' : opts.cwd !== undefined ? resolve(opts.cwd, arg) : arg;
+  let text: string;
+  if (arg === '-') {
+    text = await io.stdin.readText();
+  } else {
+    try {
+      text = await readFile(source, 'utf8');
+    } catch (e: unknown) {
+      throw new Fail({
+        kind: 'payload',
+        message: `payload: cannot read ${source} (${readErrorDetail(e)})`,
+      });
+    }
+  }
+  const parsed = parsePayloadDocument(text);
+  if (!parsed.ok) {
+    throw new Fail({ kind: 'payload', message: `payload: ${source}: ${parsed.reason}` });
+  }
+  for (const w of parsed.warnings) {
+    io.err(`cpg: warning: ${w}`);
+  }
+  if (opts.signal?.aborted === true) {
+    throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
+  }
+  return runLive(
+    parsed.payload,
+    savedPayloadChecks(parsed.payload.seq),
+    io,
+    opts,
+    opts.startInspector,
+  );
+}
+
 async function runIndex(
   spec: CommandSpec,
   buildEngine: (config: EngineConfig) => CpgEngine,
@@ -429,8 +542,28 @@ async function runIndex(
   // REAL
   const { resolved } = await load(spec, values, positionals, io, opts);
   const dryRun = values['dry-run'] === true;
+  const inspect = resolved.consumers.inspect;
+  if (dryRun && inspect.value) {
+    throw new Fail({
+      kind: 'usage',
+      verb: spec.verb,
+      message: describeConsumer(
+        'inspect',
+        inspect,
+        'the inspector reads the indexed store, and --dry-run has none',
+      ),
+    });
+  }
   if (!dryRun) {
     refuseUnbuiltConsumers(spec.verb, resolved);
+  }
+  const startInspector = inspect.value ? opts.startInspector : undefined;
+  if (inspect.value && startInspector === undefined) {
+    throw new Fail({
+      kind: 'not-built',
+      verb: spec.verb,
+      message: "'index --inspect' is not built yet",
+    });
   }
   const config = toCpgConfigInput(resolved);
   const engine = buildEngine({ version: opts.manifest.version, consumers: config.consumers });
@@ -472,7 +605,24 @@ async function runIndex(
     `cpg: indexed in ${Math.round(report.durationMs)} ms; consumers: ${report.consumers.join(', ') || 'none'}`,
   );
 
-  return report.interrupted ? EXIT.INTERRUPTED : EXIT.OK;
+  if (report.interrupted) {
+    return EXIT.INTERRUPTED;
+  }
+
+  if (startInspector !== undefined) {
+    const readSession = await connectStore(engine, targetOf(resolved), true);
+    let verified: VerifyReport;
+    let payload: GraphPayload;
+    try {
+      verified = await engine.verify(readSession, config, null);
+      payload = await engine.inspect(readSession, config);
+    } finally {
+      await readSession.close();
+    }
+    return runLive(payload, verified.checks, io, opts, startInspector);
+  }
+
+  return EXIT.OK;
 }
 
 type Values = Record<string, string | boolean | undefined>;
@@ -515,7 +665,7 @@ function parseFlags(
 
 const isPort = (v: string): boolean => /^\d{1,5}$/.test(v) && Number(v) >= 1 && Number(v) <= 65535;
 
-// SEAT: used only by verbs without a handler yet (watch, query, inspect).
+// SEAT: used only by verbs without a handler yet (watch, query).
 function storeTarget(spec: CommandSpec, values: Values): StoreTarget | null {
   if (spec.session === 'none') return null;
   const str = (k: string, d: string) => (typeof values[k] === 'string' ? values[k] : d);

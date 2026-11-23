@@ -8,5 +8,11 @@
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "../../packages/engine" }, { "path": "../../packages/model" }]
+  // ../inspector: cpg index --inspect spawns its built bin (owner decision 9a), so tsc -b builds it
+  // first; no inspector code is imported (controller decision 16 resolves a path only).
+  "references": [
+    { "path": "../../packages/engine" },
+    { "path": "../../packages/model" },
+    { "path": "../inspector" }
+  ]
 }
