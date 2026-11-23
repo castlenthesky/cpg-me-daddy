@@ -145,6 +145,11 @@ describe('parsePageMessage (host -> page)', () => {
     ["a report in state 'green'", { ...verification, report: { ...REPORT, state: 'green' } }],
     ['a report whose checks is an object', { ...verification, report: { ...REPORT, checks: {} } }],
     ['a report holding a null check', { ...verification, report: { ...REPORT, checks: [null] } }],
+    // Post-implementation (sabotage #13): every check must be well-formed, not just one.
+    [
+      'a report with one bad check among good ones',
+      { ...verification, report: { ...REPORT, checks: [...CHECKS, { ...CHECK, state: 'ok' }] } },
+    ],
     [
       "a check id 'vibes'",
       { ...verification, report: { ...REPORT, checks: [{ ...CHECK, id: 'vibes' }] } },

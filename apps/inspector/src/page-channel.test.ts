@@ -58,6 +58,16 @@ describe('queuedChannel', () => {
     expect(received).toEqual([]);
   });
 
+  // Post-implementation (sabotage #43): one handler, the latest registered.
+  it('replaces its handler when onMessage is called again', () => {
+    const { received, ch } = channel();
+    const later: unknown[] = [];
+    ch.onMessage((message) => later.push(message));
+    ch.receive('{"type":"graph"}');
+    expect(received).toEqual([]);
+    expect(later).toEqual([{ type: 'graph' }]);
+  });
+
   it('drops data that arrives before a handler is registered, and never replays it', () => {
     const ch = queuedChannel(() => {});
     expect(() => ch.receive('{"type":"graph"}')).not.toThrow();
