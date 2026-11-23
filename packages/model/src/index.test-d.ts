@@ -20,10 +20,12 @@ import {
   type GraphPayload,
   type CheckResult,
   type CheckState,
+  type Epoch,
   type HostToWebview,
   type PropertyOwner,
   type PropertySpec,
   type RenderReport,
+  type Seq,
   type ThemeSnapshot,
   type VerificationReport,
   type VerifyCheckId,
@@ -33,6 +35,7 @@ import { ownedBy } from './schema/owner';
 
 declare const p: GraphPayload;
 declare const d: GraphDelta;
+const THEME: ThemeSnapshot = { kind: 'dark', nodeColors: {}, defaultNodeColor: 'x' };
 
 describe('@cpg/model public types', () => {
   it('applyGraphDelta is payload x delta -> DeltaApplyResult', () => {
@@ -252,5 +255,22 @@ describe('@cpg/model public types', () => {
     expectTypeOf<ThemeSnapshot['kind']>().toEqualTypeOf<
       'light' | 'dark' | 'high-contrast-light' | 'high-contrast-dark'
     >();
+  });
+
+  // Round two (review a12, b3): the theme branch has no seq; the remaining shapes are pinned.
+  it('theme carries its snapshot and no seq; render-report and resync carry epoch and seq', () => {
+    type Theme = Extract<HostToWebview, { type: 'theme' }>;
+    expectTypeOf<Theme>().not.toHaveProperty('seq');
+    expectTypeOf<Theme['theme']>().toEqualTypeOf<ThemeSnapshot>();
+    expectTypeOf<ThemeSnapshot['nodeColors']>().toEqualTypeOf<Readonly<Record<string, string>>>();
+    expectTypeOf<ThemeSnapshot['defaultNodeColor']>().toEqualTypeOf<string>();
+    expectTypeOf<Seq>().toEqualTypeOf<number>();
+    expectTypeOf<Epoch>().toEqualTypeOf<number>();
+    type Report = Extract<WebviewToHost, { type: 'render-report' }>;
+    expectTypeOf<Report['epoch']>().toEqualTypeOf<Epoch>();
+    expectTypeOf<Report['seq']>().toEqualTypeOf<Seq>();
+    expectTypeOf<Extract<WebviewToHost, { type: 'resync' }>['seq']>().toEqualTypeOf<Seq>();
+    // @ts-expect-error a theme message carries no seq
+    assertType<HostToWebview>({ type: 'theme', protocol: 1, epoch: 1, seq: 0, theme: THEME });
   });
 });

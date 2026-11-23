@@ -80,7 +80,21 @@ describe('parsePageMessage (host -> page)', () => {
       { ...verification, report: { ...REPORT, checks: [CHECK] } },
     ],
     ['a graph at epoch 0', { ...graph, epoch: 0 }],
-  ])('accepts a well-formed %s message', (_name, message) => {
+    // Round two (review a8, a5, a6): a fresh payload's seq -1, the code tier, every state.
+    ['graph of a fresh payload at seq -1', { ...graph, seq: -1, payload: { ...P, seq: -1 } }],
+    ['graph-delta from the code tier', { ...graphDelta, delta: { ...D, producer: 'code' } }],
+    ...(['pass', 'fail', 'stale', 'unavailable'] as const).map(
+      (state) =>
+        [
+          `verification in state ${state}`,
+          { ...verification, report: { ...REPORT, state, checks: [{ ...CHECK, state }] } },
+        ] as const,
+    ),
+    [
+      'verification with an empty detail',
+      { ...verification, report: { ...REPORT, checks: [{ ...CHECK, detail: '' }] } },
+    ],
+  ] as const)('accepts a well-formed %s message', (_name, message) => {
     expect(parsePageMessage(message)).toStrictEqual(message);
   });
 
@@ -122,6 +136,8 @@ describe('parsePageMessage (host -> page)', () => {
     ['a delta with no producer', { ...graphDelta, delta: withField(D, 'producer', undefined) }],
     ["a delta from producer 'parser'", { ...graphDelta, delta: { ...D, producer: 'parser' } }],
     ['a delta with no file', { ...graphDelta, delta: withField(D, 'file', undefined) }],
+    // Round two (review a7): a file that is there but not a string.
+    ['a delta with a numeric file', { ...graphDelta, delta: { ...D, file: 7 } }],
     ['a delta with a numeric revision_id', { ...graphDelta, delta: { ...D, revision_id: 7 } }],
     ['a verification with no report', withField(verification, 'report', undefined)],
     ['a report with no epoch', { ...verification, report: withField(REPORT, 'epoch', undefined) }],
@@ -156,6 +172,14 @@ describe('parsePageMessage (host -> page)', () => {
       'a check whose detail is a number',
       { ...verification, report: { ...REPORT, checks: [{ ...CHECK, detail: 1 }] } },
     ],
+    // Round two (review a9): falsy non-strings are not "absent".
+    ...([null, 0, false] as const).map(
+      (detail) =>
+        [
+          `a check whose detail is ${String(detail)}`,
+          { ...verification, report: { ...REPORT, checks: [{ ...CHECK, detail }] } },
+        ] as const,
+    ),
     ['a page-to-host ready', { type: 'ready', protocol: 1 }],
     ['an unknown type', { ...graph, type: 'graph-snapshot' }],
   ];

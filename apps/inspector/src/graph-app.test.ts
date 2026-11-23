@@ -523,6 +523,12 @@ describe('startGraphApp: render-report (owner decision 12a, C-EXT I-10)', () => 
       renderedEdgeCount: 1,
       droppedNodeIds: [],
     });
+    // Round two (review b2): the tombstone is not drawn; its live neighbours are.
+    expect(['d', 'f', 'g'].map((id) => page.visualizer.drawn().isDrawn(id))).toEqual([
+      true,
+      true,
+      false,
+    ]);
   });
 
   it('shows a re-sent edge as a duplicate drawn once (applyGraphDelta keeps it; 12a)', () => {
@@ -541,6 +547,21 @@ describe('startGraphApp: render-report (owner decision 12a, C-EXT I-10)', () => 
     expect(reports(page).at(-1)).toMatchObject({ payloadNodeCount: 4, renderedNodeCount: 4 });
   });
 
+  // Round two (review a3): hidden relationship types still count as drawn edges.
+  it('counts an edge the relationship legend hides as drawn, and posts nothing on the toggle', () => {
+    const page = start();
+    page.channel.deliver(graphMessage(P1));
+    page.container.find('relationship-legend')?.children[0]?.click();
+    expect(reports(page)).toHaveLength(1);
+    page.channel.deliver(
+      deltaMessage(
+        delta({ addedNodes: [node('h', 'FILE')], addedEdges: [edge('f', 'h', 'HAS_ENTRY')] }),
+      ),
+    );
+    expect(reports(page).at(-1)).toMatchObject({ renderedEdgeCount: 3 });
+    expect(page.visualizer.drawn().edgeCount).toBe(3);
+  });
+
   it('measures frameMs on performance.now() when the page gives no clock', () => {
     const page = start(new FakeChannel(), undefined, 'default');
     const now = vi.spyOn(performance, 'now').mockReturnValueOnce(100).mockReturnValueOnce(108);
@@ -551,14 +572,18 @@ describe('startGraphApp: render-report (owner decision 12a, C-EXT I-10)', () => 
 });
 
 describe('startGraphApp: epoch, seq and resync (C-EXT I-12, I-13)', () => {
-  it('ignores an already-applied delta: no draw, no post', () => {
-    const page = start();
-    page.channel.deliver(graphMessage({ ...P1, seq: 3 }));
-    const applyDelta = vi.spyOn(page.visualizer, 'applyDelta');
-    page.channel.deliver(deltaMessage(delta({ seq: 3, addedNodes: [node('h', 'FILE')] })));
-    expect(applyDelta).not.toHaveBeenCalled();
-    expect(page.channel.posted).toHaveLength(2);
-  });
+  // Round two (review a11): a delta below the payload's seq is already-applied too.
+  it.each([3, 1])(
+    'ignores an already-applied delta at seq %i on seq 3: no draw, no post',
+    (seq) => {
+      const page = start();
+      page.channel.deliver(graphMessage({ ...P1, seq: 3 }));
+      const applyDelta = vi.spyOn(page.visualizer, 'applyDelta');
+      page.channel.deliver(deltaMessage(delta({ seq, addedNodes: [node('h', 'FILE')] })));
+      expect(applyDelta).not.toHaveBeenCalled();
+      expect(page.channel.posted).toHaveLength(2);
+    },
+  );
 
   it('asks for a resync on a seq gap, at its own epoch and seq, without drawing', () => {
     const page = start();
@@ -574,14 +599,29 @@ describe('startGraphApp: epoch, seq and resync (C-EXT I-12, I-13)', () => {
     });
   });
 
-  it('asks for a resync on a delta from another epoch', () => {
+  it('asks for a resync on a delta from another epoch, without drawing it', () => {
     const page = start();
     page.channel.deliver(graphMessage(P1, 1));
+    const applyDelta = vi.spyOn(page.visualizer, 'applyDelta');
     page.channel.deliver(deltaMessage(delta({}), 2));
+    expect(applyDelta).not.toHaveBeenCalled();
+    expect(page.channel.posted.slice(2)).toStrictEqual([
+      { type: 'resync', epoch: 1, seq: 0, reason: 'stale-epoch' },
+    ]);
+  });
+
+  // Round two (review a10): an older epoch is stale too, not only a newer one.
+  it('asks for a resync on a delta from an older epoch', () => {
+    const page = start();
+    page.channel.deliver(graphMessage(P1, 1));
+    page.channel.deliver(graphMessage({ ...P1, seq: 7 }, 2));
+    const applyDelta = vi.spyOn(page.visualizer, 'applyDelta');
+    page.channel.deliver(deltaMessage(delta({ seq: 8 }), 1));
+    expect(applyDelta).not.toHaveBeenCalled();
     expect(page.channel.posted.at(-1)).toStrictEqual({
       type: 'resync',
-      epoch: 1,
-      seq: 0,
+      epoch: 2,
+      seq: 7,
       reason: 'stale-epoch',
     });
   });

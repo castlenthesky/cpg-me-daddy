@@ -91,6 +91,22 @@ describe('renderReport', () => {
     expect(report.droppedNodeIds).toEqual(ids.slice(0, 50));
   });
 
+  // Round two (review a4): the cap trims the sample only; every later entry is still counted.
+  it('keeps counting rendered nodes after the sample is full', () => {
+    const undrawn = Array.from({ length: 60 }, (_, i) => `u${i}`);
+    const report = renderReport(payload([...undrawn, 'a', 'b'].map(node)), drawn(['a', 'b']), 1);
+    expect(report.payloadNodeCount).toBe(62);
+    expect(report.renderedNodeCount).toBe(2);
+    expect(report.droppedNodeIds).toEqual(undrawn.slice(0, 50));
+  });
+
+  it('caps a sample made only of duplicates', () => {
+    const ids = Array.from({ length: 60 }, (_, i) => `n${i}`);
+    const report = renderReport(payload([...ids, ...ids].map(node)), drawn(ids), 1);
+    expect(report.renderedNodeCount).toBe(60);
+    expect(report.droppedNodeIds).toEqual(ids.slice(0, 50));
+  });
+
   it('keeps all 50 when exactly 50 are dropped, and counts duplicates past the cap', () => {
     const ids = Array.from({ length: 50 }, (_, i) => `n${i}`);
     expect(renderReport(payload(ids.map(node)), drawn([]), 1).droppedNodeIds).toEqual(ids);

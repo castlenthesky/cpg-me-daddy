@@ -33,6 +33,8 @@ describe('queuedChannel', () => {
     ch.post(READY);
     ch.open();
     ch.post(REVEAL);
+    // Round two (review a1): sent before any second open, not held for it.
+    expect(sent).toEqual([JSON.stringify(READY), JSON.stringify(REVEAL)]);
     ch.open();
     expect(sent).toEqual([JSON.stringify(READY), JSON.stringify(REVEAL)]);
   });
@@ -56,9 +58,14 @@ describe('queuedChannel', () => {
     expect(received).toEqual([]);
   });
 
-  it('drops data that arrives before a handler is registered', () => {
+  it('drops data that arrives before a handler is registered, and never replays it', () => {
     const ch = queuedChannel(() => {});
     expect(() => ch.receive('{"type":"graph"}')).not.toThrow();
+    // Round two (review a2): a later handler hears only what arrives after it.
+    const received: unknown[] = [];
+    ch.onMessage((message) => received.push(message));
+    ch.receive('{"type":"verification"}');
+    expect(received).toEqual([{ type: 'verification' }]);
   });
 
   it('serves its socket on /ws', () => {
