@@ -1,54 +1,78 @@
-// SEAT (U2b.1 part 2a, BMO-35): the authoritative edge set split out of
-// 21754b4:packages/graph-visualizer/src/visualizer.ts (edgeKey, edgesByKey, rebuildLinks, pushLinks).
+// REAL (U2b.1 part 2a, BMO-35): ported from 21754b4:packages/graph-visualizer/src/visualizer.ts (edgeKey, edgesByKey, rebuildLinks, pushLinks).
 
 import type { GraphEdge } from '@cpg/model';
+import { linkWidthForSizes } from './layout';
+import { relationshipKey } from './relationship-types';
 
-/** Link buffers in one order: a point-index pair, a width and the source edge per link. */
 export interface LinkBuffers {
   readonly links: Float32Array;
   readonly linkWidths: Float32Array;
   readonly linkEdges: readonly GraphEdge[];
 }
 
-function seat(what: string): never {
-  throw new Error(`SEAT: ${what} is not built yet (U2b.1 part 2a)`);
+/** JSON tuple instead of the archive's literal NULs (check-deps rule 6 bans NUL bytes in source). */
+export function edgeKey(edge: GraphEdge): string {
+  return JSON.stringify([edge.source, edge.target, edge.type ?? null]);
 }
 
-/** An edge's identity: source, target and type. Two edges with the same three are one edge. */
-export function edgeKey(_edge: GraphEdge): string {
-  return seat('edgeKey');
-}
-
-/**
- * The renderer's edge set, keyed by `edgeKey`. Links are always rebuilt from it, never appended,
- * so an edge is drawn once however often it arrives, and dies with either endpoint.
- */
+/** The authoritative edge set: links are rebuilt from it, never appended, so an edge draws once. */
 export class EdgeStore {
-  /** Distinct edges held, including any whose endpoints are not drawn. */
+  private edges = new Map<string, GraphEdge>();
+
   get size(): number {
-    return seat('EdgeStore.size');
+    return this.edges.size;
   }
 
-  /** A full render: the set becomes `edges`, deduplicated by key. */
-  replace(_edges: readonly GraphEdge[]): void {
-    seat('EdgeStore.replace');
+  replace(edges: readonly GraphEdge[]): void {
+    const next = new Map<string, GraphEdge>();
+    for (const edge of edges) next.set(edgeKey(edge), edge);
+    this.edges = next;
   }
 
-  /** A delta: drop every edge touching a removed id, then add `addedEdges`. */
-  apply(_removedNodeIds: readonly string[], _addedEdges: readonly GraphEdge[]): void {
-    seat('EdgeStore.apply');
+  apply(removedNodeIds: readonly string[], addedEdges: readonly GraphEdge[]): void {
+    if (removedNodeIds.length > 0) {
+      const removed = new Set(removedNodeIds);
+      for (const [key, edge] of this.edges) {
+        if (removed.has(edge.source) || removed.has(edge.target)) this.edges.delete(key);
+      }
+    }
+    for (const edge of addedEdges) this.edges.set(edgeKey(edge), edge);
   }
 
-  /**
-   * Link buffers in insertion order. An edge whose endpoint has no index is skipped. A width is
-   * `linkWidthForSizes` of its endpoints' sizes.
-   */
-  build(_indexOf: (id: string) => number | undefined, _sizes: ArrayLike<number>): LinkBuffers {
-    return seat('EdgeStore.build');
+  build(indexOf: (id: string) => number | undefined, sizes: ArrayLike<number>): LinkBuffers {
+    const links: number[] = [];
+    const linkWidths: number[] = [];
+    const linkEdges: GraphEdge[] = [];
+    for (const edge of this.edges.values()) {
+      const source = indexOf(edge.source);
+      const target = indexOf(edge.target);
+      if (source === undefined || target === undefined) continue;
+      links.push(source, target);
+      linkWidths.push(linkWidthForSizes(Number(sizes[source]), Number(sizes[target])));
+      linkEdges.push(edge);
+    }
+    return {
+      links: new Float32Array(links),
+      linkWidths: new Float32Array(linkWidths),
+      linkEdges,
+    };
   }
 }
 
-/** The links whose relationship key (`relationshipKey(edge.type)`) is not hidden, in order. */
-export function visibleLinks(_all: LinkBuffers, _hidden: ReadonlySet<string>): LinkBuffers {
-  return seat('visibleLinks');
+export function visibleLinks(all: LinkBuffers, hidden: ReadonlySet<string>): LinkBuffers {
+  if (hidden.size === 0) return all;
+  const links: number[] = [];
+  const linkWidths: number[] = [];
+  const linkEdges: GraphEdge[] = [];
+  for (const [i, edge] of all.linkEdges.entries()) {
+    if (hidden.has(relationshipKey(edge.type))) continue;
+    links.push(Number(all.links[i * 2]), Number(all.links[i * 2 + 1]));
+    linkWidths.push(Number(all.linkWidths[i]));
+    linkEdges.push(edge);
+  }
+  return {
+    links: new Float32Array(links),
+    linkWidths: new Float32Array(linkWidths),
+    linkEdges,
+  };
 }
