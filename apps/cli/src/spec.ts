@@ -112,12 +112,19 @@ export const COMMANDS: readonly CommandSpec[] = [
     ...consumers,
     bool('strict', 'treat unavailable checks as failures'),
   ]),
-  cmd('inspect', 'emit the graph payload, or serve the browser inspector', 'read', [
-    workspace,
-    format('json'),
-    ...store,
-    bool('serve', 'start the local inspector server'),
-  ]),
+  cmd(
+    'inspect',
+    'render a saved cpg.graph.payload in the browser inspector until Ctrl-C',
+    'none',
+    [],
+    {
+      positionals: [
+        { name: 'payload', summary: 'a cpg.graph.payload document file, or - for stdin' },
+      ],
+      stdin: 'optional-document',
+      stdout: 'none',
+    },
+  ),
   cmd('doctor', 'diagnose the installation and the store', 'none', [format('text', 'json')], {
     positionals: [],
   }),

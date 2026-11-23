@@ -657,6 +657,9 @@ contracts:
       - decision: "owner decision 5 (2026-11-22, U2c.2)"
         was: "I-2: the CLI package never imports a store, parser or Cypher builder; it sees only CpgEngine"
         now: "I-2 as below. createEngine builds the built-in sinks from the resolved consumer switches; tools/check-deps.mjs rule cli-runtime-import limits apps/cli's runtime imports to node builtins, @cpg/engine and @cpg/model"
+      - decision: "controller decision 20 (owner delegation, 2026-11-22; BMO-35 line 4, U2b.1 part 3b)"
+        was: "Q2: cpg inspect is both a document producer (`cpg inspect -` emits cpg.graph.payload) and a local server (`--serve` / `--live <root>`); stdout mode is 'document' unless --serve"
+        now: "`cpg inspect <payload.json|->` reads a saved cpg.graph.payload document (a file, or stdin for `-`), validates it at the boundary, and renders it in the browser inspector until Ctrl-C (stdout none). `cpg index --inspect` indexes, verifies, then sends CpgEngine.inspect's payload and its verdict to the inspector, the URL on stderr. The document-producer mode and --serve are deferred"
     invariants:
       - { id: I-2,  class: C+T, text: "The CLI package never imports a store, parser or Cypher builder. It drives all graph work (index, watch, query, verify, inspect) through `CpgEngine`. Besides `createEngine` in its composition root, it may import only pure, I/O-free helpers and types from `@cpg/*` packages." }
       - { id: I-3,  class: T, text: "no source file calls process.exit()" }
@@ -694,7 +697,7 @@ contracts:
     resolves: [CS-9, CS-10, L-28, L-30, L-31, the bin-never-executed and usage-drift defects]
     open_questions:
       - { id: Q1, kind: debate, text: "where do the contract types live?", disposition: "in @cpg/engine's public surface (the port) — no separate contract package (L-43)" }
-      - { id: Q2, kind: debate, text: "is cpg inspect a document producer or a local server?", disposition: "both: `cpg inspect -` emits cpg.graph.payload; `cpg inspect --serve` / `--live <root>` starts the local static server (apps/inspector) — stdout mode is 'document' unless --serve" }
+      - { id: Q2, kind: debate, text: "is cpg inspect a document producer or a local server?", disposition: "both: `cpg inspect -` emits cpg.graph.payload; `cpg inspect --serve` / `--live <root>` starts the local static server (apps/inspector) — stdout mode is 'document' unless --serve. AMENDED by controller decision 20 (see amended_by): `cpg inspect <payload.json|->` renders a saved payload; the document mode and --serve are deferred" }
       - { id: Q3, kind: spike, text: "advisory write lock location?", disposition: "a graph record with a TTL (survives a crash; U5)" }
       - { id: Q6, kind: human, text: "does cpg query stay Cypher-shaped?", disposition: "yes (F-2 keeps FalkorDB at U5); before U5 it runs over MemoryStore's readFile/readAll with a documented subset" }
       - { id: Q7, kind: human, text: "exit 130?", disposition: "yes; conventional" }

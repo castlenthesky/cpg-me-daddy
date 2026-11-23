@@ -2,6 +2,7 @@
 // stdin, the picture is served on 127.0.0.1, and render-reports come out on stdout. main.ts runs it
 // with the real streams.
 
+import { access } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { InspectorHost } from './host';
 import { parseInspectorInput } from './messages';
@@ -42,6 +43,12 @@ export async function runInspector(options: InspectorOptions): Promise<void> {
     },
     onFault: err,
   });
+
+  try {
+    await access(options.bundlePath);
+  } catch {
+    err(`the page bundle ${options.bundlePath} is missing; build it with bun run build:inspector`);
+  }
 
   const server = await startInspectorServer({
     attach: (transport) => host.attach(transport),

@@ -314,8 +314,9 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
     },
 
     async readAll(): Promise<GraphPayload> {
-      // SEAT: U2b.1 part 3b
-      throw new Error('SEAT: readAll lands with CpgEngine.inspect (U2b.1 part 3b)');
+      // REAL
+      assertOpen();
+      return structuredClone(cell.get());
     },
 
     async stats(): Promise<{ nodeCount: number; edgeCount: number; beyondMeasuredScale: boolean }> {

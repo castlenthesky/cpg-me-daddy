@@ -86,7 +86,6 @@ function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
 function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
   const parts: string[] = [];
   if (consumers.store === 'falkor') parts.push('consumers.store falkor (FalkorStore, U5)');
-  if (consumers.inspect) parts.push('consumers.inspect (the inspector, U2b)');
   if (consumers.vscode) parts.push('consumers.vscode (the VS Code panel, U3)');
   return parts;
 }
@@ -257,8 +256,9 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
     },
 
     async inspect(_session: EngineSession, _config: IndexConfig): Promise<GraphPayload> {
-      // SEAT: U2b.1 part 3b
-      throw new Error('SEAT: inspect reads the memory store (U2b.1 part 3b)');
+      // REAL; SEAT: _session is unused until a store dials a target (U5) — every session reaches
+      // the built-in memory store.
+      return memory.readAll();
     },
 
     schema(): SchemaDocInput {

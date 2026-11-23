@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createEngine } from '@cpg/engine';
+import { resolveInspectorBin, spawnInspector } from './inspector-process';
 import type { Io, Manifest } from './io';
 import { run } from './run';
 
@@ -44,6 +45,10 @@ process.once('SIGINT', () => controller.abort());
 void run(process.argv.slice(2), io, {
   manifest,
   createEngine,
+  startInspector: (handlers) =>
+    resolveInspectorBin().then((inspectorBin) =>
+      spawnInspector(inspectorBin, { ...handlers, log: (line) => io.err(line) }),
+    ),
   cwd: process.cwd(),
   signal: controller.signal,
 }).then((code) => {

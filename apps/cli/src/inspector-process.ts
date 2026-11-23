@@ -3,7 +3,11 @@
 // first the listening line, then each render-report. main.ts wires spawnInspector into run(), and
 // run()'s tests pass a fake StartInspector.
 
-import type { GraphPayload, VerificationReport, WebviewToHost } from '@cpg/model';
+import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
+import type { GraphPayload, RenderReport, VerificationReport, WebviewToHost } from '@cpg/model';
 
 /**
  * One NDJSON line on the inspector's stdin, one of the bin's InspectorInput shapes. The CLI sends
@@ -58,14 +62,73 @@ export interface SpawnInspectorOptions extends InspectorHandlers {
   readonly graceMs?: number;
 }
 
+const DEFAULT_START_MS = 10_000;
+const DEFAULT_GRACE_MS = 2000;
+
+/* v8 ignore next -- EPIPE only fires when a write races ahead of the child exit event */
+const noop = (): void => {};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function isListeningLine(
+  value: unknown,
+): value is { readonly type: 'listening'; readonly url: string } {
+  return isRecord(value) && value['type'] === 'listening' && typeof value['url'] === 'string';
+}
+
+function isRenderReport(value: unknown): value is RenderReport {
+  if (
+    !isRecord(value) ||
+    typeof value['payloadNodeCount'] !== 'number' ||
+    typeof value['renderedNodeCount'] !== 'number' ||
+    typeof value['renderedEdgeCount'] !== 'number' ||
+    typeof value['duplicateEdges'] !== 'number' ||
+    typeof value['frameMs'] !== 'number' ||
+    !Array.isArray(value['droppedNodeIds'])
+  ) {
+    return false;
+  }
+  for (const entry of value['droppedNodeIds']) {
+    if (typeof entry !== 'string') return false;
+  }
+  return true;
+}
+
+function isRenderReportMessage(value: unknown): value is RenderReportMessage {
+  return (
+    isRecord(value) &&
+    value['type'] === 'render-report' &&
+    typeof value['epoch'] === 'number' &&
+    typeof value['seq'] === 'number' &&
+    isRenderReport(value['report'])
+  );
+}
+
 /**
  * The absolute path of the cpg-inspector bin: `require.resolve('@cpg/inspector/package.json')`
  * and that manifest's `bin['cpg-inspector']`, relative to it (controller decision 16). Resolving a
  * path loads no inspector code. Rejects when the package or its bin entry is missing.
  */
 export async function resolveInspectorBin(): Promise<string> {
-  // SEAT: U2b.1 part 3b
-  throw new Error('SEAT: resolveInspectorBin (U2b.1 part 3b)');
+  // REAL
+  const manifest = require.resolve('@cpg/inspector/package.json');
+  const parsed = parseJson(await readFile(manifest, 'utf8'));
+  const bin = isRecord(parsed) ? parsed['bin'] : undefined;
+  const entry = isRecord(bin) ? bin['cpg-inspector'] : undefined;
+  if (typeof entry !== 'string' || entry === '') {
+    throw new Error(`${manifest} has no cpg-inspector bin`);
+  }
+  return join(dirname(manifest), entry);
 }
 
 /**
@@ -79,6 +142,107 @@ export async function spawnInspector(
   bin: string,
   options: SpawnInspectorOptions,
 ): Promise<InspectorProcess> {
-  // SEAT: U2b.1 part 3b
-  throw new Error(`SEAT: spawnInspector ${bin} ${String(options.startMs)} (U2b.1 part 3b)`);
+  // REAL
+  const startMs = options.startMs ?? DEFAULT_START_MS;
+  const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
+  const child = spawn(process.execPath, [bin], { stdio: ['pipe', 'pipe', 'inherit'] });
+
+  let hasExited = false;
+  const exited = new Promise<InspectorExit>((resolve) => {
+    child.once('exit', (code, signal) => {
+      hasExited = true;
+      resolve({ code, signal });
+    });
+  });
+
+  child.stdin.on('error', noop);
+  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+
+  return new Promise<InspectorProcess>((resolve, reject) => {
+    let settled = false;
+    let started = false;
+    let stopped = false;
+    let stopPromise: Promise<void> | undefined;
+
+    const failStart = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(startTimer);
+      rl.close();
+      if (!hasExited) {
+        child.kill('SIGKILL');
+      }
+      reject(error);
+    };
+
+    const startTimer = setTimeout(() => {
+      failStart(new Error(`the inspector printed no listening line within ${String(startMs)} ms`));
+    }, startMs);
+
+    child.once('error', failStart);
+
+    void exited.then(({ code, signal }) => {
+      if (!settled) {
+        const how = signal !== null ? `signal ${signal}` : `code ${String(code)}`;
+        failStart(new Error(`the inspector exited before its listening line (${how})`));
+      }
+    });
+
+    const createHandle = (url: string): InspectorProcess => ({
+      url,
+      send(line: InspectorLine): void {
+        if (hasExited || stopped || !child.stdin.writable) return;
+        child.stdin.write(`${JSON.stringify(line)}\n`);
+      },
+      exited,
+      stop(): Promise<void> {
+        stopped = true;
+        if (stopPromise === undefined) {
+          stopPromise = (async () => {
+            if (!hasExited) {
+              child.stdin.end();
+              const graceTimer = setTimeout(() => {
+                if (!hasExited) child.kill('SIGKILL');
+              }, graceMs);
+              try {
+                await exited;
+              } finally {
+                clearTimeout(graceTimer);
+              }
+            }
+            rl.close();
+          })();
+        }
+        return stopPromise;
+      },
+    });
+
+    rl.on('line', (line) => {
+      if (!settled) {
+        const parsed = parseJson(line);
+        if (isListeningLine(parsed)) {
+          settled = true;
+          started = true;
+          clearTimeout(startTimer);
+          resolve(createHandle(parsed.url));
+        } else {
+          failStart(
+            new Error(`the inspector printed ${JSON.stringify(line)} before its listening line`),
+          );
+        }
+        return;
+      }
+
+      if (!started) return;
+
+      const parsed = parseJson(line);
+      if (isRenderReportMessage(parsed)) {
+        options.onRenderReport(parsed);
+      } else {
+        options.log(
+          `cpg: warning: the inspector printed a line that is not a render-report: ${line}`,
+        );
+      }
+    });
+  });
 }

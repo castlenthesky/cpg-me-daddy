@@ -3,10 +3,123 @@
 // (08-verification §3.3), and render-reconciliation is recomputed from each render-report
 // (controller decisions 21 and 23).
 
-import type { CheckResult } from '@cpg/engine';
-import type { GraphPayload } from '@cpg/model';
+import {
+  renderReconciliation,
+  worstState,
+  type CheckResult,
+  type VerifyCheckId,
+} from '@cpg/engine';
+import {
+  validatePayload,
+  type GraphEdge,
+  type GraphNode,
+  type GraphPayload,
+  type VerificationReport,
+} from '@cpg/model';
 import type { Io } from './io';
-import type { InspectorExit, StartInspector } from './inspector-process';
+import type {
+  InspectorExit,
+  InspectorProcess,
+  RenderReportMessage,
+  StartInspector,
+} from './inspector-process';
+
+const CHECK_IDS: readonly VerifyCheckId[] = [
+  'filesystem-reconciliation',
+  'identity-invariants',
+  'id-uniqueness',
+  'render-reconciliation',
+  'revision-reconciliation',
+  'resolution-health',
+];
+
+const MAX_DEFECT_WARNINGS = 10;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isGraphNode(value: unknown): value is GraphNode {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['type'] === 'string' &&
+    (value['name'] === undefined || typeof value['name'] === 'string') &&
+    (value['data'] === undefined || isRecord(value['data']))
+  );
+}
+
+function isGraphEdge(value: unknown): value is GraphEdge {
+  return (
+    isRecord(value) &&
+    typeof value['source'] === 'string' &&
+    typeof value['target'] === 'string' &&
+    (value['type'] === undefined || typeof value['type'] === 'string') &&
+    (value['data'] === undefined || isRecord(value['data']))
+  );
+}
+
+function isGraphPayload(value: unknown): value is GraphPayload {
+  return (
+    isRecord(value) &&
+    typeof value['seq'] === 'number' &&
+    Number.isSafeInteger(value['seq']) &&
+    value['seq'] >= -1 &&
+    Array.isArray(value['nodes']) &&
+    value['nodes'].every(isGraphNode) &&
+    Array.isArray(value['edges']) &&
+    value['edges'].every(isGraphEdge)
+  );
+}
+
+function describePayloadDefect(body: unknown): string {
+  if (!isRecord(body)) return 'body';
+  const seq = body['seq'];
+  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < -1) return 'seq';
+  const nodes = body['nodes'];
+  if (!Array.isArray(nodes)) return 'nodes';
+  for (let i = 0; i < nodes.length; i += 1) {
+    if (!isGraphNode(nodes[i])) return `nodes[${String(i)}]`;
+  }
+  const edges = body['edges'];
+  if (!Array.isArray(edges)) return 'edges';
+  for (let i = 0; i < edges.length; i += 1) {
+    if (!isGraphEdge(edges[i])) return `edges[${String(i)}]`;
+  }
+  return 'shape';
+}
+
+function liveVerification(
+  checks: readonly CheckResult[],
+  render: CheckResult,
+): Omit<VerificationReport, 'epoch'> {
+  const nextChecks = checks.map((check) => (check.id === 'render-reconciliation' ? render : check));
+  const state = worstState(nextChecks.map((check) => check.state));
+  const seq = Math.min(...nextChecks.map((check) => check.asOfSeq));
+  return { seq, state, checks: nextChecks };
+}
+
+function waitForLiveEnd(exited: Promise<InspectorExit>, signal?: AbortSignal): Promise<LiveEnd> {
+  if (signal?.aborted === true) {
+    return Promise.resolve({ kind: 'interrupted' });
+  }
+  return new Promise<LiveEnd>((resolve) => {
+    let done = false;
+    const finish = (end: LiveEnd): void => {
+      if (done) return;
+      done = true;
+      signal?.removeEventListener('abort', onAbort);
+      resolve(end);
+    };
+    const onAbort = (): void => {
+      finish({ kind: 'interrupted' });
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    void exited.then((exit) => {
+      finish(exit.signal === 'SIGINT' ? { kind: 'interrupted' } : { kind: 'exited', exit });
+    });
+  });
+}
 
 /** Why the live loop ended: the signal aborted, or the child exited on its own. */
 export type LiveEnd =
@@ -37,8 +150,44 @@ export interface LiveOptions {
  * resolves. Rejects only when `start` rejects.
  */
 export async function serveLive(options: LiveOptions): Promise<LiveEnd> {
-  // SEAT: U2b.1 part 3b
-  throw new Error(`SEAT: serveLive at seq ${String(options.payload.seq)} (U2b.1 part 3b)`);
+  // REAL
+  const { payload, checks, io, signal } = options;
+  let ready = false;
+  let procRef: InspectorProcess | undefined;
+  let render: CheckResult | undefined;
+
+  const onRenderReport = (message: RenderReportMessage): void => {
+    if (!ready || procRef === undefined || render === undefined) return;
+    const next = renderReconciliation({
+      payloadSeq: payload.seq,
+      latest: { seq: message.seq, report: message.report },
+      url: procRef.url,
+    });
+    if (JSON.stringify(next) === JSON.stringify(render)) return;
+    render = next;
+    io.err(
+      `cpg: render-reconciliation ${next.state}${next.detail !== undefined ? `: ${next.detail}` : ''}`,
+    );
+    procRef.send({ type: 'verification', report: liveVerification(checks, render) });
+  };
+
+  const proc = await options.start({ onRenderReport });
+  procRef = proc;
+  try {
+    if (signal?.aborted === true) {
+      return { kind: 'interrupted' };
+    }
+    io.err(`cpg: inspector at ${proc.url} (open it in a browser; Ctrl-C stops it)`);
+    render = renderReconciliation({ payloadSeq: payload.seq, latest: null, url: proc.url });
+    proc.send({ type: 'graph', payload });
+    proc.send({ type: 'verification', report: liveVerification(checks, render) });
+    ready = true;
+
+    return await waitForLiveEnd(proc.exited, signal);
+  } finally {
+    ready = false;
+    await proc.stop();
+  }
 }
 
 /**
@@ -47,8 +196,16 @@ export async function serveLive(options: LiveOptions): Promise<LiveEnd> {
  * `asOfSeq` the payload's seq. serveLive replaces render-reconciliation.
  */
 export function savedPayloadChecks(seq: number): readonly CheckResult[] {
-  // SEAT: U2b.1 part 3b
-  throw new Error(`SEAT: savedPayloadChecks at seq ${String(seq)} (U2b.1 part 3b)`);
+  // REAL
+  return CHECK_IDS.map((id) => ({
+    id,
+    state: 'unavailable',
+    observed: 0,
+    expected: 0,
+    localisedTo: [],
+    detail: 'a saved payload has no workspace to check',
+    asOfSeq: seq,
+  }));
 }
 
 export type PayloadParse =
@@ -66,6 +223,37 @@ export type PayloadParse =
  * id reaches the picture and fails render-reconciliation there (C-EXT I-10).
  */
 export function parsePayloadDocument(text: string): PayloadParse {
-  // SEAT: U2b.1 part 3b
-  throw new Error(`SEAT: parsePayloadDocument of ${String(text.length)} chars (U2b.1 part 3b)`);
+  // REAL
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: 'not JSON' };
+  }
+
+  if (
+    !isRecord(parsed) ||
+    parsed['v'] !== 1 ||
+    parsed['kind'] !== 'cpg.graph.payload' ||
+    typeof parsed['tool'] !== 'string' ||
+    typeof parsed['producedAt'] !== 'string' ||
+    !Object.hasOwn(parsed, 'body')
+  ) {
+    return { ok: false, reason: 'not a cpg.graph.payload document' };
+  }
+
+  const body = parsed['body'];
+  if (!isGraphPayload(body)) {
+    return { ok: false, reason: `the body is not a GraphPayload: ${describePayloadDefect(body)}` };
+  }
+
+  const defects = validatePayload(body);
+  const warnings = defects
+    .slice(0, MAX_DEFECT_WARNINGS)
+    .map((defect) => `payload defect ${defect.code}: ${defect.detail}`);
+  if (defects.length > MAX_DEFECT_WARNINGS) {
+    warnings.push(`and ${String(defects.length - MAX_DEFECT_WARNINGS)} more payload defects`);
+  }
+
+  return { ok: true, payload: body, warnings };
 }

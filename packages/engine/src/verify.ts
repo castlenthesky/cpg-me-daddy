@@ -238,8 +238,54 @@ export interface RenderReconciliationInput {
  * state (owner decision 12a: visible, not silent).
  */
 export function renderReconciliation(input: RenderReconciliationInput): CheckResult {
-  // SEAT: U2b.1 part 3b
-  throw new Error(`SEAT: renderReconciliation at seq ${String(input.payloadSeq)} (U2b.1 part 3b)`);
+  // REAL
+  const { payloadSeq, latest, url } = input;
+  if (latest === null) {
+    return {
+      id: 'render-reconciliation',
+      state: 'unavailable',
+      observed: 0,
+      expected: 0,
+      localisedTo: [],
+      detail: `no render-report yet: open ${url}`,
+      asOfSeq: payloadSeq,
+    };
+  }
+
+  const { report } = latest;
+  const observed = report.renderedNodeCount;
+  const expected = report.payloadNodeCount;
+  const parts: string[] = [];
+  let state: CheckState;
+  let localisedTo: readonly string[] = [];
+
+  if (latest.seq < payloadSeq) {
+    state = 'stale';
+    parts.push(
+      `render-report at seq ${String(latest.seq)} lags the payload's seq ${String(payloadSeq)}`,
+    );
+  } else if (observed === expected && report.droppedNodeIds.length === 0) {
+    state = 'pass';
+  } else {
+    state = 'fail';
+    localisedTo = distinctSorted(report.droppedNodeIds);
+    parts.push(`${String(observed)} of ${String(expected)} payload nodes drawn`);
+  }
+
+  if (report.duplicateEdges > 0) {
+    const n = report.duplicateEdges;
+    parts.push(`${String(n)} duplicate ${n === 1 ? 'edge' : 'edges'} drawn once`);
+  }
+
+  return {
+    id: 'render-reconciliation',
+    state,
+    observed,
+    expected,
+    localisedTo,
+    ...(parts.length > 0 ? { detail: parts.join('; ') } : {}),
+    asOfSeq: payloadSeq,
+  };
 }
 
 /** Internal to @cpg/engine: runs verify's six read-only checks against one store. */

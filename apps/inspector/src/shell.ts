@@ -52,10 +52,11 @@ export function graphShellHtml(options: GraphShellOptions): string {
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src ${connectSrc}; style-src ${options.cspSource} 'unsafe-inline'; script-src 'nonce-${options.nonce}';" />
   <style>
-    html, body { height: 100%; margin: 0; padding: 0; }
+    html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
     body { display: flex; flex-direction: column; background: var(--vscode-editor-background, Canvas); color: var(--vscode-editor-foreground, CanvasText); font-family: var(--vscode-font-family, sans-serif); }
     #${VERIFICATION_ID} { padding: 4px 8px; font-size: 12px; border-bottom: 1px solid var(--vscode-panel-border, GrayText); }
-    #${containerId} { flex: 1; min-height: 0; position: relative; }
+    #${containerId} { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+    #${containerId} canvas { display: block; }
   </style>
 </head>
 <body>
