@@ -721,7 +721,7 @@ contracts:
       export interface SourceOpener { open(r: { filePath: WorkspacePath; selection?: SourceRange; frame?: SourceRange }): Promise<void>; }
       export interface FilesystemProbe { listFiles(): Promise<WorkspacePath[]>; digest(filePath: WorkspacePath): Promise<string | undefined>; }   // async; vscode.workspace.fs so remote filesystems work (L-11)
       export interface GraphHost extends GraphSink { attach(t: WebviewTransport): void; detach(): void; snapshot(): GraphPayload; seq(): Seq; epoch(): Epoch; reveal(nodeId): Promise<RevealOutcome>; setTheme(t): void; verify(fs: FilesystemProbe): Promise<VerificationReport>; faults(): readonly ProtocolFault[]; dispose(): void; }
-      export function graphShellHtml(o: { scriptUri; cspSource; nonce; containerId? }): string;   // default-src 'none'; connect-src 'none'; nonce-only scripts; no literal colours; reserves #cpg-verification
+      export function graphShellHtml(o: { scriptUri; cspSource; nonce; containerId?; connectSrc? }): string;   // default-src 'none'; connect-src = connectSrc, 'none' by default (the VS Code panel), else exactly the browser inspector's own ws://127.0.0.1:<port> (decision 10a); nonce-only scripts; no literal colours; reserves #cpg-verification
     amended_by:
       - decision: DQ-06
         was: "CheckId = fs-count | identity | render-count | digest; CheckState = pass | fail | stale | unavailable"
@@ -729,6 +729,12 @@ contracts:
       - decision: F-1
         was: "OQ-1: should C-EXT's seq and C-MODEL's revision be one number?"
         now: "yes: seq is the one ordering number; revision_id is the content fingerprint; no third counter"
+      - decision: "owner 10a (2026-11-22)"
+        was: "I-27 and graphShellHtml: connect-src 'none', which forbids the browser inspector's WebSocket (OQ-7, 8a)"
+        now: "graphShellHtml takes connectSrc, 'none' by default; the browser inspector passes exactly its own ws://127.0.0.1:<port>; any other value is refused"
+      - decision: "owner 11a (2026-11-22)"
+        was: "I-28: no literal colour in the shell, with no reading for outside VS Code, where --vscode-* is undefined"
+        now: "outside VS Code the var() fallbacks are CSS system-colour keywords (Canvas, CanvasText, GrayText, ...), which are not literal colours"
     invariants:
       - { id: I-2,  class: T, text: "nothing posted before the webview sends ready" }
       - { id: I-3,  class: T, text: "ready is answered with exactly one full graph snapshot of merged state, never a delta replay" }
@@ -745,8 +751,8 @@ contracts:
       - { id: I-18, class: T, text: "a VerificationReport always carries all six checks stamped asOfSeq/asOfEpoch (snapshotted BEFORE the first await)" }
       - { id: I-19, class: R, text: "render-reconciliation is unavailable with no render-report and stale when the report's seq lags — never pass" }
       - { id: I-22, class: T, text: "every completed verify() is pushed to the webview as a verification message" }
-      - { id: I-27, class: T, text: "shell CSP: default-src 'none' + connect-src 'none', nonce-only scripts, no unsafe-eval, no remote origin, everything bundled" }
-      - { id: I-28, class: T, text: "no literal colour in the shell; --vscode-* vars or ThemeSnapshot (the archived CSS hard-coded rgba(30,30,30,0.85))" }
+      - { id: I-27, class: T, text: "shell CSP: default-src 'none' + connect-src 'none' (the browser inspector: exactly its own ws://127.0.0.1:<port>, decision 10a), nonce-only scripts, no unsafe-eval, no remote origin, everything bundled" }
+      - { id: I-28, class: T, text: "no literal colour in the shell; --vscode-* vars or ThemeSnapshot, with CSS system-colour keywords (Canvas, CanvasText, GrayText) as the fallbacks outside VS Code, which are not literal colours (decision 11a) (the archived CSS hard-coded rgba(30,30,30,0.85))" }
     three_surfaces_for_verification:
       - "vscode.StatusBarItem (one glyph, worst state + failing count)"
       - "vscode.DiagnosticCollection('cpg') (the only surface that localises to a file the human can open)"
