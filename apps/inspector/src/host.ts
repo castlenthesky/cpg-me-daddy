@@ -1,10 +1,18 @@
-// SEAT (U2b.1 part 3a-ii, BMO-35): the browser inspector's GraphHost, reduced to what the picture
+// REAL (U2b.1 part 3a-ii, BMO-35): the browser inspector's GraphHost, reduced to what the picture
 // needs. It ports the archive's ready handshake and merge-then-post-delta
 // (21754b4:src/views/graphViewProvider.ts) onto C-EXT's protocol: the host holds the merged payload,
 // owns the epoch, and posts nothing before ready.
 
-import type { Epoch, GraphPayload, HostToWebview, WebviewToHost } from '@cpg/model';
-import type { InspectorInput } from './messages';
+import {
+  applyGraphDelta,
+  CPG_PROTOCOL_VERSION,
+  type Epoch,
+  type GraphPayload,
+  type HostToWebview,
+  type VerificationReport,
+  type WebviewToHost,
+} from '@cpg/model';
+import { parseWebviewMessage, type InspectorInput } from './messages';
 
 /** C-EXT Disposable (only the transport's subscriptions use it so far). */
 interface Disposable {
@@ -36,6 +44,16 @@ export interface InspectorHostOptions {
   readonly onFault: (line: string) => void;
 }
 
+function verificationMessage(report: VerificationReport): HostToWebview {
+  return {
+    type: 'verification',
+    protocol: CPG_PROTOCOL_VERSION,
+    epoch: report.epoch,
+    seq: report.seq,
+    report,
+  };
+}
+
 /**
  * Holds the merged payload, the epoch and the latest verify report, and keeps one page in step.
  *
@@ -60,27 +78,139 @@ export interface InspectorHostOptions {
  * until it sends `ready` (C-EXT not_guaranteed: multiplexing).
  */
 export class InspectorHost {
-  constructor(_options: InspectorHostOptions) {
-    throw new Error('SEAT: InspectorHost is U2b.1 part 3a-ii');
+  private readonly options: InspectorHostOptions;
+  private currentEpoch: Epoch = 0;
+  private currentPayload: GraphPayload | undefined;
+  private latestVerification: VerificationReport | undefined;
+  private transport: WebviewTransport | undefined;
+  private subscription: Disposable | undefined;
+  private ready = false;
+
+  constructor(options: InspectorHostOptions) {
+    this.options = options;
   }
 
   /** The current epoch: 0 before the first graph. */
   epoch(): Epoch {
-    throw new Error('SEAT: InspectorHost is U2b.1 part 3a-ii');
+    return this.currentEpoch;
   }
 
   /** The merged payload, or undefined before the first graph. */
   snapshot(): GraphPayload | undefined {
-    throw new Error('SEAT: InspectorHost is U2b.1 part 3a-ii');
+    return this.currentPayload;
   }
 
   /** One stdin line, already parsed. */
-  input(_input: InspectorInput): void {
-    throw new Error('SEAT: InspectorHost is U2b.1 part 3a-ii');
+  input(input: InspectorInput): void {
+    switch (input.type) {
+      case 'graph':
+        this.currentPayload = input.payload;
+        this.currentEpoch += 1;
+        this.post(this.graphMessage(this.currentPayload));
+        return;
+      case 'graph-delta': {
+        if (this.currentPayload === undefined) {
+          this.options.onFault(`delta before any graph at seq ${String(input.delta.seq)}`);
+          return;
+        }
+        const result = applyGraphDelta(this.currentPayload, input.delta);
+        switch (result.outcome) {
+          case 'applied':
+            this.currentPayload = result.payload;
+            this.post({
+              type: 'graph-delta',
+              protocol: CPG_PROTOCOL_VERSION,
+              epoch: this.currentEpoch,
+              seq: input.delta.seq,
+              delta: input.delta,
+            });
+            return;
+          case 'already-applied':
+            return;
+          case 'gap':
+            this.options.onFault(
+              `seq-gap: expected seq ${String(result.expected)}, got ${String(result.got)}`,
+            );
+            return;
+          case 'malformed':
+            this.options.onFault(
+              `malformed delta at seq ${String(input.delta.seq)}: ${JSON.stringify(result.defects)}`,
+            );
+            return;
+        }
+      }
+      case 'verification': {
+        const report: VerificationReport = {
+          epoch: this.currentEpoch,
+          seq: input.report.seq,
+          checks: input.report.checks,
+          state: input.report.state,
+        };
+        this.latestVerification = report;
+        this.post(verificationMessage(report));
+        return;
+      }
+    }
   }
 
   /** Makes `transport` the page this host talks to, replacing any earlier one. */
-  attach(_transport: WebviewTransport): void {
-    throw new Error('SEAT: InspectorHost is U2b.1 part 3a-ii');
+  attach(transport: WebviewTransport): void {
+    this.subscription?.dispose();
+    this.transport = transport;
+    this.ready = false;
+    this.subscription = transport.onMessage((message) => this.handleMessage(message));
+  }
+
+  private graphMessage(payload: GraphPayload): HostToWebview {
+    return {
+      type: 'graph',
+      protocol: CPG_PROTOCOL_VERSION,
+      epoch: this.currentEpoch,
+      seq: payload.seq,
+      payload,
+    };
+  }
+
+  private post(message: HostToWebview): void {
+    if (this.transport !== undefined && this.ready) {
+      this.transport.post(message);
+    }
+  }
+
+  private answer(): void {
+    if (this.currentPayload !== undefined) {
+      this.post(this.graphMessage(this.currentPayload));
+    }
+    if (this.latestVerification !== undefined) {
+      this.post(verificationMessage(this.latestVerification));
+    }
+  }
+
+  private handleMessage(raw: unknown): void {
+    const parsed = parseWebviewMessage(raw);
+    if (parsed === undefined) {
+      this.options.onFault(`unknown-message: ${JSON.stringify(raw)}`);
+      return;
+    }
+    switch (parsed.type) {
+      case 'ready':
+        if (parsed.protocol !== CPG_PROTOCOL_VERSION) {
+          this.options.onFault(`unknown-message: ${JSON.stringify(raw)}`);
+          return;
+        }
+        this.ready = true;
+        this.answer();
+        return;
+      case 'resync':
+        if (this.ready) {
+          this.answer();
+        }
+        return;
+      case 'render-report':
+        this.options.onRenderReport(parsed);
+        return;
+      case 'reveal':
+        return;
+    }
   }
 }

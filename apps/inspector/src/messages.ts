@@ -1,6 +1,6 @@
 // REAL (U2b.1 part 3a-i, BMO-35): the page's typed boundary for host messages. C-EXT may_not "type
 // the webview boundary loosely": the parser returns a well-formed message or undefined, never a cast.
-// SEAT (U2b.1 part 3a-ii, BMO-35): the inspector process's two boundaries, page -> host
+// REAL (U2b.1 part 3a-ii, BMO-35): the inspector process's two boundaries, page -> host
 // (parseWebviewMessage) and stdin -> host (parseInspectorInput).
 
 import {
@@ -10,6 +10,7 @@ import {
   type GraphDelta,
   type GraphPayload,
   type HostToWebview,
+  type RenderReport,
   type VerificationReport,
   type VerifyCheckId,
   type WebviewToHost,
@@ -127,12 +128,81 @@ export type InspectorInput =
   | { readonly type: 'graph-delta'; readonly delta: GraphDelta }
   | { readonly type: 'verification'; readonly report: Omit<VerificationReport, 'epoch'> };
 
+const RESYNC_REASONS: readonly ('gap' | 'stale-epoch' | 'render-error')[] = [
+  'gap',
+  'stale-epoch',
+  'render-error',
+];
+const RESYNC_REASON_SET = new Set<unknown>(RESYNC_REASONS);
+
+function isRenderReport(value: unknown): value is RenderReport {
+  return (
+    isRecord(value) &&
+    typeof value['payloadNodeCount'] === 'number' &&
+    typeof value['renderedNodeCount'] === 'number' &&
+    typeof value['renderedEdgeCount'] === 'number' &&
+    typeof value['duplicateEdges'] === 'number' &&
+    isArray(value['droppedNodeIds']) &&
+    value['droppedNodeIds'].every((entry) => typeof entry === 'string') &&
+    typeof value['frameMs'] === 'number'
+  );
+}
+
+function isWebviewMessage(value: unknown): value is WebviewToHost {
+  if (!isRecord(value)) return false;
+  switch (value['type']) {
+    case 'ready':
+      return typeof value['protocol'] === 'number';
+    case 'reveal':
+      return typeof value['nodeId'] === 'string';
+    case 'resync':
+      return (
+        typeof value['epoch'] === 'number' &&
+        typeof value['seq'] === 'number' &&
+        RESYNC_REASON_SET.has(value['reason'])
+      );
+    case 'render-report':
+      return (
+        typeof value['epoch'] === 'number' &&
+        typeof value['seq'] === 'number' &&
+        isRenderReport(value['report'])
+      );
+    default:
+      return false;
+  }
+}
+
 /**
  * A `ready` (any numeric protocol: the host decides), `reveal`, `resync` or `render-report` whose
  * every field has its C-EXT type, or undefined. Never throws.
  */
-export function parseWebviewMessage(_value: unknown): WebviewToHost | undefined {
-  throw new Error('SEAT: parseWebviewMessage is U2b.1 part 3a-ii');
+export function parseWebviewMessage(value: unknown): WebviewToHost | undefined {
+  return isWebviewMessage(value) ? value : undefined;
+}
+
+function isVerificationInputReport(value: unknown): value is Omit<VerificationReport, 'epoch'> {
+  return (
+    isRecord(value) &&
+    typeof value['seq'] === 'number' &&
+    CHECK_STATE_SET.has(value['state']) &&
+    isArray(value['checks']) &&
+    value['checks'].length === CHECK_IDS.length &&
+    value['checks'].every((entry, index) => isCheckResult(entry) && entry.id === CHECK_IDS[index])
+  );
+}
+
+function isInspectorInput(value: unknown): value is InspectorInput {
+  if (!isRecord(value)) return false;
+  switch (value['type']) {
+    case 'graph':
+      return isGraphPayload(value['payload']);
+    case 'graph-delta':
+      return isGraphDelta(value['delta']);
+    case 'verification':
+      return isVerificationInputReport(value['report']);
+    default:
+      return false;
+  }
 }
 
 /**
@@ -140,6 +210,6 @@ export function parseWebviewMessage(_value: unknown): WebviewToHost | undefined 
  * verification must carry all six checks, once each, in enum order (C-EXT I-18), since the host
  * posts it as a VerificationReport. Node and edge fields are not checked (stop-list 55). Never throws.
  */
-export function parseInspectorInput(_value: unknown): InspectorInput | undefined {
-  throw new Error('SEAT: parseInspectorInput is U2b.1 part 3a-ii');
+export function parseInspectorInput(value: unknown): InspectorInput | undefined {
+  return isInspectorInput(value) ? value : undefined;
 }
