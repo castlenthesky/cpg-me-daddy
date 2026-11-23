@@ -1,0 +1,22 @@
+{
+  "name": "@cpg/parse",
+  "version": "0.0.1",
+  "private": true,
+  "description": "C-PARSE: the language registry and ParseService over web-tree-sitter (U6a).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@cpg/model": "*",
+    "web-tree-sitter": "0.27.0"
+  },
+  "devDependencies": {
+    "@vscode/tree-sitter-wasm": "0.3.1"
+  }
+}

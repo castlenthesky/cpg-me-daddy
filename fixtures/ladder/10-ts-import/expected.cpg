@@ -1,0 +1,37 @@
+# Rung 10. Rung 06 in TypeScript. A relative import ('./util') and an exported function.
+# `range` is not asserted on exported declarations, because which node it spans is ?Q6.
+
+[parse]
+PARSE main.ts language=typescript root=program hasError=false
+PARSE util.ts language=typescript root=program hasError=false
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.ts name=main.ts language=typescript
+FILE file:util.ts name=util.ts language=typescript
+HAS_ENTRY dir:. -> file:main.ts
+HAS_ENTRY dir:. -> file:util.ts
+
+[structural]
+MODULE file:main.ts:MODULE:$root name=main range=1:0-6:0
+IMPORT file:main.ts:IMPORT:$root:0 source_text=./util imported_names=[helper] is_type_only=false range=1:0-1:32
+METHOD file:main.ts:METHOD:main name=main kind=function params_count=0 exported=true
+CALL file:main.ts:CALL:main:0 callee_name=helper args_count=0 kind=call range=4:2-4:10
+MODULE file:util.ts:MODULE:$root name=util range=1:0-2:0
+METHOD file:util.ts:METHOD:helper name=helper kind=function params_count=0 exported=true
+SOURCE_FILE file:main.ts:MODULE:$root -> file:main.ts
+SOURCE_FILE file:util.ts:MODULE:$root -> file:util.ts
+DECLARES file:main.ts:MODULE:$root -> file:main.ts:IMPORT:$root:0
+DECLARES file:main.ts:MODULE:$root -> file:main.ts:METHOD:main
+DECLARES file:util.ts:MODULE:$root -> file:util.ts:METHOD:helper
+IN_SCOPE file:main.ts:CALL:main:0 -> file:main.ts:METHOD:main
+
+[symbols]
+DEFINES file:main.ts:MODULE:$root -> `main.ts`/    # ?Q1
+DEFINES file:main.ts:METHOD:main -> `main.ts`/main().
+DEFINES file:util.ts:MODULE:$root -> `util.ts`/    # ?Q1
+DEFINES file:util.ts:METHOD:helper -> `util.ts`/helper().
+
+[resolution]
+IMPORTS file:main.ts:IMPORT:$root:0 -> `util.ts`/helper(). status=resolved
+CALLS file:main.ts:CALL:main:0 -> `util.ts`/helper(). status=resolved

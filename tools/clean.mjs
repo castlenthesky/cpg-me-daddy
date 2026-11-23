@@ -13,9 +13,11 @@ const targets = [
   '.stryker-tmp',
   '.turbo',
   'node_modules/.cache/turbo',
-  ...readdirSync(`${ROOT}/packages`, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => `packages/${d.name}/dist`),
+  ...['packages', 'apps'].flatMap((tier) =>
+    readdirSync(`${ROOT}/${tier}`, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => `${tier}/${d.name}/dist`),
+  ),
 ];
 
 // Stray *.tsbuildinfo (e.g. from before tsBuildInfoFile moved inside the output dirs).

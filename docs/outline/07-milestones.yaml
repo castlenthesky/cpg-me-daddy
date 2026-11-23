@@ -20,7 +20,7 @@
 # Review agents must be explicitly told to use the code-review skill (L-42).
 
 summary:
-  units: 10          # U1..U10 (U0 is done-but-uncommitted foundation)
+  units: 10          # U1..U10 (U0, the foundation, is on develop: merge 20eb683)
   prs_in_original_spine: 16
   features: 24      # PR-sized; the 16-PR spine sliced finer, order unchanged
   stories: 53
@@ -74,10 +74,10 @@ milestones:
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
   - id: U0
     name: Foundation
-    status: built, UNCOMMITTED (develop working tree, 2026-09-17)
-    goal: "The vocabulary package, the test runner, the dependency gate, CI, the archive tags, and the packages/ vs apps/ split — all committed and green."
+    status: done (2026-11-21) — landed on develop in merge commit 20eb683 (PR #24; U0.1.1 first committed as cfd080d; U0.1.2–U0.2.3 from #22, superseded)
+    goal: "The vocabulary package, the test runner, the dependency gate, CI, the archive-coordinate resolver, and the packages/ vs apps/ split — all committed and green."
     why_here: "A gate with no runner is a suggestion (L-31); a vocabulary inside the wrong package is how 13 deep imports happen (L-26). Everything else is gated on this."
-    delivers: ["@cpg/model (13 exports, 17 tests, zero deps)", "tools/check-deps.mjs (4 rules)", ".github/workflows/ci.yml (verify on ubuntu+macos; gate-fails-when-violated job)", "vitest, tsconfig.base.json, project references", "5 archive tags", "apps/vscode with the one extension file", "two-tier layer rule"]
+    delivers: ["@cpg/model (13 exports, 17 tests, zero deps)", "tools/check-deps.mjs (4 rules)", ".github/workflows/ci.yml (verify on ubuntu+macos; gate-fails-when-violated job)", "vitest, tsconfig.base.json, project references", "5 archive commits pinned by SHA (10-lessons archive_commits) and tools/check-archive-coords.mjs", "apps/vscode with the one extension file", "two-tier layer rule"]
     gate:
       machine: ["bun run verify green on both CI runners", "gate-fails-when-violated job proves check-deps rejects a planted vscode import in packages/**", "a planted `import 'vscode'` in apps/cli and a planted `@cpg/model/dist/x` deep import in apps/vscode are BOTH rejected (tier rule proven both ways)", "no NUL byte in any source file"]
       human: "CI is green on GitHub for the first time; `ls packages apps` shows the layout P-A describes"
@@ -95,6 +95,7 @@ milestones:
               - "packages/model, tools/check-deps.mjs, .github/workflows/ci.yml, vitest.config.ts, tsconfig.base.json, bun.lock are tracked; package-lock.json is absent"
               - ".gitignore keeps the deliberation-corpus directory ignored until the docs/archive branch exists (12-retirement.md)"
               - "CI runs on push and both jobs pass"
+              - "every archive coordinate in docs/outline is `<sha>:<path>` and resolves (tools/check-archive-coords.mjs, part of `bun run check`); no archive/*-20260916 tag is cited"
             notes: "Commit message references DL-3 (CI in the first unit) and L-31."
           - id: U0.1.2
             title: Remove the stale dist probe and the ast-generator stub
@@ -132,6 +133,7 @@ milestones:
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
   - id: U1
     name: Vocabulary and seams as data
+    status: done (2026-11-22) — landed via PRs #26, #27, #30, #31, #32, #33, #34, #35, #36 (the C-SINK/MemoryStore gate item moved to U2 on 2026-11-21)
     goal: "The schema registry lives in @cpg/model as data under CI; the model carries revision_id and the seq envelope with an owner-discriminated merge; the resolver and watch seam TYPES exist; contracts agree with each other by compilation."
     why_here: "Everything downstream speaks this vocabulary; the id scheme and path form are the most expensive things to change after the first persisted write (C-WATCH/C-EXTRACT reversal tables). L-22 says order by time-to-first-judgement, and this unit has a human artifact of its own: the regenerated schema table."
     delivers:
@@ -165,6 +167,7 @@ milestones:
         stories:
           - id: U1.1.1
             title: Port nodes/edges/enums/types/schema/validate into packages/model/src/schema
+            delivered: "#26, #27"
             epic: E-SCHEMA
             acceptance:
               - "the six files compile under strict; NODE_LABELS has 14 entries, EDGE_TYPES 15 (incl. SOURCE_FILE); CPG_SCHEMA.version === 3"
@@ -172,19 +175,21 @@ milestones:
               - "the Joern alignment prose is removed from the code (kept in 04-schema.yaml); ownership/write/key columns are unchanged"
               - "the ported tests pass under vitest: schema.test.ts (CALLS.status and IMPORTS.status are the SAME array object), validate.test.ts (362 LOC), joern.test.ts (all 68 Joern names accounted for once — keep the vendored JSON as a test fixture only)"
             port_from:
-              - "archive/m0-calls-symbols-20260916:packages/engine/src/schema/{nodes,edges}.ts"
-              - "archive/master-20260916:packages/engine/src/schema/{enums,types,schema,validate}.ts"
-              - "archive/master-20260916:packages/engine/test/unit/schema/*.test.ts"
+              - "f18ee71:packages/engine/src/schema/{nodes,edges}.ts"
+              - "27361a3:packages/engine/src/schema/{enums,types,schema,validate}.ts"
+              - "27361a3:packages/engine/test/unit/schema/*.test.ts"
             decisions: [DQ-01, ND-5, P-C]
           - id: U1.1.2
             title: The schema generator and the drift check
+            delivered: "#34"
             epic: E-SCHEMA
             acceptance:
               - "`bun run schema:doc` regenerates the BEGIN/END GENERATED region of docs/outline/04-schema.yaml from CPG_SCHEMA; `--check` exits 1 on drift; CI runs --check"
               - "the first regeneration produces a diff the owner signs off (the human artifact of U1)"
-            port_from: ["archive/m0-calls-symbols-20260916:tools/schema-doc.ts"]
+            port_from: ["f18ee71:tools/schema-doc.ts"]
           - id: U1.1.3
             title: Statement-level identity non-foreclosure test
+            delivered: "#31"
             epic: E-SCHEMA
             acceptance:
               - "a test mints a synthetic statement-level id using the :ordinal slot (e.g. file:x.py:STMT:main:3), round-trips it through makeNodeId/parse, and asserts stability under an unrelated insertion above"
@@ -195,6 +200,7 @@ milestones:
         stories:
           - id: U1.2.1
             title: revision_id on nodes, the seq envelope, and the owner-discriminated merge
+            delivered: "#32, #33"
             epic: E-FRESH
             acceptance:
               - "GraphDelta is { seq, file, revision_id, producer: 'filesystem' | 'code', addedNodes, addedEdges, removedNodeIds }; GraphPayload carries seq; no composeDeltas, no edgeId, no removedEdgeIds exist"
@@ -206,6 +212,7 @@ milestones:
             lessons: [L-01, L-08]
           - id: U1.2.2
             title: WorkspacePath and AbsolutePath types with the two adapters named
+            delivered: "#30"
             epic: E-FRESH
             acceptance:
               - "branded types exported from @cpg/model; toWorkspacePath(root, absolute) uses startsWith + slice and throws 'path escapes root'; toAbsolutePath exists only for FilesystemProbe and SourceOpener call sites (documented, and check-deps later verifies the import sites)"
@@ -216,19 +223,22 @@ milestones:
         stories:
           - id: U1.3.1
             title: Port the resolver seam types and the watch layer-A types
+            delivered: "#36"
             epic: E-RESOLVE
             acceptance:
               - "packages/resolve/src/contract.ts is the 218-line resolve.ts with C-RESOLVE's five amendments (ResolveBatch, capabilities, status(), ResolveContext, +5 reasons) — types only, zero imports; packages/watch/src/contract.ts is C-WATCH layer A"
               - "both packages exist with package.json, tsconfig, empty index exporting only types; check-deps green"
-            port_from: ["archive/discovery-20260916:packages/cpg-generator/src/resolve.ts"]
+            port_from: ["21754b4:packages/cpg-generator/src/resolve.ts"]
           - id: U1.3.2
             title: contracts-agree.test.ts
+            delivered: "#36"
             epic: E-GATE
             acceptance:
               - "one compile-time file asserts mutual assignability across shared types: RefSite (extract vs resolve), Resolution/EdgeResolution, GraphDelta (model vs sink), NormalizedChange (watch vs cli), CheckResult (cli vs ext), WorkspacePath everywhere; @ts-expect-error negative cases included"
             resolves: [CS-12]
           - id: U1.3.3
             title: Reserve EVAL_TYPE and set the golden policy
+            delivered: "#35"
             epic: E-SCHEMA
             acceptance:
               - "reserved_edges in the schema module lists EVAL_TYPE with producer: none-yet, admitted_at: U8; a test asserts no emitter exists; CALLS.resolvedBy and CALLS.confidence are golden: exclude"
@@ -274,8 +284,8 @@ milestones:
               - "tools/check-cli-bin.mjs in CI before vitest: build, spawn dist/main.js --version (exit 0, banner from the manifest), frobnicate (exit 2)"
               - "--format is never inferred: same argv yields byte-identical stdout with isTty true and false"
             port_from:
-              - "archive/master-20260916:packages/cli/src/{main,run,io}.ts"
-              - "archive/master-20260916:packages/cli/test/unit/run.test.ts"
+              - "27361a3:packages/cli/src/{main,run,io}.ts"
+              - "27361a3:packages/cli/test/unit/run.test.ts"
             contracts: [C-CLI]
             lessons: [L-28, L-31]
           - id: U2a.2
@@ -288,9 +298,9 @@ milestones:
               - "NullGraphStore lives in the engine (not the CLI) and backs --dry-run; `cpg index --dry-run` over a tmp workspace with a.ts and b.py reports filesIndexed 2 with no store"
               - "IndexReport: walk accounting sums (I-20); files sorted by path; every file carries revision_id; `consumers` lists the enabled set"
             port_from:
-              - "archive/master-20260916:packages/engine/src/workspace/{walker,glob,hash,paths,defaults}.ts + tests"
-              - "archive/m0-calls-symbols-20260916:packages/engine/src/indexer/index-workspace.ts (ADAPT)"
-              - "archive/master-20260916:packages/engine/test/support/tmp-workspace.ts"
+              - "27361a3:packages/engine/src/workspace/{walker,glob,hash,paths,defaults}.ts + tests"
+              - "f18ee71:packages/engine/src/indexer/index-workspace.ts (ADAPT)"
+              - "27361a3:packages/engine/test/support/tmp-workspace.ts"
             lessons: [L-24, L-27]
           - id: U2a.3
             title: cpg verify — six checks, four states, exit 3
@@ -319,10 +329,10 @@ milestones:
               - "`cpg inspect <payload.json|->` renders a saved payload; `cpg index --inspect` opens the picture live and prints the URL on stderr"
               - "the picture is labelled a liveness check in the UI (#cpg-verification banner shows the verify report beside the graph)"
             port_from:
-              - "archive/discovery-20260916:packages/graph-visualizer/src/{layout,nodeTypes,relationshipTypes,legend,shell,styles}.ts (PORT)"
-              - "archive/discovery-20260916:packages/graph-visualizer/src/visualizer.ts (ADAPT)"
-              - "archive/discovery-20260916:src/webview/graphApp.ts"
-              - "archive/discovery-20260916:esbuild.js"
+              - "21754b4:packages/graph-visualizer/src/{layout,nodeTypes,relationshipTypes,legend,shell,styles}.ts (PORT)"
+              - "21754b4:packages/graph-visualizer/src/visualizer.ts (ADAPT)"
+              - "21754b4:src/webview/graphApp.ts"
+              - "21754b4:esbuild.js"
             decisions: [ND-3]
             measurements: [M-LEGIBILITY-noise, M-LEGIBILITY-golden-image]
             lessons: [L-05, L-23]
@@ -337,7 +347,7 @@ milestones:
               - "the file is found at --config, else the nearest ancestor of the root containing cpg.config.yaml, stopping at .git; finding it never relocates the root"
               - "the loader produces one CpgConfigInput handed to the engine; the engine reads no env itself"
               - "the sketch in 03-architecture §9 parses and round-trips"
-            port_from: ["archive/master-20260916:packages/engine/src/config/workspace-config.ts (the seam)"]
+            port_from: ["27361a3:packages/engine/src/config/workspace-config.ts (the seam)"]
             decisions: [DQ-08 (H4), X11]
           - id: U2c.2
             title: Consumer switches
@@ -388,7 +398,7 @@ milestones:
               - "the graph is a WebviewPanel with a serializer; retainContextWhenHidden only on it; CSP default-src 'none' + connect-src 'none' + nonce; no literal colours"
               - "reveal(nodeId) returns RevealOutcome; nameRange wins over range; FILE nodes open whole"
               - "verify runs debounced 500 ms after the last delta and on the `cpg.verify` command; results reach the status bar, a DiagnosticCollection('cpg') on offending files, and the banner"
-            port_from: ["archive/discovery-20260916:src/views/graphViewProvider.ts"]
+            port_from: ["21754b4:src/views/graphViewProvider.ts"]
             contracts: [C-EXT]
             decisions: [AM-2, P-A]
           - id: U3.1.2
@@ -432,7 +442,7 @@ milestones:
             epic: E-FRESH
             acceptance:
               - "debounce/normalize/watch-workspace tests ported to vitest and red; then debounce (drop the dead `now`), normalize (rename pairing by content hash, re-filter with the walker's matcher), parcel-backend (dynamic import), sink, queue (SerialQueue + withRetry, NEW tests) ported and green"
-            port_from: ["archive/research-sweep-20260916:packages/engine/test/unit/watch/*.test.ts", "archive/research-sweep-20260916:packages/engine/src/watch/*.ts"]
+            port_from: ["e45574f:packages/engine/test/unit/watch/*.test.ts", "e45574f:packages/engine/src/watch/*.ts"]
             lessons: [L-30, L-14]
           - id: U4.1.2
             title: coalesce, flushBatch, and the session
@@ -460,7 +470,7 @@ milestones:
               - "WatchEvent stream: ready, batch {changes, write, latencyMs: {t0_t1, t1_t2, t2_t3, total}}, warning, error, closed; seq dense from 0; closed always last; shutdown by injected AbortSignal or SIGINT"
               - "SinkDelivery reports confirmedSeq and renderedSeq; the inspector's render-report stamps renderedSeq"
               - "a local benchmark script records T0->T3 p50/p95 over 50 saves with the enabled set printed beside the numbers"
-            port_from: ["archive/research-sweep-20260916:packages/cli/src/commands/watch-cmd.ts (ADAPT; the 202-line version, not master's 180)"]
+            port_from: ["e45574f:packages/cli/src/commands/watch-cmd.ts (ADAPT; the 202-line version, not master's 180)"]
             decisions: [DQ-05, F-1]
 
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -503,7 +513,7 @@ milestones:
               - "bootstrap: creates only missing indexes; UNIQUE SYMBOL.fqn via GRAPH.CONSTRAINT with PENDING polling; SYMBOL(fqn) index first; META_DATA.schema_version read-compare -> rebuild on mismatch (drop/recreate the graph key)"
               - "TIMEOUT <ms> as a trailing argument on every statement; write socket timeout >= 2x; 'Query timed out' string-matched ONCE in the store adapter -> StoreError TIMEOUT"
             port_from:
-              - "archive/master-20260916:packages/engine/src/store/{cypher,bootstrap,store}.ts + tests"
+              - "27361a3:packages/engine/src/store/{cypher,bootstrap,store}.ts + tests"
             contracts: [C-STORE]
             measurements: [M-FALKOR-atomic, M-FALKOR-51x, M-FALKOR-timeout, M-FALKOR-planner-traps, M-FALKOR-mechanics]
             lessons: [L-02, L-03, L-09]
@@ -515,8 +525,8 @@ milestones:
               - "openCpgStore refuses port 6381 and cpg_test_ keys; RETURN 1 materializes the key before bootstrap; remote (default 127.0.0.1:6382) and docker modes; spawned mode absent with a remedy string pointing at docker"
               - "falkordb-service ported minus the spawned pipeline: Timed<T> on every query; RO_QUERY for reads; explain params as a CYPHER k=v prefix"
             port_from:
-              - "archive/master-20260916:packages/engine/src/store/{falkordb-store,open,falkordb.config}.ts"
-              - "archive/master-20260916:packages/falkordb-service/**"
+              - "27361a3:packages/engine/src/store/{falkordb-store,open,falkordb.config}.ts"
+              - "27361a3:packages/falkordb-service/**"
             decisions: [ND-2, DQ-10]
           - id: U5.1.3
             title: Compose files, provenance handshake, integration harness, torn-batch test
@@ -526,9 +536,9 @@ milestones:
               - "the torn-batch test injects a fault (timeout via TIMEOUT 1 on a slowed statement) and asserts the prior subgraph is intact and the receipt is applied:false"
               - "schema-conformance.ts and invariants.ts ported (fix the cross-package relative import); they run at the end of every integration test"
             port_from:
-              - "archive/master-20260916:docker/*.yml"
-              - "archive/master-20260916:tools/lib/compose-instance.ts"
-              - "archive/master-20260916:packages/engine/test/support/{falkordb,schema-conformance,invariants}.ts"
+              - "27361a3:docker/*.yml"
+              - "27361a3:tools/lib/compose-instance.ts"
+              - "27361a3:packages/engine/test/support/{falkordb,schema-conformance,invariants}.ts"
       - id: U5.2
         name: cpg query and cpg doctor
         stories:
@@ -538,7 +548,7 @@ milestones:
             acceptance:
               - "`cpg query \"<cypher>\"` uses RO_QUERY; rows on stdout (formatTable with alignment asserted via indexOf) or --format=json; `-- N row(s) in X ms` on stderr; a write clause is refused server-side and surfaces as engine-rejected exit 1; a missing graph key errors, never created"
               - "`cpg doctor` checks: node version, docker present, dev instance reachable, graph key exists, schema_version matches, grammar dir resolvable; every failing check has a remedy an INSTALLED user can act on (never 'run bun run x')"
-            port_from: ["archive/master-20260916:packages/cli/src/commands/query-cmd.ts (ADAPT)"]
+            port_from: ["27361a3:packages/cli/src/commands/query-cmd.ts (ADAPT)"]
 
   # ═══════════════════════════════════════════════════════════════════════════════════════════════
   - id: U6
@@ -579,7 +589,7 @@ milestones:
             acceptance:
               - "ParseService per C-PARSE: registry frozen by the composition root; typescript/tsx/javascript/python registered (javascript has NO adapter — parseable, not extractable); GrammarSource injected; locator explicit > CPG_GRAMMAR_DIR > package anchor; provenance with bytesSha256; handles released explicitly; cache only for retained keys, LRU 100"
               - "C-PARSE suite green with the real wasm backend; DEFECT-TRUNCATION (200-char literal round-trips), DEFECT-TSX-ROUTING, DEFECT-ABI-VACUOUS, DEFECT-POISONED-INIT all covered"
-            port_from: ["archive/master-20260916:packages/engine/src/parser/*.ts + tests", "archive/master-20260916:packages/engine/src/extract/syntax.ts"]
+            port_from: ["27361a3:packages/engine/src/parser/*.ts + tests", "27361a3:packages/engine/src/extract/syntax.ts"]
             measurements: [M-RESEARCH-tree-sitter]
           - id: U6a.2
             title: packages/extract — two-pass walker, Python adapter, DeltaBuilder, ids, CoverageManifest, interface_hash
@@ -590,12 +600,12 @@ milestones:
               - "CoverageManifest total over 14/15; a test asserts the manifest against the fixtures both ways; an unsupported grammar FAILS"
               - "ExtractedFile.interfaceHash = sha256 of the normalized exported surface (exported names, kinds, signatures, re-exports) — gates cascade at U7 (ND-9)"
               - "SOURCE_FILE (MODULE -> FILE) attached by the engine's indexer, not by extract"
-              - "hello-world goldens restored from the tags and extended with the two-identical-calls-plus-insert-above case; extract is deterministic (double-run byte-equal)"
+              - "hello-world goldens restored from the archive commits and extended with the two-identical-calls-plus-insert-above case; extract is deterministic (double-run byte-equal)"
             port_from:
-              - "archive/m0-calls-symbols-20260916:packages/engine/src/extract/{walk,adapter,python,delta,index}.ts + builtins/"
-              - "archive/master-20260916:packages/engine/src/extract/registry.ts"
-              - "archive/m0-calls-symbols-20260916:packages/engine/src/indexer/source-file.ts"
-              - "archive/m0-calls-symbols-20260916:test/fixtures/golden/simple/**"
+              - "f18ee71:packages/engine/src/extract/{walk,adapter,python,delta,index}.ts + builtins/"
+              - "27361a3:packages/engine/src/extract/registry.ts"
+              - "f18ee71:packages/engine/src/indexer/source-file.ts"
+              - "f18ee71:test/fixtures/golden/simple/**"
             contracts: [C-EXTRACT]
             lessons: [L-20, L-44, L-48]
           - id: U6a.3
@@ -616,7 +626,7 @@ milestones:
               - "typescript.ts ported (kinds, signature text, exported detection, ts/tsx routing); gaps recorded as declared-not-emitted (interface/type_alias/enum, export default, multi-declarator const, decorators, docstrings via previousSibling — C-PARSE Q4 decides)"
               - "a small layered TypeScript fixture (router -> service -> repository) with a checked-in golden; the TS import extractor works because text is never truncated"
               - "ND-6: Python landed first; TS resolution beyond imports is NOT claimed (U9)"
-            port_from: ["archive/m0-calls-symbols-20260916:packages/engine/src/extract/typescript.ts + tests", "archive/discovery-20260916:packages/cpg-generator/src/imports.ts (the TS SEAT, now unblocked)"]
+            port_from: ["f18ee71:packages/engine/src/extract/typescript.ts + tests", "21754b4:packages/cpg-generator/src/imports.ts (the TS SEAT, now unblocked)"]
       - id: U6c
         name: IMPORTS resolution, SYMBOL channel, the chain, and the harness v1
         stories:
@@ -629,9 +639,9 @@ milestones:
               - "C-RESOLVE suite (44) green; INV-10c and INV-4 shown to fail against a deliberately broken chain"
               - "FixtureResolver is a test double in packages/resolve/test"
             port_from:
-              - "archive/discovery-20260916:packages/cpg-generator/src/{chain,nullResolver,pythonPath}.ts"
-              - "archive/discovery-20260916:src/dev/fakeResolver.ts"
-              - "archive/discovery-20260916:packages/file-watcher/src/resolvePass.ts (ADAPT)"
+              - "21754b4:packages/cpg-generator/src/{chain,nullResolver,pythonPath}.ts"
+              - "21754b4:src/dev/fakeResolver.ts"
+              - "21754b4:packages/file-watcher/src/resolvePass.ts (ADAPT)"
             decisions: [DQ-03, DQ-09]
             lessons: [L-13, L-46]
           - id: U6c.2
@@ -723,7 +733,7 @@ milestones:
             title: BasedpyrightResolver over stdio through ProcessHost
             epic: E-RESOLVE
             acceptance: ["spawns basedpyright-langserver via the injected ProcessHost; waits on initialized + progress tokens (4 s budget); concurrency cap 12 (re-measured); LocationLink targetSelectionRange preferred; self-edge suppression; indexed-only filtering with unresolved-not-external; dedupe -> ambiguous 0.5; path canonicalization to the walker's literal form; never throws; fileChanged forwards didChange; restart budget 3 then degraded; every failure a Resolution with a reason"]
-            port_from: ["archive/discovery-20260916:src/resolve/vscodeDefinitionResolver.ts (the nine behaviors)"]
+            port_from: ["21754b4:src/resolve/vscodeDefinitionResolver.ts (the nine behaviors)"]
             contracts: [C-RESOLVE]
           - id: U8.1.2
             title: EVAL_TYPE admission and the receiver-type edge
@@ -781,7 +791,7 @@ milestones:
         name: apps/mcp
         stories:
           - { id: U10.1.1, title: "Dual-era stdio shim reading the store", epic: E-LAYOUT, acceptance: ["@modelcontextprotocol/server v2 serveStdio; AM-6 re-verified first (SU-13) and the result recorded; --workspace explicit; discovers the store via config (no daemon, ND-1)"], decisions: [ND-1, VD-35, AM-6] }
-          - { id: U10.1.2, title: "The <=12 tools and cpg://schema", epic: E-RESOLVE, acceptance: ["find_symbol, symbol_details, file_outline, list_files, callers_of, callees_of, imports, impact_of_change, path_between, graph_status, wait_for_ready, query_cypher (listed last) + cpg://schema (from serialize.ts); which 2–3 analytics tools make the 12 decided and recorded (AM-3 open item)"], port_from: ["archive/master-20260916:packages/engine/src/schema/serialize.ts"] }
+          - { id: U10.1.2, title: "The <=12 tools and cpg://schema", epic: E-RESOLVE, acceptance: ["find_symbol, symbol_details, file_outline, list_files, callers_of, callees_of, imports, impact_of_change, path_between, graph_status, wait_for_ready, query_cypher (listed last) + cpg://schema (from serialize.ts); which 2–3 analytics tools make the 12 decided and recorded (AM-3 open item)"], port_from: ["27361a3:packages/engine/src/schema/serialize.ts"] }
       - id: U10.2
         name: Overlay job and reserved tiers
         stories:

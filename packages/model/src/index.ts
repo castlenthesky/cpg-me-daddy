@@ -9,11 +9,14 @@
 // the dependency graph, not in a comment — so the vocabulary now owns a package
 // and everyone depends on it, rather than on whoever happened to declare it.
 //
-// Zero imports, deliberately, and enforced by `tools/check-deps.mjs`. This file
+// No imports from outside this package, enforced by `tools/check-deps.mjs`. This file
 // is required (or type-imported) from both a CommonJS/Node context (the CLI,
 // the extension host) and a browser/ESM context (the webview) — pulling in
 // anything here would pull that dependency's runtime into whichever side merely
 // wants the types.
+
+import type { WorkspacePath } from './paths';
+import type { PropertyOwner } from './schema';
 
 /**
  * A range in a source file, in exactly the coordinate system
@@ -31,15 +34,15 @@
  * every consumer below inherits the bug.
  */
 export interface SourceRange {
-  startRow: number;
-  startColumn: number;
-  endRow: number;
-  endColumn: number;
+  readonly startRow: number;
+  readonly startColumn: number;
+  readonly endRow: number;
+  readonly endColumn: number;
 }
 
 /**
  * Everything a host needs to open a node's source and put the cursor on it —
- * carried in `GraphNode.data.location` and read back through `nodeLocation`.
+ * carried in `GraphNode.data.location` and read back through `readNodeLocation`.
  *
  * `range` is the construct's full extent (the whole method, the whole class)
  * and is what to frame in the viewport. `nameRange` is the construct's
@@ -51,10 +54,10 @@ export interface SourceRange {
  * in which case `range` is the only sensible target.
  */
 export interface NodeLocation {
-  /** Absolute path, the same one that is the file node's own `id`. */
-  filePath: string;
-  range: SourceRange;
-  nameRange?: SourceRange;
+  /** The owning file, workspace-relative (DQ-02). Never `'.'`: the root is not a source file. */
+  readonly filePath: WorkspacePath;
+  readonly range: SourceRange;
+  readonly nameRange?: SourceRange;
 }
 
 /**
@@ -66,14 +69,14 @@ export interface NodeLocation {
  */
 export interface GraphNode {
   /** Unique across the whole payload. A file path today. */
-  id: string;
-  type: string;
+  readonly id: string;
+  readonly type: string;
   /**
    * Short display name — the basename for files/directories, never a full
    * path (that's `id`). Falls back to `id` if omitted.
    */
-  name?: string;
-  data?: Record<string, unknown>;
+  readonly name?: string;
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -82,12 +85,12 @@ export interface GraphNode {
  * hierarchy edge type additionally seed the radial layout.
  */
 export interface GraphEdge {
-  source: string;
-  target: string;
-  type?: string;
+  readonly source: string;
+  readonly target: string;
+  readonly type?: string;
   /**
    * Open property bag, same contract as `GraphNode.data` — read back through a
-   * typed accessor (`edgeResolution`) rather than by indexing, so only one
+   * typed accessor (`readEdgeResolution`) rather than by indexing, so only one
    * place knows each key's shape.
    *
    * Nothing in the renderer reads it, and that is not an oversight: the link
@@ -97,7 +100,7 @@ export interface GraphEdge {
    * provenance a *producer* needs to keep and a *host* may want to surface —
    * not a rendering channel.
    */
-  data?: Record<string, unknown>;
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -110,145 +113,173 @@ export interface GraphEdge {
  * failing to typecheck across a package boundary.
  */
 export interface EdgeResolution {
-  status: string;
+  readonly status: string;
   /** The resolver id that produced this answer, so provenance is inspectable per edge rather than per run. */
-  resolvedBy: string;
-  confidence?: number;
-  reason?: string;
+  readonly resolvedBy: string;
+  /** In [0, 1], as C-RESOLVE defines it. */
+  readonly confidence?: number;
+  readonly reason?: string;
 }
 
 /**
- * Reads back the resolution a producer stored on a reference node — how a
- * `CALL`/`IMPORT` explains itself when it has no outgoing edge.
- *
- * Mirrored onto the node as well as the edge because the interesting cases are
- * exactly the ones with *no* edge: a builtin, or a reference nothing could
- * resolve. Edge-only provenance can't describe an absent edge.
+ * A full snapshot. `seq` is the seq of the last delta folded in; a payload that has applied nothing
+ * has seq -1 (the same as a fresh `SinkState.highWaterSeq`).
  */
-export function nodeResolution(node: GraphNode): EdgeResolution | undefined {
-  return readResolution(node.data?.['resolution']);
-}
-
-/** Reads back what a producer stored in `edge.data` — the mirror of `nodeLocation`, and the only place that knows the key and shape. */
-export function edgeResolution(edge: GraphEdge): EdgeResolution | undefined {
-  return readResolution(edge.data?.['resolution']);
-}
-
-// Type guard rather than `as`: narrows `unknown` to a property bag without an unchecked assertion.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function readResolution(candidate: unknown): EdgeResolution | undefined {
-  if (!isRecord(candidate)) {
-    return undefined;
-  }
-  if (typeof candidate['status'] !== 'string' || typeof candidate['resolvedBy'] !== 'string') {
-    return undefined;
-  }
-  return {
-    status: candidate['status'],
-    resolvedBy: candidate['resolvedBy'],
-    ...(typeof candidate['confidence'] === 'number' ? { confidence: candidate['confidence'] } : {}),
-    ...(typeof candidate['reason'] === 'string' ? { reason: candidate['reason'] } : {}),
-  };
-}
-
 export interface GraphPayload {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+  readonly seq: number;
+  readonly nodes: readonly GraphNode[];
+  readonly edges: readonly GraphEdge[];
 }
 
 /**
- * The minimal add/remove needed to bring a previously-sent `GraphPayload` up
- * to date, instead of resending the whole workspace on every change.
+ * The F-1 envelope: the minimal add/remove that brings a `GraphPayload` at `seq - 1` up to `seq`,
+ * instead of resending the whole workspace on every change.
  *
- * Removed edges are never listed explicitly — `removedNodeIds` implies them,
- * since an edge touching a removed node can't meaningfully remain (see
- * `applyGraphDelta`, which drops such edges rather than requiring the producer
- * to enumerate them).
+ * Removed edges are never listed explicitly — `removedNodeIds` implies them, since an edge touching
+ * a removed node can't meaningfully remain (`applyGraphDelta` drops such edges).
  *
- * CONFORMANCE HAZARD, and the reason `applyGraphDelta` has a characterization
- * test: an *update* to an existing node must be expressed as a removal plus an
- * addition. Putting a changed node in `addedNodes` alone appends a second copy
- * with the same id. This is the delta-protocol shape of the historical
- * reconciler bug where real files kept looking "missing" and duplicate nodes
- * accumulated on every pass.
+ * Re-adding an id that is already present MERGES in place, by per-property owner: the `producer`
+ * tier's keys are replaced and the other tier's keys are kept (DQ-01c). That is how a FILE carries
+ * both the walker's `content_hash` and the code tier's `interface_hash` without the historical
+ * duplicate-node bug (L-01). A same-tier re-add of a delete-create label without removing it first
+ * is malformed; remove-then-add is the whole-replace form.
  */
 export interface GraphDelta {
-  addedNodes: GraphNode[];
-  addedEdges: GraphEdge[];
-  removedNodeIds: string[];
+  /** Per-workspace, allocated by SINK (F-1). */
+  readonly seq: number;
+  /** The owning file. */
+  readonly file: WorkspacePath;
+  /** The owning file's content hash; also on each added node (not checked by `applyGraphDelta`). */
+  readonly revision_id: string;
+  /** The tier that produced this delta: the discriminant of the owner merge. */
+  readonly producer: PropertyOwner;
+  readonly addedNodes: readonly GraphNode[];
+  readonly addedEdges: readonly GraphEdge[];
+  readonly removedNodeIds: readonly string[];
 }
 
-/** Producer/engine → host. */
+/** The webview protocol's version (C-EXT): every host message carries it, and `ready` reports the page's. */
+export const CPG_PROTOCOL_VERSION = 1 as const;
+
+/** Engine-assigned ordering number of a payload or delta (F-1). */
+export type Seq = number;
+/** Host-assigned; bumps on every full (`cause: 'initial'`) snapshot (C-EXT I-13). */
+export type Epoch = number;
+
+/** The shared verify check ids (05-contracts.yaml shared.verify_check_ids), in enum order. */
+export type VerifyCheckId =
+  | 'filesystem-reconciliation'
+  | 'identity-invariants'
+  | 'id-uniqueness'
+  | 'render-reconciliation'
+  | 'revision-reconciliation'
+  | 'resolution-health';
+
+/** Worst-of ordering: fail > stale > unavailable > pass. */
+export type CheckState = 'pass' | 'fail' | 'stale' | 'unavailable';
+
+/** One verify check's result: C-CLI's VerifyReport and C-EXT's VerificationReport share it. */
+export interface CheckResult {
+  readonly id: VerifyCheckId;
+  readonly state: CheckState;
+  readonly observed: number;
+  readonly expected: number;
+  /** The offending workspace paths (directories or files) or keys, sorted. */
+  readonly localisedTo: readonly string[];
+  readonly detail?: string;
+  /** The graph's seq, snapshotted before the check's first await. */
+  readonly asOfSeq: number;
+}
+
+/** The verdict shown beside the graph (C-EXT; 08-verification §3.3). */
+export interface VerificationReport {
+  readonly epoch: Epoch;
+  readonly seq: Seq;
+  /** All six, once each, in enum order (C-EXT I-18). */
+  readonly checks: readonly CheckResult[];
+  /** The worst state of `checks`. */
+  readonly state: CheckState;
+}
+
+/** The host's theme (C-EXT). The browser inspector does not send one yet (controller decision 14). */
+export interface ThemeSnapshot {
+  readonly kind: 'light' | 'dark' | 'high-contrast-light' | 'high-contrast-dark';
+  readonly nodeColors: Readonly<Record<string, string>>;
+  readonly defaultNodeColor: string;
+}
+
+/** What the renderer drew, for render-reconciliation (C-EXT I-10, owner decision 12a). */
+export interface RenderReport {
+  /** `payload.nodes.length`, duplicate ids included. */
+  readonly payloadNodeCount: number;
+  /** Distinct payload node ids drawn as a point. */
+  readonly renderedNodeCount: number;
+  /** Distinct (source, target, type) edges drawn. */
+  readonly renderedEdgeCount: number;
+  /** Payload edges that repeat an earlier edge's (source, target, type), so draw once (12a). */
+  readonly duplicateEdges: number;
+  /** A capped sample of the ids with a payload entry left undrawn. */
+  readonly droppedNodeIds: readonly string[];
+  readonly frameMs: number;
+}
+
+/** Host → webview (C-EXT HostToWebviewMessage). */
 export type HostToWebview =
-  | { type: 'graph'; payload: GraphPayload }
-  | { type: 'graph-delta'; delta: GraphDelta };
+  | {
+      readonly type: 'theme';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly theme: ThemeSnapshot;
+    }
+  | {
+      readonly type: 'graph';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly payload: GraphPayload;
+    }
+  | {
+      readonly type: 'graph-delta';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly delta: GraphDelta;
+    }
+  | {
+      readonly type: 'verification';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly report: VerificationReport;
+    };
 
 /**
- * Host → producer/engine.
+ * Webview → host (C-EXT WebviewToHostMessage).
  *
  * `reveal` carries only the node id, never the location itself: the host
  * already holds the authoritative merged payload and resolves the id against
  * it, so there is one source of truth for where a node points and no way for a
  * stale view to ask the host to open a range that no longer exists.
  */
-export type WebviewToHost = { type: 'ready' } | { type: 'reveal'; nodeId: string };
+export type WebviewToHost =
+  | { readonly type: 'ready'; readonly protocol: number }
+  | { readonly type: 'reveal'; readonly nodeId: string }
+  | {
+      readonly type: 'resync';
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly reason: 'gap' | 'stale-epoch' | 'render-error';
+    }
+  | {
+      readonly type: 'render-report';
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly report: RenderReport;
+    };
 
-function isSourceRange(value: unknown): value is SourceRange {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const range = value;
-  return (
-    typeof range['startRow'] === 'number' &&
-    typeof range['startColumn'] === 'number' &&
-    typeof range['endRow'] === 'number' &&
-    typeof range['endColumn'] === 'number'
-  );
-}
-
-/**
- * Reads back the `NodeLocation` a producer stored in `node.data.location`, or
- * `undefined` for a node that has none.
- *
- * `GraphNode.data` is deliberately an open bag, so this is the one place that
- * knows the key and shape — the alternative is every consumer hand-casting the
- * same untyped fields and drifting from the producer. An `undefined` result is
- * routine, not an error: `directory` nodes have no source position at all, and
- * a `file` node doesn't need one (its `id` is already the path).
- */
-export function nodeLocation(node: GraphNode): NodeLocation | undefined {
-  const location = node.data?.['location'];
-  if (!isRecord(location)) {
-    return undefined;
-  }
-  const candidate = location;
-  if (typeof candidate['filePath'] !== 'string' || !isSourceRange(candidate['range'])) {
-    return undefined;
-  }
-  return {
-    filePath: candidate['filePath'],
-    range: candidate['range'],
-    ...(isSourceRange(candidate['nameRange']) ? { nameRange: candidate['nameRange'] } : {}),
-  };
-}
-
-/**
- * Merges a `GraphDelta` into a `GraphPayload`, dropping any edge that touches a
- * removed node. Shared by every host that keeps a full-snapshot state to
- * re-send on reconnect, and available to any other consumer that needs the
- * merged shape rather than the delta itself.
- *
- * Pure: neither argument is mutated.
- */
-export function applyGraphDelta(payload: GraphPayload, delta: GraphDelta): GraphPayload {
-  const removed = new Set(delta.removedNodeIds);
-  return {
-    nodes: payload.nodes.filter((node) => !removed.has(node.id)).concat(delta.addedNodes),
-    edges: payload.edges
-      .filter((edge) => !removed.has(edge.source) && !removed.has(edge.target))
-      .concat(delta.addedEdges),
-  };
-}
+export * from './delta';
+export * from './read';
+export * from './payload';
+export * from './schema';
+export * from './paths';
+export * from './digest';

@@ -9,7 +9,24 @@
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,
-    "sourceMap": false
+    "sourceMap": false,
+    // contracts-agree (apps/cli) is the first test importing @cpg/* by package name. Without paths it
+    // would resolve through node_modules to dist/*.d.ts, which typecheck:tests does not build first.
+    // Listed one by one: @cpg/cli and @cpg/vscode-host live under apps/, so no @cpg/* wildcard.
+    "paths": {
+      "@cpg/engine": ["./packages/engine/src/index.ts"],
+      "@cpg/model": ["./packages/model/src/index.ts"],
+      "@cpg/parse": ["./packages/parse/src/index.ts"],
+      "@cpg/resolve": ["./packages/resolve/src/index.ts"],
+      "@cpg/sink": ["./packages/sink/src/index.ts"],
+      "@cpg/store": ["./packages/store/src/index.ts"],
+      "@cpg/watch": ["./packages/watch/src/index.ts"]
+    }
   },
-  "include": ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.test-d.ts", "src/**/*.test.ts"]
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "packages/*/src/**/*.test-d.ts",
+    "apps/*/src/**/*.test.ts",
+    "apps/*/src/**/*.test-d.ts"
+  ]
 }

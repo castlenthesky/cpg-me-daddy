@@ -418,7 +418,7 @@ research_amendments:
   - { id: AM-7, text: "Cache tree-sitter trees only for open documents + LRU(100); tree.delete() on eviction; getChangedRanges is a hint not a bound; guard tree.edit with a periodic S-expression equality check.", status: in-force (U6) }
 
 delivery_decisions_carried:
-  - { id: DL-1,  text: "The correctness fixture lives in-repo under test/fixtures, not an external repo.", status: in-force (restore from archive/master-20260916 and archive/m0-calls-symbols-20260916 goldens at U6a) }
+  - { id: DL-1,  text: "The correctness fixture lives in-repo under test/fixtures, not an external repo.", status: in-force (restore from 27361a3 and f18ee71 goldens at U6a) }
   - { id: DL-2,  text: "Near units sliced PR-by-PR; far units named with exit criteria and sliced later.", status: "in-force (07-milestones — U0–U6 have stories; U7–U10 have features and exit criteria)" }
   - { id: DL-3,  text: "CI stood up in the first unit so every later unit has somewhere to be gated.", status: in-force (U0.1) }
   - { id: DL-4,  text: "packages/engine + cli + vscode layout.", status: superseded by DQ-08 (packages/ + apps/) }

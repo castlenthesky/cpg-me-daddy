@@ -1,12 +1,16 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "out",
-    // Inside outDir so deleting out/ always forces a re-emit (never a stale "up to date").
-    "tsBuildInfoFile": "out/.tsbuildinfo",
-    "rootDir": "."
-  },
-  "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "packages/model" }]
+  // Solution-style: builds nothing itself, so `tsc -b` builds each project into its own dist/.
+  "files": [],
+  "references": [
+    { "path": "packages/model" },
+    { "path": "packages/parse" },
+    { "path": "packages/resolve" },
+    { "path": "packages/watch" },
+    { "path": "packages/engine" },
+    { "path": "packages/store" },
+    { "path": "packages/sink" },
+    { "path": "apps/vscode" },
+    { "path": "apps/cli" },
+    { "path": "apps/inspector" }
+  ]
 }

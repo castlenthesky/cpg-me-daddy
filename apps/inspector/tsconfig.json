@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    // Inside outDir so deleting dist/ always forces a re-emit (never a stale "up to date").
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*"],
+  // graph-page.ts is the bundle entry: DOM and ESM-only cosmos.gl at runtime (tsconfig.page.json).
+  "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts", "src/graph-page.ts"],
+  "references": [{ "path": "../../packages/model" }]
+}

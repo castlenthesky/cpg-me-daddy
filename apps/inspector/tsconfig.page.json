@@ -1,0 +1,19 @@
+{
+  // Typechecks the page bundle's entry (src/graph-page.ts) the way esbuild sees it: the DOM lib,
+  // bundler resolution (cosmos.gl is ESM-only; the app is CommonJS under node16) and @cpg/model
+  // from source, so neither tsc nor tools/build-inspector.mjs depends on tsc -b having run.
+  // Run by `bun run typecheck` after tsc -b; esbuild reads its paths. noEmit: esbuild emits.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "ES2023.Array", "DOM"],
+    "paths": { "@cpg/model": ["../../packages/model/src/index.ts"] }
+  },
+  "files": ["src/graph-page.ts"]
+}

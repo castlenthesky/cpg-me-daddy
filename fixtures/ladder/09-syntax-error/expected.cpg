@@ -1,0 +1,11 @@
+# Rung 09. A file that does not parse cleanly. A syntax error is still a successful parse (C-PARSE I22).
+# The parser returns a walkable tree with hasError=true. What the extractor emits for the broken
+# region is not asserted yet (?Q5), so this rung has no code-tier sections.
+
+[parse]
+PARSE main.py language=python root=module hasError=true
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:main.py name=main.py language=python
+HAS_ENTRY dir:. -> file:main.py

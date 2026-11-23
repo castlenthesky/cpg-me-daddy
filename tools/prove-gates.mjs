@@ -26,6 +26,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const at = (p) => `${ROOT}/${p}`;
@@ -76,27 +77,34 @@ function verdict(r, c) {
 
 // Removes every probe a case may have planted, plus what `tsc -b` emits from them.
 function cleanupProbes() {
-  for (const dir of [
-    'packages/model/src',
-    'packages/model/dist',
-    'packages/ast-generator',
-    'src',
-  ]) {
+  for (const dir of ['packages/model/src', 'packages/model/dist']) {
     if (!existsSync(at(dir))) continue;
     for (const f of readdirSync(at(dir)))
       if (f.startsWith('__gate_probe')) rmSync(at(`${dir}/${f}`), { force: true });
   }
 }
 
-// A planted file in one of the trees check-deps scans.
-const depsCase = (name, file, body, expectOutput, extra = {}) => ({
-  name,
-  command: ['bun', 'run', '--silent', 'check:deps'],
-  expectOutput,
-  plant: () => writeFileSync(at(file), body),
-  cleanup: cleanupProbes,
-  ...extra,
-});
+// A planted file in one of the trees check-deps scans. An app that does not exist yet (apps/cli)
+// is created for the plant and removed with it.
+const depsCase = (name, file, body, expectOutput) => {
+  let made;
+  return {
+    name,
+    command: ['bun', 'run', '--silent', 'check:deps'],
+    expectOutput,
+    plant() {
+      made = mkdirSync(at(dirname(file)), { recursive: true });
+      writeFileSync(at(file), body);
+    },
+    cleanup() {
+      rmSync(at(file), { force: true });
+      if (made) rmSync(made, { recursive: true, force: true });
+    },
+  };
+};
+
+const buildCli = () =>
+  must(sh(ROOT, 'bun', ['run', '--silent', 'tsc', '-b', 'apps/cli']), 'build apps/cli');
 
 const runCheck = () =>
   spawnSync('bun', ['run', '--silent', 'check'], { cwd: ROOT, encoding: 'utf8', env: PLAIN_ENV });
@@ -145,8 +153,6 @@ const probeTest = (body) => () =>
     at('packages/model/src/__gate_probe.test.ts'),
     `import { expect, it } from 'vitest';\n\nit('gate probe', () => {\n${body}\n  expect(1).toBe(1);\n});\n`,
   );
-
-const NUL = String.fromCharCode(0); // never write a literal NUL byte into this file
 
 const CASES = [
   {
@@ -231,61 +237,74 @@ const CASES = [
     },
   },
   {
-    name: 'check:deps rejects a vscode import in packages/**',
-    expectOutput: /cli-purity/,
-    command: ['bun', 'run', '--silent', 'check:deps'],
+    name: 'check:coords rejects an archive coordinate that does not resolve',
+    expectOutput: /__gate_probe\.md:1 +27361a3:packages\/engine\/src\/schema\/nope\.ts/,
+    command: ['bun', 'run', '--silent', 'check:coords'],
     plant() {
       writeFileSync(
-        at('packages/model/src/__gate_probe.ts'),
-        "import * as vscode from 'vscode';\nexport const probe = vscode;\n",
+        at('docs/outline/__gate_probe.md'),
+        'Port `27361a3:packages/engine/src/schema/nope.ts`.\n',
       );
     },
     cleanup() {
-      rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+      rmSync(at('docs/outline/__gate_probe.md'), { force: true });
     },
   },
+  // check:deps on the real tree: the three tier violations U0.2.2 names, one per rule. Every other
+  // rule and specifier form is planted on fixtures in tools/check-deps.test.mjs; the case after
+  // these proves `bun run test` runs that file.
   depsCase(
-    'check:deps rejects a non-relative import in packages/model/src (model-zero-deps)',
+    'check:deps rejects a value import in a seam contract.ts (contract-types-only)',
+    'packages/resolve/src/__gate_probe/contract.ts',
+    "import { WORKSPACE_ROOT } from '@cpg/model';\nexport type R = typeof WORKSPACE_ROOT;\n",
+    /contract\.ts:1 +\[contract-types-only\]/,
+  ),
+  depsCase(
+    'check:deps rejects a vscode import in packages/model (host-sdk)',
     'packages/model/src/__gate_probe.ts',
-    "import { probe } from 'left-pad';\nexport const value = probe;\n",
-    /model-zero-deps.*__gate_probe|__gate_probe.*model-zero-deps/s,
+    "import * as vscode from 'vscode';\nexport const probe = vscode;\n",
+    /__gate_probe\.ts:1 +\[host-sdk\]/,
   ),
   depsCase(
-    'check:deps rejects a deep import of @cpg/model from src/ (deep-import)',
-    'src/__gate_probe.ts',
-    "export { x } from '@cpg/model/dist/index';\n",
-    /deep-import/,
+    'check:deps rejects the MCP SDK in apps/vscode (app-tier)',
+    'apps/vscode/src/__gate_probe.ts',
+    "import { Server } from '@modelcontextprotocol/sdk';\nexport const probe = Server;\n",
+    /__gate_probe\.ts:1 +\[app-tier\]/,
   ),
   depsCase(
-    'check:deps rejects a NUL byte in source (nul-byte)',
-    'packages/model/src/__gate_probe.ts',
-    `export const probe = 1; // ${NUL}\n`,
-    /nul-byte/,
+    'check:deps rejects a createEngine() call under packages/** (engine-call-site)',
+    'packages/sink/src/__gate_probe.ts',
+    "import { createEngine } from '@cpg/engine';\nexport const e = createEngine({ version: '0' }, { sinks: [] });\n",
+    /__gate_probe\.ts:2 +\[engine-call-site\]/,
   ),
   depsCase(
-    "check:deps rejects a bare side-effect import 'vscode' in packages/** (cli-purity)",
-    'packages/ast-generator/__gate_probe.ts',
-    "import 'vscode';\n",
-    /cli-purity/,
+    'check:deps rejects a deep import of @cpg/model in apps/cli (deep-import)',
+    'apps/cli/src/__gate_probe.ts',
+    "export { x } from '@cpg/model/dist/x';\n",
+    /__gate_probe\.ts:1 +\[deep-import\]/,
   ),
   depsCase(
-    'check:deps rejects a double-quoted bare import "vscode" in packages/** (cli-purity)',
-    'packages/ast-generator/__gate_probe.ts',
-    'import "vscode";\n',
-    /cli-purity/,
+    'check:deps rejects a runtime @cpg/sink import in apps/cli (cli-runtime-import)',
+    'apps/cli/src/__gate_probe.ts',
+    "import { createMemoryStore } from '@cpg/sink';\nexport const probe = createMemoryStore;\n",
+    /__gate_probe\.ts:1 +\[cli-runtime-import\]/,
   ),
-  depsCase(
-    "check:deps rejects export * from 'vscode' in packages/** (cli-purity)",
-    'packages/ast-generator/__gate_probe.ts',
-    "export * from 'vscode';\n",
-    /cli-purity/,
-  ),
-  depsCase(
-    'check:deps rejects a multi-line import whose from is on a later line (cli-purity)',
-    'packages/ast-generator/__gate_probe.ts',
-    "import type {\n  Uri,\n  Range,\n}\n  from\n  'vscode';\nexport type { Uri, Range };\n",
-    /cli-purity/,
-  ),
+  {
+    // The check-deps rules are proven by fixtures in tools/check-deps.test.mjs. If the vitest
+    // include stopped matching tools/, that proof would vanish while `bun run test` stayed green.
+    name: 'bun run test runs tools/*.test.mjs (the check-deps rule fixtures run under the check)',
+    expectOutput: /__gate_probe\.test\.mjs/,
+    command: ['bun', 'run', '--silent', 'test'],
+    plant() {
+      writeFileSync(
+        at('tools/__gate_probe.test.mjs'),
+        "import { expect, it } from 'vitest';\nit('probe', () => {\n  expect(1).toBe(2);\n});\n",
+      );
+    },
+    cleanup() {
+      rmSync(at('tools/__gate_probe.test.mjs'), { force: true });
+    },
+  },
   {
     // Realistic failure: a test-d file escapes the tsconfig exclusion and tsc emits it into dist.
     // Plants the dist files directly (what `tsc -b` would emit) and runs the tarball gate.
@@ -314,6 +333,73 @@ const CASES = [
       rmSync(at('packages/model/dist/__gate_probe.js'), { force: true });
     },
   },
+  (() => {
+    // Realistic failure: main.ts stops assigning process.exitCode, so every error exits 0. Only
+    // spawning the BUILT bin can see that; the in-process run() tests stay green.
+    const file = at('apps/cli/src/main.ts');
+    const from = 'process.exitCode = code;';
+    let original = '';
+    return {
+      name: 'check:cli-bin rejects a built bin that exits 0 on an unknown verb',
+      expectOutput: /cpg frobnicate: expected exit 2/,
+      command: ['bun', 'run', '--silent', 'check:cli-bin'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        if (!original.includes(from)) throw new Error(`main.ts no longer contains: ${from}`);
+        writeFileSync(file, original.replace(from, 'void code;'));
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+        // Rebuild so the probe's dist/main.js never outlives the probe.
+        must(sh(ROOT, 'bun', ['run', '--silent', 'tsc', '-b', 'apps/cli']), 'rebuild apps/cli');
+      },
+    };
+  })(),
+  (() => {
+    // The runtime purity proof on the real engine (U2c.3, CS-6): a vscode import planted in
+    // packages/engine's source and built into dist must fail check:purity, named by the trap with
+    // the file that asked for it. Builds before the run and again after the restore, so the
+    // probe's dist/index.js never outlives the probe.
+    const file = at('packages/engine/src/index.ts');
+    let original = '';
+    return {
+      name: 'check:purity rejects a vscode import planted in packages/engine (Module._load trap)',
+      expectOutput: /"vscode" requested by packages\/engine\/dist\/index\.js/,
+      command: ['bun', 'run', '--silent', 'check:purity'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        writeFileSync(file, `${original}import 'vscode';\n`);
+        buildCli();
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+        buildCli();
+      },
+    };
+  })(),
+  (() => {
+    // The real gate on the real file: `bun run schema:doc --check` (also proves the literal
+    // `--check` pass-through of the package script) must reject a hand edit of the generated region.
+    const file = at('docs/outline/04-schema.yaml');
+    let original = '';
+    return {
+      name: 'check:schema rejects a hand edit inside the generated region of 04-schema.yaml',
+      expectOutput: /generated region is stale/,
+      command: ['bun', 'run', '--silent', 'schema:doc', '--check'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        if (!original.includes('# Node labels ('))
+          throw new Error('04-schema.yaml no longer contains the generated region header');
+        writeFileSync(
+          file,
+          original.replace('# Node labels (', () => '# Node label ('),
+        );
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+      },
+    };
+  })(),
   {
     name: 'typecheck rejects a type error',
     expectOutput: /TS2322/,
@@ -333,6 +419,24 @@ const CASES = [
       rmSync(at('packages/model/dist/__gate_probe.js.map'), { force: true });
     },
   },
+  (() => {
+    // tsc -b skips the page bundle's entry (DOM and ESM-only cosmos.gl at runtime), so `typecheck`
+    // also runs tsconfig.page.json. TS2322 (not "cannot find name") proves the DOM lib is in force.
+    const file = at('apps/inspector/src/graph-page.ts');
+    let original = '';
+    return {
+      name: 'typecheck rejects a type error in the inspector page entry (tsconfig.page.json)',
+      expectOutput: /graph-page\.ts\(\d+,\d+\): error TS2322/,
+      command: ['bun', 'run', '--silent', 'typecheck'],
+      plant() {
+        original = readFileSync(file, 'utf8');
+        writeFileSync(file, `${original}\nexport const probe: number = document.title;\n`);
+      },
+      cleanup() {
+        if (original) writeFileSync(file, original);
+      },
+    };
+  })(),
   {
     name: 'bun run test fails on a failing test (and a glob matching nothing is not a pass)',
     expectOutput: /__gate_probe\.test\.ts/,
@@ -509,19 +613,36 @@ const CASES = [
   },
   {
     // Uncovered mutants count against the score, so an untested file must push it under `break`.
+    // Only the probe is mutated, so the score is the probe's own (0) however much tested code
+    // exists: a fixed-size probe in the full mutate set stopped crossing `break` once U1's
+    // validator tests landed. The planted test imports the probe and calls nothing; without it,
+    // vitest finds no test related to the probe and Stryker aborts before scoring.
     slow: true,
     name: 'test:mutation rejects an untested source file (break threshold)',
     expectOutput: /threshold|break/i,
-    command: ['bun', 'run', '--silent', 'test:mutation'],
+    command: [
+      'bun',
+      'run',
+      '--silent',
+      'test:mutation',
+      '--mutate',
+      'packages/model/src/__gate_probe.ts',
+    ],
     plant() {
       const body = Array.from(
         { length: 40 },
         (_, i) => `export function probe${i}(x: number): number {\n  return x + ${i};\n}\n`,
       ).join('\n');
       writeFileSync(at('packages/model/src/__gate_probe.ts'), body);
+      writeFileSync(
+        at('packages/model/src/__gate_probe.test.ts'),
+        "import { expect, test } from 'vitest';\nimport * as probe from './__gate_probe';\n\n" +
+          "test('loads the probe', () => {\n  expect(probe).toBeDefined();\n});\n",
+      );
     },
     cleanup() {
       rmSync(at('packages/model/src/__gate_probe.ts'), { force: true });
+      rmSync(at('packages/model/src/__gate_probe.test.ts'), { force: true });
       // Drop incremental state so planted mutants cannot colour the next real run.
       rmSync(at('reports/stryker-incremental.json'), { force: true });
     },
@@ -587,12 +708,12 @@ const CASES = [
     plant: probeTest("  console.log('probe');"),
   }),
   configCase({
-    name: 'test: a vitest.config.mts-only edit (coverage threshold 99) invalidates the turbo cache',
+    name: 'test: a vitest.config.mts-only edit (coverage threshold 100) invalidates the turbo cache',
     task: 'test:coverage',
     file: 'vitest.config.mts',
     from: 'lines: 95,',
-    to: 'lines: 99,',
-    expectOutput: /does not meet global threshold \(99%\)/,
+    to: 'lines: 100,',
+    expectOutput: /does not meet global threshold \(100%\)/,
   }),
   configCase({
     name: 'typecheck: a tsconfig.base.json-only edit (noPropertyAccessFromIndexSignature) invalidates the turbo cache',
@@ -609,7 +730,7 @@ const CASES = [
     file: '.oxfmtrc.json',
     from: '"singleQuote": true,',
     to: '"singleQuote": false,',
-    expectOutput: /src\/extension\.ts/,
+    expectOutput: /apps\/vscode\/src\/extension\.ts/,
   }),
   configCase({
     name: 'knip: a knip.json-only edit (drop the tools entry) invalidates the turbo cache',
@@ -618,6 +739,16 @@ const CASES = [
     from: '"entry": ["tools/*.mjs"],',
     to: '"entry": [],',
     expectOutput: /claude-post-edit\.mjs/,
+  }),
+  configCase({
+    // Nothing else hashes docs/**: without the doc as a task input a hand edit replays a cached pass,
+    // and the same run proves `bun run check` itself runs check:schema.
+    name: 'check:schema: a 04-schema.yaml-only edit (hand edit in the generated region) invalidates the turbo cache',
+    task: 'check:schema',
+    file: 'docs/outline/04-schema.yaml',
+    from: '# Node labels (',
+    to: '# Node label (',
+    expectOutput: /generated region is stale/,
   }),
 ];
 

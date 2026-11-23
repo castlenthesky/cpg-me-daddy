@@ -13,8 +13,12 @@ const GATES = [
   'knip',
   'check:deps',
   'check:pack',
+  'check:coords',
+  'check:schema',
   'typecheck',
   'typecheck:tests',
+  'check:cli-bin',
+  'check:purity',
   'test:coverage',
 ];
 

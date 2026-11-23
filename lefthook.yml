@@ -13,11 +13,12 @@ pre-commit:
       glob: '*.{ts,mts,cts,js,mjs,cjs,json,jsonc,md,yml,yaml}'
       stage_fixed: true
     # Fails the commit: lint findings need a human decision. Only ts/js (type-aware rules
-    # still resolve through tsconfig).
+    # still resolve through tsconfig). A commit whose only staged ts/js files are in
+    # .oxlintrc.json ignorePatterns (fixtures/**/ws/**) has nothing to lint, which is not an error.
     - name: oxlint
-      run: bun run --silent oxlint -- --deny-warnings {staged_files}
+      run: bun run --silent oxlint -- --deny-warnings --no-error-on-unmatched-pattern {staged_files}
       glob: '*.{ts,mts,cts,js,mjs,cjs}'
-    # Whole-repo (cheap, ~50ms): dependency direction is a global property, not per-file.
+    # Whole-repo (cheap, ~0.3s: one TypeScript parse per file): dependency direction is a global property, not per-file.
     - name: check-deps
       run: bun run --silent check:deps
 

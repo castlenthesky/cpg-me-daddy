@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    // Inside outDir so deleting dist/ always forces a re-emit (never a stale "up to date").
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
+  "references": [{ "path": "../model" }, { "path": "../store" }]
+}

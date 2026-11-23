@@ -9,6 +9,9 @@ export default {
   tsconfigFile: 'tsconfig.json',
   // Only shipped source of the one real package; tests are the oracle, never mutated.
   mutate: ['packages/model/src/**/*.ts', '!**/*.test.ts', '!**/*.test-d.ts'],
+  // Agent config is not needed in the sandbox, and .claude/* are symlinks into .agents/ whose
+  // targets are empty dirs that git does not keep, so a fresh checkout cannot copy them.
+  ignorePatterns: ['.claude', '.agents'],
   // Re-tests only mutants whose code or tests changed. The file lives in reports/ (gitignored);
   // CI should cache it between runs.
   incremental: true,

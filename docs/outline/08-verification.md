@@ -96,7 +96,7 @@ Every rule below has been seen to fail on a planted violation, or is not a rule.
 | schema drift: `04-schema.yaml`'s generated region equals code | `bun run schema:doc --check` | U1 |
 | `receipt.statementCount === 1` for every replace-file | vitest (integration) | U5 |
 | structural nodes/LOC ≤ 1.5 over the fixture corpus (per-file warning) | vitest | U6 |
-| every archive coordinate cited in `docs/outline` resolves (`git rev-parse` the tag, `git cat-file -e` the path) | `tools/check-coordinates.mjs` | follow-up (12-retirement) |
+| every archive coordinate cited in `docs/outline` resolves (`git cat-file -e <sha>:<path>`, globs and braces expanded) | `tools/check-archive-coords.mjs` | in `bun run check` |
 | no live document cites a retired path (the list is defined in `12-retirement.md` §3 step 7, which is the only file exempt from the check) | `tools/check-citations.mjs` | follow-up |
 | registered MCP tools ≤ 12 | vitest | U10 |
 | reserved CFG/PDG/expression names never emitted by default | vitest | U10 |

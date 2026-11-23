@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['packages/*/src/**/*.test.ts', 'src/**/*.test.ts'],
+    include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'tools/**/*.test.mjs'],
     environment: 'node',
     // Explicit (it is also the default): a glob that matches nothing must FAIL,
     // so a moved/renamed test dir can never turn the suite silently green.
@@ -14,8 +14,19 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       // Only shipped source; `all` behaviour means an untested new file counts as 0%.
-      include: ['packages/*/src/**'],
-      exclude: ['**/*.test.ts', '**/*.test-d.ts'],
+      include: ['packages/*/src/**', 'apps/*/src/**'],
+      // apps/cli/src/main.ts is the process wrapper: tools/check-cli-bin.mjs spawns it, vitest cannot.
+      // apps/vscode/src/extension.ts needs the VS Code host to run; it is checked by F5, not vitest.
+      // apps/inspector/src/graph-page.ts is the page bundle's entry: it needs a browser and WebGL.
+      // apps/inspector/src/main.ts is the inspector's process wrapper: bin.test.ts spawns it.
+      exclude: [
+        '**/*.test.ts',
+        '**/*.test-d.ts',
+        'apps/cli/src/main.ts',
+        'apps/vscode/src/extension.ts',
+        'apps/inspector/src/graph-page.ts',
+        'apps/inspector/src/main.ts',
+      ],
       reporter: ['text-summary', 'lcov', 'json-summary'],
       // Thresholds ONLY RATCHET UP. Set to measured coverage rounded down to the
       // nearest 5 (lines/statements 95.65, branches 96.42, functions 100).

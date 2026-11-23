@@ -1,0 +1,24 @@
+{
+  "name": "@cpg/engine",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The composition root's parts: createEngine and the CpgEngine port, the workspace walker, the filesystem tier and NullGraphStore (U2a.2).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@cpg/model": "*",
+    "@cpg/parse": "*",
+    "@cpg/resolve": "*",
+    "@cpg/sink": "*",
+    "@cpg/store": "*",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  }
+}

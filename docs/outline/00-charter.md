@@ -20,7 +20,7 @@ Source code - as a tool receives it - is a byte string. Every structure a progra
 
 ## 3. Why the previous two attempts failed, and what this charter changes
 
-This is the third attempt. The first (`archive/master-20260916`) was an engine-first monorepo writing a Joern-shaped graph into FalkorDB; it stalled because twelve gated units passed before any human saw a graph, and what they saw was a Cypher result table (L-22). The second (`archive/discovery-20260916`) was a visual-first redo; it produced a real picture quickly and then let the picture's types become the system's types, trapped the composition root inside the editor so that running headless required a 442-line duplicate harness, and shipped zero tests (L-26, L-28, L-30). Both attempts hid the same unowned component in the middle of the pipeline, and both had write paths that destroyed real data (L-01, L-02, L-03).
+This is the third attempt. The first (`27361a3`) was an engine-first monorepo writing a Joern-shaped graph into FalkorDB; it stalled because twelve gated units passed before any human saw a graph, and what they saw was a Cypher result table (L-22). The second (`21754b4`) was a visual-first redo; it produced a real picture quickly and then let the picture's types become the system's types, trapped the composition root inside the editor so that running headless required a 442-line duplicate harness, and shipped zero tests (L-26, L-28, L-30). Both attempts hid the same unowned component in the middle of the pipeline, and both had write paths that destroyed real data (L-01, L-02, L-03).
 
 This charter changes four things:
 

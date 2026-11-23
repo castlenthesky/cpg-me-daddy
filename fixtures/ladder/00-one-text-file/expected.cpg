@@ -1,0 +1,10 @@
+# Rung 00. One file no grammar claims. The smallest graph is one directory, one file and one edge.
+# Nothing parses, so the code tier is empty.
+
+[parse]
+SKIP notes.txt
+
+[filesystem]
+DIRECTORY dir:.
+FILE file:notes.txt name=notes.txt language=null
+HAS_ENTRY dir:. -> file:notes.txt
