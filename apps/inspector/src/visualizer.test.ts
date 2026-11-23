@@ -428,6 +428,17 @@ describe('GraphVisualizer.applyDelta', () => {
     expect(legend.texts('relationship')).toEqual(['Has entry (1)']);
   });
 
+  // Post-implementation (sabotage #72): a removed node's edges leave the edge set, so re-adding the
+  // node does not resurrect them (the archive's phantom-edge hazard).
+  it("does not bring back a removed node's edges when the node is re-added", () => {
+    const { viz, surface } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    viz.applyDelta(delta({ removedNodeIds: ['g'] }));
+    viz.applyDelta(delta({ addedNodes: [G] }));
+    expect(surface.links).toEqual([0, 1]);
+  });
+
   it('draws a re-delivered edge once (the archive appended, so link springs stacked)', () => {
     const { viz, surface } = mount();
     viz.render(P1);

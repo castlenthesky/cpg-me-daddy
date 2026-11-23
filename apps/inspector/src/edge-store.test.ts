@@ -89,6 +89,20 @@ describe('EdgeStore', () => {
     ]);
   });
 
+  // Post-implementation (sabotage #34): the last edge under a key wins, so a re-delivered edge's
+  // data (its resolution, which the link tooltip shows) replaces the old edge's.
+  it('keeps the last edge delivered under a key, in replace and in apply', () => {
+    const store = new EdgeStore();
+    const first: GraphEdge = { ...edge('a', 'b', 'CALLS'), data: { n: 1 } };
+    const second: GraphEdge = { ...edge('a', 'b', 'CALLS'), data: { n: 2 } };
+    store.replace([first, second]);
+    expect(store.build(indexer('a', 'b'), [1, 1]).linkEdges).toEqual([second]);
+    expect(store.build(indexer('a', 'b'), [1, 1]).linkEdges[0]).toBe(second);
+    const third: GraphEdge = { ...edge('a', 'b', 'CALLS'), data: { n: 3 } };
+    store.apply([], [third]);
+    expect(store.build(indexer('a', 'b'), [1, 1]).linkEdges[0]).toBe(third);
+  });
+
   it('replace discards the previous set', () => {
     const store = new EdgeStore();
     store.replace([edge('a', 'b', 'X'), edge('b', 'c', 'X')]);
