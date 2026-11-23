@@ -283,6 +283,12 @@ const CASES = [
     "export { x } from '@cpg/model/dist/x';\n",
     /__gate_probe\.ts:1 +\[deep-import\]/,
   ),
+  depsCase(
+    'check:deps rejects a runtime @cpg/sink import in apps/cli (cli-runtime-import)',
+    'apps/cli/src/__gate_probe.ts',
+    "import { createMemoryStore } from '@cpg/sink';\nexport const probe = createMemoryStore;\n",
+    /__gate_probe\.ts:1 +\[cli-runtime-import\]/,
+  ),
   {
     // The check-deps rules are proven by fixtures in tools/check-deps.test.mjs. If the vitest
     // include stopped matching tools/, that proof would vanish while `bun run test` stayed green.

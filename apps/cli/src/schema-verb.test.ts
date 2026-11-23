@@ -29,7 +29,11 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
 });
 
-const realEngine = (): CpgEngine => createEngine({ version: manifest.version }, { sinks: [] });
+const realEngine = (): CpgEngine =>
+  createEngine({
+    version: manifest.version,
+    consumers: { inspect: false, store: 'memory', vscode: false },
+  });
 
 function fakeEngine(schema: SchemaDocInput) {
   let calls = 0;
@@ -54,7 +58,7 @@ async function cli(
   const io = captureIo({ isTty: o.isTty ?? false, ...(o.env && { env: o.env }) });
   const code = await run(argv, io, {
     manifest,
-    ...(engine && { engine }),
+    ...(engine && { createEngine: () => engine }),
     ...(o.cwd !== undefined && { cwd: o.cwd }),
   });
   return { code, stdout: io.stdout, stderr: io.stderr.join('\n') };

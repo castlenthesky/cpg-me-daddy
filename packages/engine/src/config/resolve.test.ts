@@ -9,6 +9,8 @@
 //   - consumers.store memory (falkor is U5), vscode false (the CLI is headless), store mode remote
 //     (the sketch's first alternative; the archive's defineCpgDevFalkorConfig).
 //   - queryTimeoutMs 30000: FalkorDB's default query timeout (03-architecture §11, M-FALKOR-timeout).
+// Owner decision 1A (2026-11-22, U2c.2): each consumer switch is its own key with its own provenance
+// (consumers.inspect / consumers.store / consumers.vscode); the whole-object key is gone.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigLayer, ConfigLayerInput } from '../port';
@@ -66,7 +68,11 @@ describe('resolveConfig: built-in defaults', () => {
       include: builtIn(['**/*']),
       exclude: builtIn([...DEFAULT_EXCLUDES]),
       maxFileSizeBytes: builtIn(2 * 1024 * 1024),
-      consumers: builtIn({ inspect: false, store: 'memory', vscode: false }),
+      consumers: {
+        inspect: builtIn(false),
+        store: builtIn('memory'),
+        vscode: builtIn(false),
+      },
       store: {
         host: builtIn('127.0.0.1'),
         port: builtIn(6382),
@@ -153,7 +159,9 @@ describe('resolveConfig: precedence flag > env > file > manifest > default', () 
       include: ['a/**'],
       exclude: ['b/**'],
       maxFileSizeBytes: 10,
-      consumers: { inspect: true, store: 'falkor', vscode: true },
+      'consumers.inspect': true,
+      'consumers.store': 'falkor',
+      'consumers.vscode': true,
       'store.host': 'h',
       'store.port': 1,
       'store.graph': 'g',
@@ -170,7 +178,7 @@ describe('resolveConfig: precedence flag > env > file > manifest > default', () 
       include: f(['a/**']),
       exclude: f(['b/**']),
       maxFileSizeBytes: f(10),
-      consumers: f({ inspect: true, store: 'falkor', vscode: true }),
+      consumers: { inspect: f(true), store: f('falkor'), vscode: f(true) },
       store: { host: f('h'), port: f(1), graph: f('g'), mode: f('docker') },
       queryTimeoutMs: f(11),
       resolve: { perFileMs: f(12), perSiteMs: f(13) },
@@ -194,11 +202,11 @@ describe('resolveConfig: validation (a failure is never swallowed)', () => {
     ['maxFileSizeBytes', 0],
     ['maxFileSizeBytes', 1.5],
     ['maxFileSizeBytes', '10'],
-    ['consumers', { inspect: true, store: 'memory' }],
-    ['consumers', { inspect: true, store: 'memory | falkor', vscode: false }],
-    ['consumers', { inspect: 'yes', store: 'memory', vscode: false }],
-    ['consumers', { inspect: true, store: 'memory', vscode: 'auto' }],
-    ['consumers', { inspect: true, store: 'memory', vscode: false, extra: 1 }],
+    ['consumers.inspect', 'yes'],
+    ['consumers.inspect', 1],
+    ['consumers.store', 'memory | falkor'],
+    ['consumers.store', 'none'],
+    ['consumers.vscode', 'auto'],
     ['store.host', ''],
     ['store.port', 0],
     ['store.port', 65536],
@@ -216,7 +224,7 @@ describe('resolveConfig: validation (a failure is never swallowed)', () => {
   ])('%s = %j is a ConfigError on that key', (key, bad) => {
     const e = configError(() => resolveConfig([CWD, at('env', 'SRC', { [key]: bad })]));
     expect([e.key, e.layer, e.source]).toEqual([key, 'env', 'SRC']);
-    expect(e.message).toContain(key);
+    expect(e.message).toContain(`invalid ${key}`);
   });
 
   it.each([
@@ -224,9 +232,19 @@ describe('resolveConfig: validation (a failure is never swallowed)', () => {
     ['store.port', 65535],
     ['include', []],
     ['maxFileSizeBytes', 1],
+    ['consumers.inspect', false],
+    ['consumers.store', 'falkor'],
+    ['consumers.vscode', true],
   ])('%s = %j is accepted (the boundary is inclusive)', (key, ok) => {
     const r = resolveConfig([CWD, at('env', 'SRC', { [key]: ok })]);
     expect(leaf(r, key)).toEqual({ value: ok, layer: 'env', source: 'SRC' });
+  });
+
+  it('the whole-object consumers key is unknown now (owner decision 1A)', () => {
+    const whole = { inspect: true, store: 'memory', vscode: false };
+    const e = configError(() => resolveConfig([CWD, at('file', 'F', { consumers: whole })]));
+    expect([e.key, e.layer, e.source]).toEqual(['consumers', 'file', 'F']);
+    expect(e.message).toContain("unknown config key 'consumers'");
   });
 
   it('a malformed value in a shadowed layer still fails: a flag never hides a bad env var', () => {
@@ -238,6 +256,39 @@ describe('resolveConfig: validation (a failure is never swallowed)', () => {
       ]),
     );
     expect([e.key, e.layer, e.source]).toEqual(['store.port', 'env', 'CPG_PORT']);
+  });
+});
+
+describe('resolveConfig: one provenance per consumer switch (owner decision 1A)', () => {
+  // The case decision 1A exists for: `cpg index --inspect` over a file with `store: falkor`.
+  it('--inspect over a file setting store: each switch keeps its own layer and source', () => {
+    const r = resolveConfig([
+      CWD,
+      at('flag', '--inspect', { 'consumers.inspect': true }),
+      at('file', '/r/cpg.config.yaml', { 'consumers.store': 'falkor' }),
+    ]);
+    expect(r.consumers).toEqual({
+      inspect: { value: true, layer: 'flag', source: '--inspect' },
+      store: { value: 'falkor', layer: 'file', source: '/r/cpg.config.yaml' },
+      vscode: builtIn(false),
+    });
+  });
+
+  it('a flag and a file setting the same switch: the flag wins that switch only', () => {
+    const r = resolveConfig([
+      at('file', 'F', {
+        'consumers.inspect': false,
+        'consumers.store': 'falkor',
+        'consumers.vscode': true,
+      }),
+      at('flag', '--store', { 'consumers.store': 'memory' }),
+      CWD,
+    ]);
+    expect(r.consumers).toEqual({
+      inspect: f(false),
+      store: { value: 'memory', layer: 'flag', source: '--store' },
+      vscode: f(true),
+    });
   });
 });
 
@@ -255,7 +306,7 @@ describe('resolveConfig is pure', () => {
       CWD,
       at('file', 'F', {
         include: ['src'],
-        consumers: { inspect: true, store: 'memory', vscode: false },
+        'consumers.inspect': true,
       }),
       at('flag', '--host', { 'store.host': 'h' }),
     ]);
@@ -271,14 +322,15 @@ describe('toCpgConfigInput', () => {
     const r = resolveConfig([
       CWD,
       at('flag', '--port', { 'store.port': 7000 }),
-      at('file', 'F', { include: ['src/**'], 'watch.trailingMs': 5 }),
+      at('file', 'F', { include: ['src/**'], 'watch.trailingMs': 5, 'consumers.store': 'falkor' }),
+      at('flag', '--inspect', { 'consumers.inspect': true }),
     ]);
     expect(toCpgConfigInput(r)).toEqual({
       root: '/w',
       include: ['src/**'],
       exclude: [...DEFAULT_EXCLUDES],
       maxFileSizeBytes: 2 * 1024 * 1024,
-      consumers: { inspect: false, store: 'memory', vscode: false },
+      consumers: { inspect: true, store: 'falkor', vscode: false },
       store: { host: '127.0.0.1', port: 7000, graph: 'cpg', mode: 'remote' },
       queryTimeoutMs: 30000,
       resolve: { perFileMs: 500, perSiteMs: 250 },

@@ -4,10 +4,11 @@
 import { CPG_SCHEMA, type SchemaDocInput } from '@cpg/model';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
-import type { GraphSink } from '@cpg/sink';
+import { createMemoryStore, type GraphSink } from '@cpg/sink';
 import type { EdgeRow, GraphStore, NodeRow, WriteOp } from '@cpg/store';
 import { createNullGraphStore } from './null-graph-store';
 import type {
+  ConsumerSwitches,
   CpgEngine,
   EngineSession,
   IndexedFile,
@@ -26,13 +27,18 @@ import { walkWorkspace } from './walker/walker';
 export interface EngineConfig {
   /** identity.version: the front door's manifest version, never a literal (C-CLI I-13). */
   readonly version: string;
+  /** The resolved switches: the engine builds only the sinks they enable (owner decision 5). */
+  readonly consumers: ConsumerSwitches;
 }
 
 /** A durable store sink: MemoryStore now, FalkorStore at U5. */
 export type EngineSink = GraphSink & GraphStore;
 
 export interface EngineDeps {
-  readonly sinks: readonly EngineSink[];
+  /** Host-adapter sinks (e.g. the VS Code panel's, U3), written after the built-in ones. */
+  readonly sinks?: readonly EngineSink[];
+  /** The instance to use as the built-in memory store; a test plants graphs in it. */
+  readonly memoryStore?: EngineSink;
   /** SEAT: accepted and unused until the resolver chain (U6c). */
   readonly resolvers?: readonly Resolver[];
   /** SEAT: accepted and unused until the LSP driver (U8). */
@@ -73,8 +79,18 @@ function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
   return { kind: 'merge-filesystem', directories, files, links, moves: [], removals: [] };
 }
 
-export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine {
+function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
+  const parts: string[] = [];
+  if (consumers.store === 'falkor') parts.push('consumers.store falkor (FalkorStore, U5)');
+  if (consumers.inspect) parts.push('consumers.inspect (the inspector, U2b)');
+  if (consumers.vscode) parts.push('consumers.vscode (the VS Code panel, U3)');
+  return parts;
+}
+
+export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEngine {
   // REAL
+  const memory: EngineSink = deps.memoryStore ?? createMemoryStore({ id: 'memory' });
+  const sinks: readonly EngineSink[] = [memory, ...(deps.sinks ?? [])];
   const registry = createLanguageRegistry();
   for (const lang of BUILTIN_LANGUAGES) {
     registry.register(lang);
@@ -93,9 +109,13 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
       target: StoreTarget,
       _opts: { readonly readOnly: boolean },
     ): Promise<EngineSession> {
+      const unbuilt = unbuiltConsumers(config.consumers);
+      if (unbuilt.length > 0) {
+        throw new Error(`SEAT: not built yet: ${unbuilt.join('; ')}`);
+      }
       // SEAT: FalkorStore at U5 — does not dial target.
       /* oxlint-disable no-await-in-loop */
-      for (const sink of deps.sinks) {
+      for (const sink of sinks) {
         await sink.open();
       }
       /* oxlint-enable no-await-in-loop */
@@ -103,7 +123,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
         target,
         async close(): Promise<void> {
           /* oxlint-disable no-await-in-loop */
-          for (const sink of deps.sinks) {
+          for (const sink of sinks) {
             await sink.close();
           }
           /* oxlint-enable no-await-in-loop */
@@ -159,7 +179,8 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
           dryRun: req.session === null,
           interrupted: true,
           warnings,
-          target: req.session?.target ?? null,
+          // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
+          target: null,
           consumers: [],
         };
       }
@@ -182,7 +203,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
         let first = true;
         // Sequential by design: write each sink in order, never Promise.all.
         /* oxlint-disable no-await-in-loop */
-        for (const sink of deps.sinks) {
+        for (const sink of sinks) {
           const receipt = await sink.write(op);
           if (first) {
             nodesWritten = receipt.nodesWritten;
@@ -210,8 +231,9 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
         dryRun: req.session === null,
         interrupted: false,
         warnings,
-        target: req.session?.target ?? null,
-        consumers: req.session === null ? [] : deps.sinks.map((s) => s.id),
+        // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
+        target: null,
+        consumers: req.session === null ? [] : sinks.map((s) => s.id),
       };
     },
 
@@ -221,16 +243,13 @@ export function createEngine(config: EngineConfig, deps: EngineDeps): CpgEngine 
       expected: IndexReport | null,
     ): Promise<VerifyReport> {
       // REAL; SEAT: _session is unused because dialling a target is U5 — every session reaches
-      // deps.sinks.
+      // the built-in memory store.
       if (expected !== null) {
         throw new Error(
           'SEAT: verify against an expected IndexReport lands with its first caller (C-CLI Q9)',
         );
       }
-      if (deps.sinks.length > 1) {
-        throw new Error('SEAT: verify over more than one store lands with FalkorStore (U5)');
-      }
-      return verifyStore(deps.sinks[0], verifyConfig, languageOf);
+      return verifyStore(memory, verifyConfig, languageOf);
     },
 
     schema(): SchemaDocInput {

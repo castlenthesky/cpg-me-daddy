@@ -438,3 +438,141 @@ describe('check-deps finds specifiers with the TypeScript scanner, in packages/*
     expect(out).toMatch(/probe\.ts:2 +\[host-sdk\]/);
   });
 });
+
+// Owner decision 5 (2026-11-22, U2c.2): apps/cli loads at runtime only node builtins, @cpg/engine
+// and @cpg/model; a statement-level type-only import of any other @cpg/* package is allowed. The
+// CLI's tests are not its runtime and are exempt (like rule 8).
+const cli = (path, text) => run({ ...CLEAN, [path]: text });
+
+describe('rule 9: apps/cli loads only builtins, @cpg/engine and @cpg/model at runtime', () => {
+  it.each([
+    [
+      'a value import of @cpg/sink',
+      'apps/cli/src/main.ts',
+      "import { createMemoryStore } from '@cpg/sink';\n",
+      '@cpg/sink',
+      1,
+    ],
+    [
+      'a re-export from @cpg/store',
+      'apps/cli/src/x.ts',
+      "export const a = 1;\nexport { storeErrorCode } from '@cpg/store';\n",
+      '@cpg/store',
+      2,
+    ],
+    [
+      'a require of @cpg/parse',
+      'apps/cli/src/x.ts',
+      "const p = require('@cpg/parse');\nexport default p;\n",
+      '@cpg/parse',
+      1,
+    ],
+    [
+      'a dynamic import of @cpg/watch',
+      'apps/cli/src/x.ts',
+      "export const w = () => import('@cpg/watch');\n",
+      '@cpg/watch',
+      1,
+    ],
+    [
+      'a side-effect import of @cpg/resolve',
+      'apps/cli/src/x.ts',
+      "import '@cpg/resolve';\n",
+      '@cpg/resolve',
+      1,
+    ],
+    [
+      'the inline { type X } form, which keeps the import',
+      'apps/cli/src/x.ts',
+      "import { type GraphSink } from '@cpg/sink';\nexport type S = GraphSink;\n",
+      '@cpg/sink',
+      1,
+    ],
+    [
+      'an import = require of @cpg/extract',
+      'apps/cli/src/x.ts',
+      "import x = require('@cpg/extract');\nexport { x };\n",
+      '@cpg/extract',
+      1,
+    ],
+    [
+      'a nested .mjs file',
+      'apps/cli/src/sub/deep/x.mjs',
+      "import { createMemoryStore } from '@cpg/sink';\nexport { createMemoryStore };\n",
+      '@cpg/sink',
+      1,
+    ],
+  ])('rejects %s, naming the file, line and package', (_name, path, text, pkg, line) => {
+    const { status, out } = cli(path, text);
+    expect(status).toBe(1);
+    expect(out).toMatch(
+      new RegExp(`${path.replace(/[./]/g, '\\$&')}:${line} +\\[cli-runtime-import\\]`),
+    );
+    expect(out).toContain(`"${pkg}"`);
+    expect(out.match(/\[cli-runtime-import\]/g)).toHaveLength(1);
+  });
+
+  it('accepts builtins, relative paths, @cpg/engine and @cpg/model at runtime', () => {
+    const { status, out } = cli(
+      'apps/cli/src/x.ts',
+      [
+        "import { readFileSync } from 'node:fs';",
+        "import { join } from 'path';",
+        "import { createEngine } from '@cpg/engine';",
+        "import { checkSchemaDoc } from '@cpg/model';",
+        "import { run } from './run';",
+        'export const all = [readFileSync, join, createEngine, checkSchemaDoc, run];',
+        '',
+      ].join('\n'),
+    );
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it('accepts statement-level type-only imports and re-exports of any @cpg/* package', () => {
+    const { status, out } = cli(
+      'apps/cli/src/x.ts',
+      [
+        "import type { GraphSink } from '@cpg/sink';",
+        "import type * as Store from '@cpg/store';",
+        "export type { ParserBackend } from '@cpg/parse';",
+        'export type S = GraphSink | Store.WriteOp;',
+        '',
+      ].join('\n'),
+    );
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  // round two (review a7): a type-only import still has to pass rule 2 (app-tier)
+  it.each([
+    ['vscode', "import type { Uri } from 'vscode';\nexport type U = Uri;\n"],
+    ['an npm package', "import type { Chalk } from 'chalk';\nexport type C = Chalk;\n"],
+  ])('still rejects a type-only import of %s in apps/cli under app-tier', (_name, text) => {
+    const { status, out } = cli('apps/cli/src/x.ts', text);
+    expect(status).toBe(1);
+    expect(out).toContain('[app-tier]');
+    expect(out).not.toContain('[cli-runtime-import]');
+  });
+
+  it("exempts apps/cli's test files, which are not its runtime", () => {
+    const { status, out } = cli(
+      'apps/cli/src/x.test.ts',
+      "import { createMemoryStore } from '@cpg/sink';\nexport const m = createMemoryStore;\n",
+    );
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it('is scoped to apps/cli: another app may still load any @cpg/* front door', () => {
+    const { status, out } = run({
+      ...CLEAN,
+      'apps/inspector/src/x.ts':
+        "import { createMemoryStore } from '@cpg/sink';\nexport { createMemoryStore };\n",
+      'apps/vscode/src/x.ts':
+        "import { createMemoryStore } from '@cpg/sink';\nexport { createMemoryStore };\n",
+    });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+});

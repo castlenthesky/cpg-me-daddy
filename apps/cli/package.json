@@ -19,7 +19,6 @@
   },
   "dependencies": {
     "@cpg/engine": "*",
-    "@cpg/model": "*",
-    "@cpg/sink": "*"
+    "@cpg/model": "*"
   }
 }

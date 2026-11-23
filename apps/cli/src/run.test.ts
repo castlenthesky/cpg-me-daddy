@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CpgEngine, StoreTarget } from '@cpg/engine';
+import type { CpgEngine, EngineConfig, StoreTarget } from '@cpg/engine';
 import { captureIo } from './io';
 import { EXIT, exitCodeFor, run } from './run';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage } from './spec';
@@ -28,12 +28,18 @@ function fakeEngine(fail = false) {
 
 async function cli(
   argv: string[],
-  o: { isTty?: boolean; engine?: CpgEngine; signal?: AbortSignal } = {},
+  o: { isTty?: boolean; engine?: CpgEngine; signal?: AbortSignal; configs?: EngineConfig[] } = {},
 ) {
   const io = captureIo({ isTty: o.isTty ?? false });
+  const { engine } = o;
   const code = await run(argv, io, {
     manifest,
-    ...(o.engine && { engine: o.engine }),
+    ...(engine && {
+      createEngine: (config: EngineConfig) => {
+        o.configs?.push(config);
+        return engine;
+      },
+    }),
     ...(o.signal && { signal: o.signal }),
   });
   return { code, out: io.stdout.join('\n'), err: io.stderr.join('\n') };
@@ -98,9 +104,10 @@ describe('exit codes', () => {
   // config (U2c.1, config-verb.test.ts) needs no engine, so it is never a SEAT.
   const seats = COMMANDS.map((c) => c.verb).filter((v) => v !== 'config');
   it.each(seats)('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
-    // verify (U2a.3, verify-verb.test.ts) and schema (U2a.4, schema-verb.test.ts) are built: only
-    // without an engine are they still a SEAT. schema needs a mode flag to get that far.
-    const built = verb === 'verify' || verb === 'schema';
+    // verify (U2a.3, verify-verb.test.ts), schema (U2a.4, schema-verb.test.ts) and index (U2c.2,
+    // index-verb.test.ts) are built: only without an engine are they still a SEAT. schema needs a
+    // mode flag to get that far.
+    const built = verb === 'verify' || verb === 'schema' || verb === 'index';
     const argv = verb === 'schema' ? [verb, '--print'] : [verb];
     for (const engine of built ? [undefined] : [undefined, fakeEngine().engine]) {
       const r = await cli(argv, engine ? { engine } : {});
@@ -121,9 +128,14 @@ describe('exit codes', () => {
 
   it('a well-formed --port reaches engine.connect (the test above is not vacuous)', async () => {
     const f = fakeEngine();
-    await cli(['query', '--port', '7000', '--graph', 'g'], { engine: f.engine });
+    const configs: EngineConfig[] = [];
+    await cli(['query', '--port', '7000', '--graph', 'g'], { engine: f.engine, configs });
     expect(f.connects).toEqual([{ host: '127.0.0.1', port: 7000, graph: 'g' }]);
     expect(f.closed()).toBe(1);
+    // a SEAT verb loads no config (#58): its engine gets the manifest version and built-in switches
+    expect(configs).toEqual([
+      { version: '9.8.7', consumers: { inspect: false, store: 'memory', vscode: false } },
+    ]);
   });
 
   it('a failed connect exits 1', async () => {

@@ -48,6 +48,9 @@
 //  8. createEngine() IS CALLED ONLY IN apps/*: a call site under packages/** is a composition root
 //     outside a front door (03-architecture §2 rule 3). The definition, comment lines and test
 //     files are exempt.
+//
+//  9. apps/cli LOADS ONLY BUILTINS, @cpg/engine AND @cpg/model AT RUNTIME (owner decision 5): any
+//     other @cpg/* only through statement-level import type / export type; test files are exempt.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { builtinModules } from 'node:module';
@@ -226,7 +229,7 @@ for (const file of files) {
     }
   }
 
-  for (const { spec, line: at } of specs) {
+  for (const { spec, line: at, typeOnly } of specs) {
     const cpg = spec.match(/^@cpg\/([^/]+)(\/.+)?$/);
     if (cpg?.[2])
       flag(
@@ -251,6 +254,21 @@ for (const file of files) {
           'app-tier',
           `app "${pkg}" imports "${spec}"; only builtins, @cpg/* and its own host SDK`,
         );
+      if (
+        pkg === 'cli' &&
+        !isTest &&
+        !typeOnly &&
+        cpg &&
+        cpg[1] !== 'engine' &&
+        cpg[1] !== 'model'
+      ) {
+        flag(
+          file,
+          at,
+          'cli-runtime-import',
+          `apps/cli loads "${spec}" at runtime; only node builtins, @cpg/engine and @cpg/model (owner decision 5)`,
+        );
+      }
       continue;
     }
 

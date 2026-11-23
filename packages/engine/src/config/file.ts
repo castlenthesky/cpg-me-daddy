@@ -33,9 +33,9 @@ const CONFIG_FILE_SCHEMA = z.strictObject({
     .exactOptional(),
   consumers: z
     .strictObject({
-      inspect: z.boolean(),
-      store: CONSUMER_STORE,
-      vscode: z.union([z.boolean(), z.literal('auto')]),
+      inspect: z.boolean().exactOptional(),
+      store: CONSUMER_STORE.exactOptional(),
+      vscode: z.union([z.boolean(), z.literal('auto')]).exactOptional(),
     })
     .exactOptional(),
   store: z
@@ -119,10 +119,9 @@ export function configFileLayer(
     include: doc.include,
     exclude: doc.exclude,
     maxFileSizeBytes: doc.max_file_size_bytes,
-    consumers: consumers && {
-      ...consumers,
-      vscode: consumers.vscode === 'auto' ? opts.vscodeHost : consumers.vscode,
-    },
+    'consumers.inspect': consumers?.inspect,
+    'consumers.store': consumers?.store,
+    'consumers.vscode': consumers?.vscode === 'auto' ? opts.vscodeHost : consumers?.vscode,
     'store.host': falkor?.host,
     'store.port': falkor?.port,
     'store.graph': falkor?.graph,
