@@ -527,3 +527,137 @@ describe('links', () => {
     expect(maxError(widths, expected)).toBeLessThan(1e-4);
   });
 });
+
+// Round two: the cases the test review named (a2-a6, b1, b2).
+
+describe('ring radii build on the ring inside them (review a2)', () => {
+  it('a ring beyond a widened ring sits one ring step past it, not at depth x 20', () => {
+    // 16 files at depth 1 widen it to 16*12/2pi; one file's child at depth 2 sits 20 further out.
+    const p = star(16);
+    const withChild = payload([...p.nodes, node('g')], [...p.edges, entry('f0', 'g')]);
+    const r1 = (16 * 12) / (2 * PI);
+    for (const seed of [1, 2, 3]) {
+      const result = layoutPayload(withChild, { seed });
+      expect(misplaced(result, 'f5', ring(r1))).toEqual([]);
+      expect(misplaced(result, 'g', ring(r1 + 20))).toEqual([]);
+    }
+  });
+});
+
+describe('slices weigh leaves, not direct children (review a3)', () => {
+  it('a subtree with one child but three leaves still takes three quarters of the circle', () => {
+    const p = payload(
+      [
+        node('R', 'DIRECTORY'),
+        node('A', 'DIRECTORY'),
+        node('A1', 'DIRECTORY'),
+        node('a1'),
+        node('a2'),
+        node('a3'),
+        node('B', 'DIRECTORY'),
+        node('b1'),
+      ],
+      [
+        entry('R', 'A'),
+        entry('R', 'B'),
+        entry('A', 'A1'),
+        entry('A1', 'a1'),
+        entry('A1', 'a2'),
+        entry('A1', 'a3'),
+        entry('B', 'b1'),
+      ],
+    );
+    for (let seed = 0; seed < 50; seed++) {
+      const result = layoutPayload(p, { seed });
+      expect(misplaced(result, 'A', ring(20), [0.3, 1.2])).toEqual([]);
+      expect(misplaced(result, 'B', ring(20), [1.6, 1.9])).toEqual([]);
+    }
+  });
+});
+
+describe('a custom hierarchy edge type (review a4)', () => {
+  it('seeds the tree on that type and links every other type, HAS_ENTRY included', () => {
+    const p = payload(
+      [node('M', 'MODULE'), node('f', 'METHOD'), node('g', 'METHOD')],
+      [edge('M', 'f', 'DECLARES'), edge('M', 'g', 'DECLARES'), entry('f', 'g')],
+    );
+    const result = layoutPayload(p, { seed: 1, hierarchyEdgeType: 'DECLARES' });
+    expect(result.ids).toEqual(['M', 'f', 'g']);
+    expect(Array.from(result.links)).toEqual([0, 1, 0, 2, 1, 2]);
+  });
+});
+
+describe('cycles (review a1, a5)', () => {
+  it('never adopts along a fallback edge that closes a longer cycle', () => {
+    const p = payload(
+      [node('P', 'DIRECTORY'), node('Q', 'DIRECTORY'), node('T')],
+      [entry('P', 'Q'), entry('Q', 'T'), edge('T', 'P', 'DEFINES')],
+    );
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toEqual(['P', 'Q', 'T']);
+    expect(Array.from(result.positions.subarray(0, 2))).toEqual([C, C]);
+  });
+
+  it('terminates when a fallback anchor sits on a hierarchy cycle', () => {
+    // P and Q parent each other; Q DEFINES X, so the cycle check walks up from Q through the loop.
+    const p = payload(
+      [node('P', 'DIRECTORY'), node('Q', 'DIRECTORY'), node('X', 'SYMBOL')],
+      [entry('P', 'Q'), entry('Q', 'P'), edge('Q', 'X', 'DEFINES')],
+    );
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toHaveLength(4);
+    expect(result.ids.slice(1)).toEqual(['P', 'Q', 'X']);
+  });
+
+  it('a lone node that is its own hierarchy parent terminates as the single root', () => {
+    const result = layoutPayload(payload([node('S', 'DIRECTORY')], [entry('S', 'S')]), { seed: 1 });
+    expect(result.ids).toEqual(['S']);
+    expect(Array.from(result.positions)).toEqual([C, C]);
+    expect(Array.from(result.links)).toEqual([]);
+  });
+});
+
+describe('hierarchy edges with a missing endpoint (review a6)', () => {
+  it('a hierarchy edge from a node not in the payload parents nothing', () => {
+    const p = payload([node('R', 'DIRECTORY'), node('x')], [entry('ghost', 'x'), entry('R', 'x')]);
+    expect(layoutPayload(p, { seed: 1 }).ids).toEqual(['R', 'x']);
+  });
+
+  it('a hierarchy edge to a node not in the payload places no point', () => {
+    const p = payload([node('R', 'DIRECTORY'), node('x')], [entry('R', 'ghost'), entry('R', 'x')]);
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toEqual(['R', 'x']);
+    expect(result.positions).toHaveLength(4);
+  });
+});
+
+describe('fallback anchors (review b1)', () => {
+  it('an anchor with no parent of its own adopts nothing', () => {
+    const p = payload([node('R', 'DIRECTORY'), node('S', 'SYMBOL')], [edge('R', 'S', 'DEFINES')]);
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toHaveLength(3);
+    expect(result.ids.slice(1)).toEqual(['R', 'S']);
+  });
+
+  it('adopts in one pass over the edges: an anchor adopted later in the list adopts nothing earlier', () => {
+    const p = payload(
+      [node('R', 'DIRECTORY'), node('F'), node('S1', 'SYMBOL'), node('S2', 'SYMBOL')],
+      [entry('R', 'F'), edge('S1', 'S2', 'DEFINES'), edge('F', 'S1', 'DEFINES')],
+    );
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toHaveLength(5);
+    expect(result.ids.slice(1)).toEqual(['R', 'F', 'S1', 'S2']);
+  });
+});
+
+describe('the seed is read as an unsigned 32-bit integer (review b2)', () => {
+  it('seeds equal modulo 2^32 give byte-identical positions', () => {
+    const p = repoLike();
+    const at = (seed: number): Uint8Array => bytes(layoutPayload(p, { seed }).positions);
+    expect(at(-1)).toEqual(at(0xffffffff));
+    expect(at(-(2 ** 31))).toEqual(at(2 ** 31));
+    expect(at(2 ** 32)).toEqual(at(0));
+    expect(at(2 ** 32 + 5)).toEqual(at(5));
+    expect(at(-1)).not.toEqual(at(1));
+  });
+});

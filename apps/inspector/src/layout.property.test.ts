@@ -111,11 +111,15 @@ describe('across seeds 0..199 (3200 leaf samples)', () => {
 // Arbitrary hierarchies over a small id alphabet: cycles, self-loops, several parents, dangling
 // endpoints. Ids are unique (duplicate ids are part 2's render-report, not this layout's).
 const TYPES = ['HAS_ENTRY', 'DEFINES', 'CALLS', undefined] as const;
-function arbitraryPayload(next: () => number): GraphPayload {
+function arbitraryPayload(lcgNext: () => number): GraphPayload {
+  // An LCG's low bits cycle with a short period (bit 0 alternates), so draw from the high 16 bits;
+  // `% 14` on raw output gave every HAS_ENTRY edge opposite-parity endpoints and so no cycles.
+  const next = (): number => lcgNext() >>> 16;
   const n = next() % 13;
   const edges: GraphEdge[] = Array.from({ length: next() % 31 }, () => {
-    const source = `n${next() % 14}`;
-    const target = `n${next() % 14}`;
+    // Endpoints from the payload's own ids plus two that name no node (dangling).
+    const source = `n${next() % (n + 2)}`;
+    const target = `n${next() % (n + 2)}`;
     const type = TYPES[next() % TYPES.length];
     return type === undefined ? { source, target } : { source, target, type };
   });
@@ -144,16 +148,39 @@ function broken(p: GraphPayload, result: LayoutResult): string[] {
   return out;
 }
 
+/** The payload's HAS_ENTRY edges between two different nodes. */
+const hierarchy = (p: GraphPayload): GraphEdge[] =>
+  p.edges.filter((e) => e.type === 'HAS_ENTRY' && e.source !== e.target);
+
 describe('for any hierarchy and seed', () => {
   it('terminates, places points inside 90% of the half-space, and names only payload ids', () => {
-    // Cycles, self-loops, several parents and dangling endpoints over 14 ids. Ids are unique:
+    // Cycles, self-loops, several parents and dangling endpoints. Ids are unique:
     // duplicate ids belong to part 2's render-report, not to this layout.
     const next = lcg(35);
-    const failures = Array.from({ length: 300 }, (_, run) => {
-      const p = arbitraryPayload(next);
-      const seed = SEEDS[run % SEEDS.length] ?? 0;
-      return { run, seed, why: broken(p, layoutPayload(p, { seed })) };
-    }).filter((f) => f.why.length > 0);
+    const payloads = Array.from({ length: 300 }, () => arbitraryPayload(next));
+    const failures = payloads
+      .map((p, run) => {
+        const seed = SEEDS[run % SEEDS.length] ?? 0;
+        return { run, seed, why: broken(p, layoutPayload(p, { seed })) };
+      })
+      .filter((f) => f.why.length > 0);
     expect(failures).toEqual([]);
+    // Anti-vacuity: the generator really produces the shapes this property is about.
+    const selfLoops = payloads.filter((p) =>
+      p.edges.some((e) => e.type === 'HAS_ENTRY' && e.source === e.target),
+    );
+    const twoCycles = payloads.filter((p) =>
+      hierarchy(p).some((e) =>
+        hierarchy(p).some((f) => f.source === e.target && f.target === e.source),
+      ),
+    );
+    const everyNodeTargeted = payloads.filter(
+      (p) =>
+        p.nodes.length > 1 &&
+        p.nodes.every((n) => p.edges.some((e) => e.type === 'HAS_ENTRY' && e.target === n.id)),
+    );
+    expect(selfLoops.length).toBeGreaterThanOrEqual(10);
+    expect(twoCycles.length).toBeGreaterThanOrEqual(10);
+    expect(everyNodeTargeted.length).toBeGreaterThanOrEqual(3);
   });
 });
