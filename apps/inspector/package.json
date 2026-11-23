@@ -2,7 +2,10 @@
   "name": "@cpg/inspector",
   "version": "0.0.1",
   "private": true,
-  "description": "The browser picture of the graph (U2b): the seeded radial layout, the type registries and the cosmos.gl renderer.",
+  "description": "The browser picture of the graph (U2b): the seeded radial layout, the type registries, the cosmos.gl renderer and the cpg-inspector process that serves it.",
+  "bin": {
+    "cpg-inspector": "./dist/main.js"
+  },
   "files": [
     "dist",
     "!dist/.tsbuildinfo"
@@ -12,6 +15,10 @@
   },
   "dependencies": {
     "@cosmos.gl/graph": "3.6.0",
-    "@cpg/model": "*"
+    "@cpg/model": "*",
+    "ws": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
   }
 }

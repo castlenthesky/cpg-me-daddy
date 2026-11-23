@@ -69,8 +69,9 @@ const APP_SDKS = {
   vscode: ['vscode'],
   mcp: ['@modelcontextprotocol/'],
   cli: [],
-  // Owner decision 7a (2026-11-22): the archived renderer, exact-pinned.
-  inspector: ['@cosmos.gl/graph'],
+  // Owner decision 7a (2026-11-22): the archived renderer, exact-pinned. Owner decision 8a: ws,
+  // the inspector's WebSocket server (and its tests' client), exact-pinned.
+  inspector: ['@cosmos.gl/graph', 'ws'],
 };
 
 // Rule 7's allowlist, per package; '*' is the default.

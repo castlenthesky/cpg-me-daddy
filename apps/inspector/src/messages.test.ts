@@ -1,18 +1,21 @@
-// The page's typed boundary (C-EXT may_not "type the webview boundary loosely"): parsePageMessage
-// returns a host message when every field the page reads has its contract type, and undefined
-// otherwise; it never throws. Shapes are C-EXT's HostToWebviewMessage (05-contracts.yaml:715) as
-// @cpg/model carries them (controller decision 13). Node and edge fields stay unchecked (stop-list 55).
+// The inspector's typed boundaries (C-EXT may_not "type the webview boundary loosely"), one parser per
+// way a message enters: host -> page (parsePageMessage), page -> host (parseWebviewMessage) and
+// stdin -> host (parseInspectorInput, owner decision 9a). Each returns the message when every field
+// its receiver reads has its contract type, and undefined otherwise; it never throws. Shapes are
+// C-EXT's HostToWebviewMessage / WebviewToHostMessage (05-contracts.yaml:715-716) as @cpg/model
+// carries them (controller decision 13). Node and edge fields stay unchecked (stop-list 55).
 
 import {
   isWorkspacePath,
   type CheckResult,
   type GraphDelta,
   type GraphPayload,
+  type RenderReport,
   type VerifyCheckId,
   type WorkspacePath,
 } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
-import { parsePageMessage } from './messages';
+import { parseInspectorInput, parsePageMessage, parseWebviewMessage } from './messages';
 
 function workspacePath(value: string): WorkspacePath {
   if (!isWorkspacePath(value)) throw new Error(`not a workspace path: ${value}`);
@@ -190,5 +193,151 @@ describe('parsePageMessage (host -> page)', () => {
   ];
   it.each(rejected)('rejects %s', (_name, message) => {
     expect(parsePageMessage(message)).toBeUndefined();
+  });
+});
+
+const RENDER: RenderReport = {
+  payloadNodeCount: 3,
+  renderedNodeCount: 2,
+  renderedEdgeCount: 1,
+  duplicateEdges: 0,
+  droppedNodeIds: ['c'],
+  frameMs: 1.5,
+};
+const renderReport = { type: 'render-report', epoch: 1, seq: 0, report: RENDER };
+const RENDER_COUNTS = [
+  'payloadNodeCount',
+  'renderedNodeCount',
+  'renderedEdgeCount',
+  'duplicateEdges',
+  'frameMs',
+] as const;
+
+describe('parseWebviewMessage (page -> host)', () => {
+  const accepted: readonly (readonly [string, unknown])[] = [
+    ['ready', { type: 'ready', protocol: 1 }],
+    ['ready at another protocol (the host decides)', { type: 'ready', protocol: 2 }],
+    ['reveal', { type: 'reveal', nodeId: 'd' }],
+    ...(['gap', 'stale-epoch', 'render-error'] as const).map(
+      (reason) => [`resync for ${reason}`, { type: 'resync', epoch: 1, seq: 0, reason }] as const,
+    ),
+    [
+      'a resync before any graph (epoch 0, seq -1)',
+      { type: 'resync', epoch: 0, seq: -1, reason: 'stale-epoch' },
+    ],
+    ['render-report', renderReport],
+    [
+      'a render-report with no dropped ids',
+      { ...renderReport, report: { ...RENDER, droppedNodeIds: [] } },
+    ],
+  ];
+  it.each(accepted)('accepts %s', (_name, message) => {
+    expect(parseWebviewMessage(message)).toStrictEqual(message);
+  });
+
+  const rejected: readonly (readonly [string, unknown])[] = [
+    ...NOT_RECORDS.map((value) => [`the non-record ${JSON.stringify(value)}`, value] as const),
+    ['ready with no protocol (the archive shape)', { type: 'ready' }],
+    ["ready at protocol '1'", { type: 'ready', protocol: '1' }],
+    ['reveal with no nodeId', { type: 'reveal' }],
+    ['reveal with a numeric nodeId', { type: 'reveal', nodeId: 1 }],
+    ["resync for 'bored'", { type: 'resync', epoch: 1, seq: 0, reason: 'bored' }],
+    ['resync with no reason', { type: 'resync', epoch: 1, seq: 0 }],
+    ['the archive resync{haveSeq}', { type: 'resync', haveSeq: 0 }],
+    ["resync at epoch '1'", { type: 'resync', epoch: '1', seq: 0, reason: 'gap' }],
+    ['resync with no seq', { type: 'resync', epoch: 1, reason: 'gap' }],
+    // Round two (review a10): present but not a number.
+    ["resync at seq '0'", { type: 'resync', epoch: 1, seq: '0', reason: 'gap' }],
+    ["a render-report at epoch '1'", { ...renderReport, epoch: '1' }],
+    ['a render-report with no epoch', withField(renderReport, 'epoch', undefined)],
+    ["a render-report at seq '0'", { ...renderReport, seq: '0' }],
+    ['a render-report with no report', withField(renderReport, 'report', undefined)],
+    ['a render-report whose report is null', { ...renderReport, report: null }],
+    ...RENDER_COUNTS.flatMap((key) => [
+      [
+        `a report with no ${key}`,
+        { ...renderReport, report: withField(RENDER, key, undefined) },
+      ] as const,
+      [
+        `a report whose ${key} is a string`,
+        { ...renderReport, report: { ...RENDER, [key]: '1' } },
+      ] as const,
+    ]),
+    [
+      'a report with no droppedNodeIds',
+      { ...renderReport, report: withField(RENDER, 'droppedNodeIds', undefined) },
+    ],
+    [
+      "a report whose droppedNodeIds is 'c'",
+      { ...renderReport, report: { ...RENDER, droppedNodeIds: 'c' } },
+    ],
+    [
+      'a report whose droppedNodeIds holds a number',
+      { ...renderReport, report: { ...RENDER, droppedNodeIds: ['c', 3] } },
+    ],
+    ['a host-to-page graph', graph],
+    ['an unknown type', { type: 'hello', protocol: 1 }],
+  ];
+  it.each(rejected)('rejects %s', (_name, message) => {
+    expect(parseWebviewMessage(message)).toBeUndefined();
+  });
+});
+
+describe('parseInspectorInput (stdin, decision 9a)', () => {
+  const report = { seq: 0, checks: CHECKS, state: 'fail' };
+  const verify = (checks: readonly unknown[]): unknown => ({
+    type: 'verification',
+    report: { ...report, checks },
+  });
+  it.each([
+    ['graph', { type: 'graph', payload: P }],
+    ['graph-delta', { type: 'graph-delta', delta: D }],
+    [
+      'verification with all six checks in enum order (C-EXT I-18)',
+      { type: 'verification', report },
+    ],
+    ['a check with a detail', verify([{ ...CHECKS[0], detail: 'ok' }, ...CHECKS.slice(1)])],
+  ])('accepts a %s line', (_name, line) => {
+    expect(parseInspectorInput(line)).toStrictEqual(line);
+  });
+
+  const rejected: readonly (readonly [string, unknown])[] = [
+    ...NOT_RECORDS.map((value) => [`the non-record ${JSON.stringify(value)}`, value] as const),
+    ['a graph with no payload', { type: 'graph' }],
+    ['a payload with string nodes', { type: 'graph', payload: { ...P, nodes: 'ab' } }],
+    ['a payload with no edges', { type: 'graph', payload: withField(P, 'edges', undefined) }],
+    ['a payload with no seq', { type: 'graph', payload: withField(P, 'seq', undefined) }],
+    ['a delta with no seq', { type: 'graph-delta', delta: withField(D, 'seq', undefined) }],
+    [
+      'a delta whose removedNodeIds is a string',
+      { type: 'graph-delta', delta: { ...D, removedNodeIds: 'd' } },
+    ],
+    [
+      "a delta from producer 'parser'",
+      { type: 'graph-delta', delta: { ...D, producer: 'parser' } },
+    ],
+    ['a graph line carrying a delta', { type: 'graph', delta: D }],
+    ['a verification with no report', { type: 'verification' }],
+    ['a report with no seq', { type: 'verification', report: withField(report, 'seq', undefined) }],
+    ["a report at seq '0' (review a10)", { type: 'verification', report: { ...report, seq: '0' } }],
+    ["a report in state 'green'", { type: 'verification', report: { ...report, state: 'green' } }],
+    [
+      'a report with no state',
+      { type: 'verification', report: withField(report, 'state', undefined) },
+    ],
+    [
+      'a report whose checks is null',
+      { type: 'verification', report: { ...report, checks: null } },
+    ],
+    ['no checks (I-18: all six)', verify([])],
+    ['five checks', verify(CHECKS.slice(0, 5))],
+    ['seven checks', verify([...CHECKS, CHECKS[0]])],
+    ['six checks out of enum order', verify([CHECKS[1], CHECKS[0], ...CHECKS.slice(2)])],
+    ['six checks with one twice', verify([CHECKS[0], ...CHECKS.slice(0, 5)])],
+    ['a malformed check', verify([{ ...CHECKS[0], observed: '3' }, ...CHECKS.slice(1)])],
+    ['an unknown type', { type: 'payload', payload: P }],
+  ];
+  it.each(rejected)('rejects %s', (_name, line) => {
+    expect(parseInspectorInput(line)).toBeUndefined();
   });
 });

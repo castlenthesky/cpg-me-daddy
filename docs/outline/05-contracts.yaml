@@ -86,8 +86,8 @@ contracts:
       export type DeltaApplyResult = { outcome: 'applied'; payload: GraphPayload } | { outcome: 'already-applied'; payload: GraphPayload } | { outcome: 'gap'; expected: number; got: number };
       /** Owner-discriminated MERGE (DQ-01c): a re-added id is merged by producer tier — the filesystem tier's fields and the code tier's fields on one node never destroy each other; it is neither concat nor whole-node replace. */
       export function applyGraphDelta(payload: GraphPayload, delta: GraphDelta): DeltaApplyResult;
-      export type HostToWebview = { type: 'graph'; payload: GraphPayload } | { type: 'graph-delta'; delta: GraphDelta };
-      export type WebviewToHost = { type: 'ready' } | { type: 'reveal'; nodeId: string } | { type: 'resync'; haveSeq: number };
+      export type HostToWebview = HostToWebviewMessage;   // C-EXT's union governs (controller decision 13); @cpg/model carries it
+      export type WebviewToHost = WebviewToHostMessage;   // C-EXT's union governs (controller decision 13); @cpg/model carries it
     amended_by:
       - decision: DQ-01
         was: "C-MODEL proposal: GraphPayload.revision/GraphDelta.baseRevision+revision (a range), edgeId(), removedEdgeIds, composeDeltas() with a composition law, whole-node replace on re-add"
@@ -99,6 +99,10 @@ contracts:
       - decision: DQ-02
         was: "NodeLocation.filePath: absolute path"
         now: "WorkspacePath"
+      - decision: "controller 13 (owner delegation, 2026-11-22)"
+        was: "HostToWebview = graph{payload} | graph-delta{delta}; WebviewToHost = ready | reveal{nodeId} | resync{haveSeq} (the archive union)"
+        now: "HostToWebview and WebviewToHost are C-EXT's HostToWebviewMessage and WebviewToHostMessage (protocol, epoch, seq, theme, verification, resync{epoch, seq, reason}, render-report), which @cpg/model carries"
+        why: "both hosts (the browser inspector now, VS Code at U3) speak one protocol from the zero-dependency shared vocabulary; this line had gone stale against the code (stop-list 58)"
     invariants:
       - { id: I-1,  class: C, text: "@cpg/model imports nothing at runtime; no file under packages/** imports vscode (check-deps)" }
       - { id: I-3,  class: R, text: "no id contains U+0000" }
