@@ -2,6 +2,7 @@ import { assertType, describe, expect, expectTypeOf, it } from 'vitest';
 import * as model from './index';
 import {
   applyGraphDelta,
+  CPG_PROTOCOL_VERSION,
   readEdgeResolution,
   readNodeLocation,
   readNodeResolution,
@@ -17,15 +18,24 @@ import {
   type GraphDelta,
   type GraphNode,
   type GraphPayload,
+  type CheckResult,
+  type CheckState,
+  type Epoch,
   type HostToWebview,
   type PropertyOwner,
   type PropertySpec,
+  type RenderReport,
+  type Seq,
+  type ThemeSnapshot,
+  type VerificationReport,
+  type VerifyCheckId,
   type WebviewToHost,
 } from './index';
 import { ownedBy } from './schema/owner';
 
 declare const p: GraphPayload;
 declare const d: GraphDelta;
+const THEME: ThemeSnapshot = { kind: 'dark', nodeColors: {}, defaultNodeColor: 'x' };
 
 describe('@cpg/model public types', () => {
   it('applyGraphDelta is payload x delta -> DeltaApplyResult', () => {
@@ -177,10 +187,90 @@ describe('@cpg/model public types', () => {
   });
   /* oxlint-enable import/namespace */
 
-  it('the message unions discriminate on `type`', () => {
-    expectTypeOf<HostToWebview['type']>().toEqualTypeOf<'graph' | 'graph-delta'>();
-    expectTypeOf<WebviewToHost['type']>().toEqualTypeOf<'ready' | 'reveal'>();
+  // Controller decision 13: the unions are C-EXT's HostToWebviewMessage / WebviewToHostMessage.
+  it("the message unions are C-EXT's, discriminated on `type`", () => {
+    expectTypeOf<HostToWebview['type']>().toEqualTypeOf<
+      'theme' | 'graph' | 'graph-delta' | 'verification'
+    >();
+    expectTypeOf<WebviewToHost['type']>().toEqualTypeOf<
+      'ready' | 'reveal' | 'resync' | 'render-report'
+    >();
+    expectTypeOf(CPG_PROTOCOL_VERSION).toEqualTypeOf<1>();
+    expectTypeOf<HostToWebview['protocol']>().toEqualTypeOf<1>();
+    expectTypeOf<HostToWebview['epoch']>().toEqualTypeOf<number>();
+    expectTypeOf<Exclude<HostToWebview, { type: 'theme' }>['seq']>().toEqualTypeOf<number>();
     // @ts-expect-error reveal must carry a nodeId
     assertType<WebviewToHost>({ type: 'reveal' });
+    // @ts-expect-error ready carries the page's protocol
+    assertType<WebviewToHost>({ type: 'ready' });
+    assertType<WebviewToHost>({ type: 'ready', protocol: 2 });
+    // @ts-expect-error a graph message carries protocol, epoch and seq
+    assertType<HostToWebview>({ type: 'graph', payload: p });
+    assertType<HostToWebview>({ type: 'graph', protocol: 1, epoch: 1, seq: p.seq, payload: p });
+    // @ts-expect-error the host speaks exactly protocol 1
+    assertType<HostToWebview>({ type: 'graph', protocol: 2, epoch: 1, seq: p.seq, payload: p });
+    assertType<HostToWebview>({ type: 'graph-delta', protocol: 1, epoch: 1, seq: d.seq, delta: d });
+  });
+
+  it('resync carries epoch, seq and one of three reasons', () => {
+    expectTypeOf<Extract<WebviewToHost, { type: 'resync' }>['reason']>().toEqualTypeOf<
+      'gap' | 'stale-epoch' | 'render-error'
+    >();
+    assertType<WebviewToHost>({ type: 'resync', epoch: 1, seq: 0, reason: 'gap' });
+    // @ts-expect-error an unknown reason
+    assertType<WebviewToHost>({ type: 'resync', epoch: 1, seq: 0, reason: 'bored' });
+  });
+
+  it("render-report carries C-EXT's counts plus duplicateEdges (owner decision 12a)", () => {
+    expectTypeOf<RenderReport>().toEqualTypeOf<{
+      readonly payloadNodeCount: number;
+      readonly renderedNodeCount: number;
+      readonly renderedEdgeCount: number;
+      readonly duplicateEdges: number;
+      readonly droppedNodeIds: readonly string[];
+      readonly frameMs: number;
+    }>();
+    expectTypeOf<
+      Extract<WebviewToHost, { type: 'render-report' }>['report']
+    >().toEqualTypeOf<RenderReport>();
+  });
+
+  it('a verification message carries a VerificationReport of shared CheckResults', () => {
+    expectTypeOf<
+      Extract<HostToWebview, { type: 'verification' }>['report']
+    >().toEqualTypeOf<VerificationReport>();
+    expectTypeOf<VerificationReport['checks']>().toEqualTypeOf<readonly CheckResult[]>();
+    expectTypeOf<VerificationReport['state']>().toEqualTypeOf<CheckState>();
+    expectTypeOf<VerificationReport['epoch']>().toEqualTypeOf<number>();
+    expectTypeOf<VerificationReport['seq']>().toEqualTypeOf<number>();
+    expectTypeOf<CheckState>().toEqualTypeOf<'pass' | 'fail' | 'stale' | 'unavailable'>();
+    expectTypeOf<VerifyCheckId>().toEqualTypeOf<
+      | 'filesystem-reconciliation'
+      | 'identity-invariants'
+      | 'id-uniqueness'
+      | 'render-reconciliation'
+      | 'revision-reconciliation'
+      | 'resolution-health'
+    >();
+    expectTypeOf<ThemeSnapshot['kind']>().toEqualTypeOf<
+      'light' | 'dark' | 'high-contrast-light' | 'high-contrast-dark'
+    >();
+  });
+
+  // Round two (review a12, b3): the theme branch has no seq; the remaining shapes are pinned.
+  it('theme carries its snapshot and no seq; render-report and resync carry epoch and seq', () => {
+    type Theme = Extract<HostToWebview, { type: 'theme' }>;
+    expectTypeOf<Theme>().not.toHaveProperty('seq');
+    expectTypeOf<Theme['theme']>().toEqualTypeOf<ThemeSnapshot>();
+    expectTypeOf<ThemeSnapshot['nodeColors']>().toEqualTypeOf<Readonly<Record<string, string>>>();
+    expectTypeOf<ThemeSnapshot['defaultNodeColor']>().toEqualTypeOf<string>();
+    expectTypeOf<Seq>().toEqualTypeOf<number>();
+    expectTypeOf<Epoch>().toEqualTypeOf<number>();
+    type Report = Extract<WebviewToHost, { type: 'render-report' }>;
+    expectTypeOf<Report['epoch']>().toEqualTypeOf<Epoch>();
+    expectTypeOf<Report['seq']>().toEqualTypeOf<Seq>();
+    expectTypeOf<Extract<WebviewToHost, { type: 'resync' }>['seq']>().toEqualTypeOf<Seq>();
+    // @ts-expect-error a theme message carries no seq
+    assertType<HostToWebview>({ type: 'theme', protocol: 1, epoch: 1, seq: 0, theme: THEME });
   });
 });

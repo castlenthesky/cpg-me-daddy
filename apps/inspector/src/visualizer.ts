@@ -13,6 +13,7 @@ import {
 } from './layout';
 import { nodeLegendRows, relationshipLegendRows, type LegendRow } from './legend';
 import { relationshipKey } from './relationship-types';
+import type { DrawnGraph } from './render-report';
 import { linkTooltipText, nodeTooltipText, TOOLTIP_GAP_PX } from './tooltip';
 
 /** The slice of cosmos.gl's Graph the visualizer calls; part 2b passes a real Graph. */
@@ -209,6 +210,17 @@ export class GraphVisualizer {
 
   fitView(): void {
     this.surface?.fitView();
+  }
+
+  /**
+   * What is drawn now, for the render-report: a payload id is drawn when it has a live point (never
+   * the synthetic root), and edgeCount is the edges drawn, legend toggles ignored (part 3a-i).
+   */
+  drawn(): DrawnGraph {
+    return {
+      isDrawn: (id) => this.points.liveIndex(id) !== undefined,
+      edgeCount: this.allLinks.linkEdges.length,
+    };
   }
 
   dispose(): void {

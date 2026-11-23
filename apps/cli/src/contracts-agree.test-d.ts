@@ -1,15 +1,17 @@
 // contracts-agree (U1.3.2): compile-time agreement between the seam contracts. Each `@ts-expect-error`
 // is its own anti-vacuity proof: if the line stops being an error, tsc reports the directive as unused.
 // Pairs that land later with their second side: GraphDelta model<->sink (U2a), NormalizedChange
-// watch<->cli (U4), CheckResult cli<->ext (U3), RefSite extract<->resolve (U6a).
+// watch<->cli (U4), RefSite extract<->resolve (U6a). CheckResult cli<->ext landed with U2b.1 part 3a.
 import { assertType, describe, expectTypeOf, it } from 'vitest';
 import type {
   AbsolutePath,
+  CheckResult as ExtCheckResult,
   EdgeResolution,
   EVAL_TYPE_RELATION,
   GraphDelta,
   NodeLocation,
   RESOLUTION_STATUS,
+  VerificationReport,
   WorkspacePath,
 } from '@cpg/model';
 import type {
@@ -28,6 +30,7 @@ import type {
   ResolverWorkspace,
   ExtractedFileRefs,
 } from '@cpg/resolve';
+import type { CheckResult as CliCheckResult, VerifyReport } from '@cpg/engine';
 import type { ChangeBatch, NormalizedChange, RawWatchEvent, WatchBackend } from '@cpg/watch';
 
 declare const resolution: Resolution;
@@ -168,5 +171,14 @@ describe('seam types are readonly on every field (SEAM-9)', () => {
     expectTypeOf<NonNullable<Resolution['target']>>().toEqualTypeOf<
       Readonly<NonNullable<Resolution['target']>>
     >();
+  });
+});
+
+// CS-12's pair, with C-EXT's side now in @cpg/model (controller decision 13): one CheckResult.
+describe('CheckResult cli <-> ext', () => {
+  it("C-CLI's VerifyReport and C-EXT's VerificationReport carry the same checks and state", () => {
+    expectTypeOf<CliCheckResult>().toEqualTypeOf<ExtCheckResult>();
+    expectTypeOf<VerifyReport['checks']>().toEqualTypeOf<VerificationReport['checks']>();
+    expectTypeOf<VerifyReport['state']>().toEqualTypeOf<VerificationReport['state']>();
   });
 });

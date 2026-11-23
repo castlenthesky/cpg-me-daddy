@@ -158,20 +158,124 @@ export interface GraphDelta {
   readonly removedNodeIds: readonly string[];
 }
 
-/** Producer/engine → host. */
+/** The webview protocol's version (C-EXT): every host message carries it, and `ready` reports the page's. */
+export const CPG_PROTOCOL_VERSION = 1 as const;
+
+/** Engine-assigned ordering number of a payload or delta (F-1). */
+export type Seq = number;
+/** Host-assigned; bumps on every full (`cause: 'initial'`) snapshot (C-EXT I-13). */
+export type Epoch = number;
+
+/** The shared verify check ids (05-contracts.yaml shared.verify_check_ids), in enum order. */
+export type VerifyCheckId =
+  | 'filesystem-reconciliation'
+  | 'identity-invariants'
+  | 'id-uniqueness'
+  | 'render-reconciliation'
+  | 'revision-reconciliation'
+  | 'resolution-health';
+
+/** Worst-of ordering: fail > stale > unavailable > pass. */
+export type CheckState = 'pass' | 'fail' | 'stale' | 'unavailable';
+
+/** One verify check's result: C-CLI's VerifyReport and C-EXT's VerificationReport share it. */
+export interface CheckResult {
+  readonly id: VerifyCheckId;
+  readonly state: CheckState;
+  readonly observed: number;
+  readonly expected: number;
+  /** The offending workspace paths (directories or files) or keys, sorted. */
+  readonly localisedTo: readonly string[];
+  readonly detail?: string;
+  /** The graph's seq, snapshotted before the check's first await. */
+  readonly asOfSeq: number;
+}
+
+/** The verdict shown beside the graph (C-EXT; 08-verification §3.3). */
+export interface VerificationReport {
+  readonly epoch: Epoch;
+  readonly seq: Seq;
+  /** All six, once each, in enum order (C-EXT I-18). */
+  readonly checks: readonly CheckResult[];
+  /** The worst state of `checks`. */
+  readonly state: CheckState;
+}
+
+/** The host's theme (C-EXT). The browser inspector does not send one yet (controller decision 14). */
+export interface ThemeSnapshot {
+  readonly kind: 'light' | 'dark' | 'high-contrast-light' | 'high-contrast-dark';
+  readonly nodeColors: Readonly<Record<string, string>>;
+  readonly defaultNodeColor: string;
+}
+
+/** What the renderer drew, for render-reconciliation (C-EXT I-10, owner decision 12a). */
+export interface RenderReport {
+  /** `payload.nodes.length`, duplicate ids included. */
+  readonly payloadNodeCount: number;
+  /** Distinct payload node ids drawn as a point. */
+  readonly renderedNodeCount: number;
+  /** Distinct (source, target, type) edges drawn. */
+  readonly renderedEdgeCount: number;
+  /** Payload edges that repeat an earlier edge's (source, target, type), so draw once (12a). */
+  readonly duplicateEdges: number;
+  /** A capped sample of the ids with a payload entry left undrawn. */
+  readonly droppedNodeIds: readonly string[];
+  readonly frameMs: number;
+}
+
+/** Host → webview (C-EXT HostToWebviewMessage). */
 export type HostToWebview =
-  | { type: 'graph'; payload: GraphPayload }
-  | { type: 'graph-delta'; delta: GraphDelta };
+  | {
+      readonly type: 'theme';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly theme: ThemeSnapshot;
+    }
+  | {
+      readonly type: 'graph';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly payload: GraphPayload;
+    }
+  | {
+      readonly type: 'graph-delta';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly delta: GraphDelta;
+    }
+  | {
+      readonly type: 'verification';
+      readonly protocol: typeof CPG_PROTOCOL_VERSION;
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly report: VerificationReport;
+    };
 
 /**
- * Host → producer/engine.
+ * Webview → host (C-EXT WebviewToHostMessage).
  *
  * `reveal` carries only the node id, never the location itself: the host
  * already holds the authoritative merged payload and resolves the id against
  * it, so there is one source of truth for where a node points and no way for a
  * stale view to ask the host to open a range that no longer exists.
  */
-export type WebviewToHost = { type: 'ready' } | { type: 'reveal'; nodeId: string };
+export type WebviewToHost =
+  | { readonly type: 'ready'; readonly protocol: number }
+  | { readonly type: 'reveal'; readonly nodeId: string }
+  | {
+      readonly type: 'resync';
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly reason: 'gap' | 'stale-epoch' | 'render-error';
+    }
+  | {
+      readonly type: 'render-report';
+      readonly epoch: Epoch;
+      readonly seq: Seq;
+      readonly report: RenderReport;
+    };
 
 export * from './delta';
 export * from './read';

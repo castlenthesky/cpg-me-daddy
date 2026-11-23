@@ -1,7 +1,16 @@
-// REAL (U2b.1 part 2b, BMO-35): port of 21754b4:src/webview/graphApp.ts.
+// REAL (U2b.1 parts 2b and 3a-i, BMO-35): port of 21754b4:src/webview/graphApp.ts plus the C-EXT
+// protocol (epoch, seq, resync), the render-report and the verification banner.
 
-import type { GraphDelta, GraphPayload, HostToWebview, WebviewToHost } from '@cpg/model';
+import {
+  applyGraphDelta,
+  CPG_PROTOCOL_VERSION,
+  type GraphPayload,
+  type WebviewToHost,
+} from '@cpg/model';
+import { verificationText } from './banner';
 import { mountGraphViews, type ViewDocument, type ViewElement } from './dom-views';
+import { parsePageMessage } from './messages';
+import { renderReport } from './render-report';
 import { GraphVisualizer, type GraphSurface, type SurfaceEvents } from './visualizer';
 
 /**
@@ -22,36 +31,24 @@ export interface GraphPage<E extends ViewElement<E>> {
   readonly container: E;
   /** Builds the cosmos.gl Graph on the container with these callbacks (see graphConfig). */
   readonly makeSurface: (events: SurfaceEvents) => GraphSurface;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isGraphPayload(value: unknown): value is GraphPayload {
-  return isRecord(value) && Array.isArray(value['nodes']) && Array.isArray(value['edges']);
-}
-
-function isGraphDelta(value: unknown): value is GraphDelta {
-  return (
-    isRecord(value) &&
-    Array.isArray(value['addedNodes']) &&
-    Array.isArray(value['addedEdges']) &&
-    Array.isArray(value['removedNodeIds'])
-  );
-}
-
-function isHostMessage(message: unknown): message is HostToWebview {
-  if (!isRecord(message)) return false;
-  if (message['type'] === 'graph') return isGraphPayload(message['payload']);
-  if (message['type'] === 'graph-delta') return isGraphDelta(message['delta']);
-  return false;
+  /** The shell's #cpg-verification region, which shows the latest verify report. */
+  readonly banner: E;
+  /** The clock frameMs is measured on; performance.now() by default. */
+  readonly now?: () => number;
 }
 
 /**
- * Mounts the views, builds the visualizer, routes `graph` and `graph-delta` messages to it (anything
- * else is ignored), posts `reveal` with only the node id on a click, and posts `ready` last, once the
- * handler is registered, even when the surface failed to build.
+ * Mounts the views and builds the visualizer, then speaks C-EXT's protocol with the host:
+ * - posts `ready` with CPG_PROTOCOL_VERSION last, once the handler is registered, even when the
+ *   surface failed to build;
+ * - takes only messages parsePageMessage accepts (protocol 1); everything else is ignored;
+ * - `graph`: adopts its epoch and payload, renders, and posts a render-report at its seq;
+ * - `graph-delta`: before any graph, or on another epoch than the page's, posts resync 'stale-epoch';
+ *   otherwise merges it into the held payload with applyGraphDelta: applied draws it and posts a
+ *   render-report, already-applied is ignored, a gap posts resync 'gap', malformed posts resync
+ *   'render-error'. A resync carries the page's own epoch and seq (0 and -1 before any graph);
+ * - `verification`: writes verificationText into the banner;
+ * - a click posts `reveal` with only the node id.
  */
 export function startGraphApp<E extends ViewElement<E>>(
   page: GraphPage<E>,
@@ -63,17 +60,70 @@ export function startGraphApp<E extends ViewElement<E>>(
     onNodeClick: (node) => channel.post({ type: 'reveal', nodeId: node.id }),
   });
 
-  channel.onMessage((message) => {
-    if (!isHostMessage(message)) return;
+  const now = page.now ?? (() => performance.now());
+  let epoch = 0;
+  let payload: GraphPayload | undefined;
+
+  const postResync = (reason: 'gap' | 'stale-epoch' | 'render-error'): void => {
+    channel.post({ type: 'resync', epoch, seq: payload?.seq ?? -1, reason });
+  };
+
+  const postReport = (seq: number, current: GraphPayload, frameMs: number): void => {
+    channel.post({
+      type: 'render-report',
+      epoch,
+      seq,
+      report: renderReport(current, visualizer.drawn(), frameMs),
+    });
+  };
+
+  channel.onMessage((raw) => {
+    const message = parsePageMessage(raw);
+    if (message === undefined) return;
+
     if (message.type === 'graph') {
-      visualizer.render(message.payload);
-    } else {
-      visualizer.applyDelta(message.delta);
+      epoch = message.epoch;
+      payload = message.payload;
+      const t0 = now();
+      visualizer.render(payload);
+      const frameMs = now() - t0;
+      postReport(message.seq, payload, frameMs);
+      return;
+    }
+
+    if (message.type === 'verification') {
+      page.banner.textContent = verificationText(message.report);
+      return;
+    }
+
+    if (payload === undefined || message.epoch !== epoch) {
+      postResync('stale-epoch');
+      return;
+    }
+
+    const result = applyGraphDelta(payload, message.delta);
+    switch (result.outcome) {
+      case 'already-applied':
+        return;
+      case 'gap':
+        postResync('gap');
+        return;
+      case 'malformed':
+        postResync('render-error');
+        return;
+      case 'applied': {
+        payload = result.payload;
+        const t0 = now();
+        visualizer.applyDelta(message.delta);
+        const frameMs = now() - t0;
+        postReport(message.seq, payload, frameMs);
+        return;
+      }
     }
   });
 
   // Tells the host it is now safe to postMessage — a message sent right after the page HTML is set
   // can otherwise arrive before the listener above exists.
-  channel.post({ type: 'ready' });
+  channel.post({ type: 'ready', protocol: CPG_PROTOCOL_VERSION });
   return visualizer;
 }
