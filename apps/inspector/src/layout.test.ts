@@ -661,3 +661,23 @@ describe('the seed is read as an unsigned 32-bit integer (review b2)', () => {
     expect(at(-1)).not.toEqual(at(1));
   });
 });
+
+// Post-implementation (sabotage survivor: the clamp threshold doubled). Both clamp cases above want
+// a ring of 3819.7, past twice the limit; these sit either side of the limit itself.
+describe('the clamp threshold is MAX_RADIUS itself (sabotage)', () => {
+  it('a ring just over the limit is clamped to it', () => {
+    // 1000 leaves want 1000*12/2pi = 1909.9 > 2048*0.9/1.1 = 1675.6.
+    const result = layoutPayload(star(1000), { seed: 6 });
+    const bad = result.ids.slice(1).flatMap((id) => misplaced(result, id, ring(MAX_RADIUS)));
+    expect(bad).toEqual([]);
+  });
+
+  it('a ring just under the limit keeps its own radius', () => {
+    // 800 leaves want 800*12/2pi = 1527.9 < 1675.6: no scaling.
+    const result = layoutPayload(star(800), { seed: 6 });
+    const bad = result.ids
+      .slice(1)
+      .flatMap((id) => misplaced(result, id, ring((800 * 12) / (2 * PI))));
+    expect(bad).toEqual([]);
+  });
+});
