@@ -137,7 +137,7 @@ interface PlacementState {
 }
 
 /** Deterministic mulberry32 PRNG in [0, 1), seeded with `seed >>> 0`. */
-function createMulberry32(seed: number): () => number {
+export function createMulberry32(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
     state = (state + 0x6d2b79f5) >>> 0;

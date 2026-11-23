@@ -2,7 +2,7 @@
   "name": "@cpg/inspector",
   "version": "0.0.1",
   "private": true,
-  "description": "The browser picture of the graph (U2b). Part 1: the seeded radial layout and the node and relationship type registries.",
+  "description": "The browser picture of the graph (U2b): the seeded radial layout, the type registries and the cosmos.gl renderer.",
   "files": [
     "dist",
     "!dist/.tsbuildinfo"
@@ -11,6 +11,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@cosmos.gl/graph": "3.6.0",
     "@cpg/model": "*"
   }
 }
