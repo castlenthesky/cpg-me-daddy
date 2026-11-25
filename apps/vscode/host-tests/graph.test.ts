@@ -2,6 +2,11 @@
 // @vscode/test-cli (`bun run test:vscode-host`) on a copy of ladder rung 07; the only thing read of the
 // extension is what `cpg.verify` resolves with (controller decision 40) and what the editor shows.
 // Expected values: 08-verification.md §3, C-EXT, controller decisions 35, 38 and 42, and the rung.
+//
+// A `pass` of render-reconciliation here proves that the bundle loaded in a real webview and that its page
+// reported the graph. It does NOT prove that a picture was drawn: the report counts the page's own buffers,
+// and a page with no WebGL at all reports the same (stop-list 124). So the suite says whether there is
+// WebGL2, and no test here claims a drawing.
 
 import { strict as assert } from 'node:assert';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -16,7 +21,7 @@ import { webglRenderer } from './webgl';
 const FILES = 3;
 const NODES = 5;
 const STALE = 'shapes/square.py';
-const DRAW_MS = 20_000;
+const REPORT_MS = 20_000;
 const VERIFY_STATES = {
   'filesystem-reconciliation': 'pass',
   'identity-invariants': 'unavailable', // until U6c
@@ -53,9 +58,9 @@ const check = ({ checks }: VerificationReport, id: string) => {
   assert.ok(found, `no ${id}`);
   return found;
 };
-/** The report once the page has reported what it drew, or the last one when it does not in time. */
-async function drawn(): Promise<VerificationReport> {
-  const deadline = Date.now() + DRAW_MS;
+/** The verdict once the page has reported on the graph, or the last one when it does not in time. */
+async function reported(): Promise<VerificationReport> {
+  const deadline = Date.now() + REPORT_MS;
   for (;;) {
     const report = await verify();
     const { state } = check(report, 'render-reconciliation');
@@ -85,15 +90,15 @@ const cpgDiagnostics = () =>
 
 suite('the graph in VS Code', () => {
   let renderer: string | undefined;
-  /** For what only a page that draws can show: skipped on the old pin when it can't (decision 42). */
+  /** For what needs a page to report: skipped on the old pin when it has no WebGL2 (decision 42). */
   function needsWebGL(context: Mocha.Context): void {
     if (renderer === undefined && process.env['CPG_HOST_PIN'] === 'oldest') context.skip();
   }
-  /** What the E4 tests start from, whatever the one before left: a fresh index, drawn when it can be. */
+  /** What the E4 tests start from, whatever the one before left: a fresh index, reported by the page. */
   async function fresh(): Promise<void> {
     await openGraph();
     if (renderer === undefined) return;
-    assert.equal(check(await drawn(), 'render-reconciliation').state, 'pass', 'not drawn');
+    assert.equal(check(await reported(), 'render-reconciliation').state, 'pass', 'no report');
   }
 
   suiteSetup(async () => {
@@ -116,7 +121,7 @@ suite('the graph in VS Code', () => {
     assert.equal(graphPanels().length, 1);
   });
 
-  test('can draw in a webview', async function () {
+  test('has WebGL2 in a webview', async function () {
     renderer = await webglRenderer();
     console.log(`VS Code ${vscode.version}: WebGL2 ${renderer ?? 'none'}`);
     needsWebGL(this);
@@ -138,10 +143,10 @@ suite('the graph in VS Code', () => {
     assert.deepEqual(cpgDiagnostics(), []);
   });
 
-  test('draws the whole graph in a real webview: render-reconciliation', async function () {
+  test('the bundle loads in a real webview and its page reports every node (no proof of a drawing)', async function () {
     needsWebGL(this);
     await openGraph();
-    const report = await drawn();
+    const report = await reported();
     const render = check(report, 'render-reconciliation');
     assert.deepEqual([render.state, render.observed, render.expected], ['pass', NODES, NODES]);
     assert.equal(report.state, 'unavailable'); // the worst of the six, until U6c
@@ -182,7 +187,7 @@ suite('the graph in VS Code', () => {
       const failed = await verify();
       assert.equal(check(failed, 'revision-reconciliation').state, 'fail');
       await openGraph();
-      const report = renderer === undefined ? await verify() : await drawn();
+      const report = renderer === undefined ? await verify() : await reported();
       assert.equal(check(report, 'revision-reconciliation').state, 'pass');
       assert.deepEqual(cpgDiagnostics(), []);
       assert.equal(graphPanels().length, 1);
@@ -194,7 +199,7 @@ suite('the graph in VS Code', () => {
 
     // The host verifies 500 ms after a render-report it accepts (decision 36), and each run sets the
     // diagnostics again; nothing else asks for one here. So the event says the reloaded page was sent the
-    // graph and drew it.
+    // graph and reported on it.
     test('a webview that is reloaded is sent the graph again', async function () {
       needsWebGL(this);
       await verify();
@@ -209,7 +214,7 @@ suite('the graph in VS Code', () => {
       await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction');
       const outcome = await Promise.race([
         verified.then(() => 'verified'),
-        delay(DRAW_MS).then(() => 'nothing happened'),
+        delay(REPORT_MS).then(() => 'nothing happened'),
       ]);
       assert.equal(outcome, 'verified');
       assert.equal(check(await verify(), 'render-reconciliation').state, 'pass');

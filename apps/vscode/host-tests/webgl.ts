@@ -1,5 +1,5 @@
-// REAL (U3.1.2, BMO-56): whether a webview here can draw, asked of one. A page with no WebGL2 at all still
-// reports its graph as drawn, so a render-report alone does not say (see 08-verification.md §7).
+// REAL (U3.1.2, BMO-56): which WebGL2 a webview gets here, asked of one. A page with none at all still
+// reports its graph as drawn, so a render-report does not say (stop-list 124; 08-verification.md §7).
 
 import * as vscode from 'vscode';
 

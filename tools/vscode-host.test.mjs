@@ -207,7 +207,7 @@ describe('hostConfigurations', () => {
     ]);
   });
 
-  it('draws in software, and sends no telemetry', () => {
+  it('asks for software GL, and sends no telemetry', () => {
     expect(SOFTWARE_GL).toContain('--use-angle=swiftshader');
     for (const configuration of hostConfigurations(scratch, onDisplay)) {
       expect(configuration.launchArgs).toEqual(expect.arrayContaining(SOFTWARE_GL));
@@ -247,7 +247,7 @@ describe('spikeConfiguration', () => {
     expect([env.CPG_SPIKE_SAMPLES, env.CPG_HOST_VSCODE]).toEqual([SPIKE_SAMPLES, PINS.current]);
   });
 
-  it('is headless and software-drawn by default, and uses the GPU on a display', () => {
+  it('is headless with software GL by default, and uses the GPU on a display', () => {
     const headless = spikeConfiguration(join(scratch, 'a'), linux);
     expect(headless.launchArgs).toEqual(expect.arrayContaining([HEADLESS, ...SOFTWARE_GL]));
     // Round two (review 3): both variables, and kept on a display.
