@@ -1,15 +1,19 @@
-// SEAT (U3.1.1 part 1, BMO-52): the VS Code panel's GraphHost. Plain node, no vscode import. It will
-// port 21754b4:src/views/graphViewProvider.ts (the ready handshake, merge locally and post only the
-// delta) onto C-EXT's protocol.
+// REAL (U3.1.1 part 1, BMO-52): the VS Code panel's GraphHost. Plain node, no vscode import. Ports
+// 21754b4:src/views/graphViewProvider.ts (ready handshake, merge locally and post only the delta)
+// onto C-EXT's protocol. `reveal` and `verify` stay SEAT until part 2. Product code does not call
+// `onDelta` before U4 (controller decision 28).
 
-import type {
-  Epoch,
-  GraphDelta,
-  GraphPayload,
-  Seq,
-  ThemeSnapshot,
-  VerificationReport,
-  WebviewToHost,
+import {
+  applyGraphDelta,
+  CPG_PROTOCOL_VERSION,
+  type Epoch,
+  type GraphDelta,
+  type GraphPayload,
+  type HostToWebview,
+  type Seq,
+  type ThemeSnapshot,
+  type VerificationReport,
+  type WebviewToHost,
 } from '@cpg/model';
 import type {
   DeltaMeta,
@@ -17,6 +21,7 @@ import type {
   GraphHost,
   ProtocolFault,
   RevealOutcome,
+  SerializedError,
   SnapshotMeta,
   WebviewTransport,
 } from './contract';
@@ -30,9 +35,13 @@ export interface GraphHostOptions {
   readonly parse: (message: unknown) => WebviewToHost | undefined;
 }
 
-const seat = (): never => {
-  throw new Error('SEAT: PanelGraphHost lands with U3.1.1 part 1');
-};
+const EMPTY_PAYLOAD: GraphPayload = { seq: -1, nodes: [], edges: [] };
+
+function serializeError(thrown: unknown): SerializedError {
+  return thrown instanceof Error
+    ? { name: thrown.name, message: thrown.message }
+    : { name: 'Error', message: String(thrown) };
+}
 
 /**
  * The VS Code panel's GraphHost: one merged payload, its epoch, and at most one page kept in step.
@@ -68,61 +77,116 @@ const seat = (): never => {
  * String(thrown) }`. Nothing else changes, and later messages are still posted.
  */
 export class PanelGraphHost implements GraphHost {
-  protected readonly options: GraphHostOptions;
+  private readonly options: GraphHostOptions;
+  private currentPayload: GraphPayload | undefined;
+  private currentEpoch: Epoch = 0;
+  private currentTheme: ThemeSnapshot;
+  private transport: WebviewTransport | undefined;
+  private subscription: ReturnType<WebviewTransport['onMessage']> | undefined;
+  private ready = false;
+  private latestRenderReport: RenderReportMessage | undefined;
+  private readonly recordedFaults: ProtocolFault[] = [];
 
   constructor(options: GraphHostOptions) {
     this.options = options;
+    this.currentTheme = options.theme;
   }
 
-  async onSnapshot(_payload: GraphPayload, _meta: SnapshotMeta): Promise<void> {
-    seat();
+  async onSnapshot(payload: GraphPayload, meta: SnapshotMeta): Promise<void> {
+    if (meta.cause === 'initial') {
+      this.currentEpoch += 1;
+      this.latestRenderReport = undefined;
+    } else if (this.currentPayload !== undefined && payload.seq <= this.currentPayload.seq) {
+      return;
+    }
+    this.currentPayload = payload;
+    this.postGraph();
   }
 
-  async onDelta(_delta: GraphDelta, _meta: DeltaMeta): Promise<void> {
-    seat();
+  async onDelta(delta: GraphDelta, _meta: DeltaMeta): Promise<void> {
+    const hadGraph = this.currentPayload !== undefined;
+    const result = applyGraphDelta(this.currentPayload ?? EMPTY_PAYLOAD, delta);
+    switch (result.outcome) {
+      case 'applied':
+        this.currentPayload = result.payload;
+        if (hadGraph) {
+          this.post({
+            type: 'graph-delta',
+            protocol: CPG_PROTOCOL_VERSION,
+            epoch: this.currentEpoch,
+            seq: delta.seq,
+            delta,
+          });
+        } else {
+          this.postGraph();
+        }
+        return;
+      case 'already-applied':
+        return;
+      case 'gap':
+        this.recordedFaults.push({
+          kind: 'seq-gap',
+          expected: result.expected,
+          received: result.got,
+        });
+        return;
+      case 'malformed': {
+        const defects = result.defects
+          .map((defect) => `${defect.code} ${defect.nodeId}`)
+          .join(', ');
+        throw new Error(`malformed delta at seq ${String(delta.seq)}: ${defects}`);
+      }
+    }
   }
 
   /**
    * Makes `transport` the page this host talks to. An earlier one is unsubscribed and gets nothing
    * more (C-EXT not_guaranteed: multiplexing). The new page is not ready until it says so.
    */
-  attach(_transport: WebviewTransport): void {
-    seat();
+  attach(transport: WebviewTransport): void {
+    this.detach();
+    this.transport = transport;
+    this.subscription = transport.onMessage((message) => this.handleMessage(message));
   }
 
   /** Unsubscribes from the page and posts nothing more. The graph is kept, and deltas still merge. */
   detach(): void {
-    seat();
+    this.subscription?.dispose();
+    this.subscription = undefined;
+    this.transport = undefined;
+    this.ready = false;
+    this.latestRenderReport = undefined;
   }
 
   /** The merged payload; before anything is delivered, the empty one at seq -1. */
   snapshot(): GraphPayload {
-    return seat();
+    return this.currentPayload ?? EMPTY_PAYLOAD;
   }
 
   /** The merged payload's seq. */
   seq(): Seq {
-    return seat();
+    return this.snapshot().seq;
   }
 
   /** 0 before the first 'initial' snapshot. */
   epoch(): Epoch {
-    return seat();
+    return this.currentEpoch;
   }
 
   /** SEAT: part 2 (C-EXT I-15 to I-17). */
   async reveal(_nodeId: string): Promise<RevealOutcome> {
-    return seat();
+    throw new Error('SEAT: PanelGraphHost.reveal lands with U3.1.1 part 2');
   }
 
   /** Posts `theme` alone to a ready page (I-4); every later connection starts with it. */
-  setTheme(_theme: ThemeSnapshot): void {
-    seat();
+  setTheme(theme: ThemeSnapshot): void {
+    this.currentTheme = theme;
+    this.postTheme();
   }
 
   /** SEAT: part 2 (C-EXT I-18, I-19, I-22). */
   async verify(_fs: FilesystemProbe): Promise<VerificationReport> {
-    return seat();
+    throw new Error('SEAT: PanelGraphHost.verify lands with U3.1.1 part 2');
   }
 
   /**
@@ -131,16 +195,85 @@ export class PanelGraphHost implements GraphHost {
    * snapshot, because a page that has not drawn the graph since then has reported nothing (I-19).
    */
   renderReport(): RenderReportMessage | undefined {
-    return seat();
+    return this.latestRenderReport;
   }
 
   /** Every fault so far, oldest first. */
   faults(): readonly ProtocolFault[] {
-    return seat();
+    return [...this.recordedFaults];
   }
 
   /** detach. */
   dispose(): void {
-    seat();
+    this.detach();
+  }
+
+  private postTheme(): void {
+    this.post({
+      type: 'theme',
+      protocol: CPG_PROTOCOL_VERSION,
+      epoch: this.currentEpoch,
+      theme: this.currentTheme,
+    });
+  }
+
+  /** The whole merged graph, if there is one. */
+  private postGraph(): void {
+    if (this.currentPayload === undefined) return;
+    this.post({
+      type: 'graph',
+      protocol: CPG_PROTOCOL_VERSION,
+      epoch: this.currentEpoch,
+      seq: this.currentPayload.seq,
+      payload: this.currentPayload,
+    });
+  }
+
+  /** The one place a message leaves: dropped unless the attached page is ready (I-2). */
+  private post(message: HostToWebview): void {
+    if (this.transport === undefined || !this.ready) return;
+    try {
+      this.transport.post(message);
+    } catch (thrown) {
+      const seq = message.type === 'theme' ? this.seq() : message.seq;
+      this.recordedFaults.push({ kind: 'post-failed', seq, error: serializeError(thrown) });
+    }
+  }
+
+  private handleMessage(raw: unknown): void {
+    const parsed = this.options.parse(raw);
+    if (parsed === undefined) {
+      this.recordedFaults.push({ kind: 'unknown-message', received: raw });
+      return;
+    }
+    switch (parsed.type) {
+      case 'ready':
+        if (parsed.protocol !== CPG_PROTOCOL_VERSION) {
+          this.recordedFaults.push({ kind: 'unknown-message', received: raw });
+          return;
+        }
+        this.ready = true;
+        this.latestRenderReport = undefined;
+        this.postTheme();
+        this.postGraph();
+        return;
+      case 'resync':
+        this.postGraph();
+        return;
+      case 'render-report':
+        if (parsed.epoch !== this.currentEpoch) {
+          this.recordedFaults.push({
+            kind: 'bad-epoch',
+            expected: this.currentEpoch,
+            received: parsed.epoch,
+          });
+          return;
+        }
+        this.latestRenderReport = parsed;
+        return;
+      case 'reveal':
+        // SEAT (U3.1.1 part 2): inbound reveal opens source via SourceOpener.
+        return;
+    }
   }
 }

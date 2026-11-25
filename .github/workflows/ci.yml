@@ -48,6 +48,11 @@ jobs:
       # so no hooks are installed on the runner.
       - run: bun install --frozen-lockfile
 
+      # U3's machine gate (BMO-18; controller decision 26): a feat/u3.* PR changes nothing under
+      # packages/**. Pull requests only: Actions sets GITHUB_HEAD_REF and GITHUB_BASE_REF there.
+      - run: bun run check:unit-diff
+        if: ${{ github.event_name == 'pull_request' }}
+
       # Turbo local cache only (no remote cache). The sha suffix makes every run save a fresh
       # entry; restore-keys then fall back to the newest cache for the same lockfile.
       - uses: actions/cache@v6
