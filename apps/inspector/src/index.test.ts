@@ -4,7 +4,7 @@
 // dist before vitest runs in `bun run check`.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,7 +14,8 @@ import { REGISTRY_NODE_COLORS } from './node-types';
 import { graphShellHtml } from './shell';
 import { verificationText } from './banner';
 
-const ROOT = join(__dirname, '..');
+// Round two (review d1): require.cache holds real paths.
+const ROOT = realpathSync(join(__dirname, '..'));
 const DIST = join(ROOT, 'dist');
 
 const PROBE = `
@@ -63,9 +64,8 @@ function loadedBy(entry: string): Loaded {
 // (the verdict's text) and node-types (the palette).
 const PURE = new Set(['index.js', 'shell.js', 'messages.js', 'banner.js', 'node-types.js']);
 
-/** What `entry` loads that the front door may not: other inspector modules, and any bare request but @cpg/model. */
-function problems(entry: string): string[] {
-  const { requests, files } = loadedBy(entry);
+/** What was loaded that the front door may not load: other inspector modules, any bare request but @cpg/model. */
+function problems({ requests, files }: Loaded): string[] {
   const own = files.filter((file) => file.startsWith(DIST) && !PURE.has(basename(file)));
   const bare = requests.filter((request) => !/^[./]/.test(request) && request !== '@cpg/model');
   return [...own.map((file) => basename(file)), ...bare];
@@ -107,12 +107,13 @@ describe('the front door', () => {
 
   // A spawned node process can take seconds to start on a busy macOS runner.
   it('loads, as the package, only its pure modules and @cpg/model', { timeout: 20_000 }, () => {
-    const { files, failure } = loadedBy(ROOT);
+    const loaded = loadedBy(ROOT);
+    const { files, failure } = loaded;
     expect(failure).toBeNull();
     expect(files.filter((file) => file.startsWith(DIST)).map((file) => basename(file))).toEqual(
       expect.arrayContaining([...PURE]),
     );
-    expect(problems(ROOT)).toEqual([]);
+    expect(problems(loaded)).toEqual([]);
   });
 
   it.each([
@@ -124,11 +125,11 @@ describe('the front door', () => {
     join(DIST, 'visualizer.js'),
   ])('anti-vacuity: reports a front door that loads %s', { timeout: 20_000 }, (request) => {
     const want = request.startsWith(DIST) ? basename(request) : request;
-    expect(problems(planted(request))).toContain(want);
+    expect(problems(loadedBy(planted(request)))).toContain(want);
   });
 
   it('anti-vacuity: the server really loads ws and node:http', { timeout: 20_000 }, () => {
-    expect(problems(join(DIST, 'server.js'))).toEqual(
+    expect(problems(loadedBy(join(DIST, 'server.js')))).toEqual(
       expect.arrayContaining(['server.js', 'ws', 'node:http']),
     );
   });

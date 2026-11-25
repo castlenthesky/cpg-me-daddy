@@ -33,16 +33,22 @@ const nonceOf = (html: string): string =>
 
 /** Each URL the page names, in an attribute or in CSS. */
 function urls(html: string): string[] {
-  const attributes = [
-    ...html.matchAll(/\s(?:src|href|action|data|srcset|poster)\s*=\s*"([^"]*)"/g),
-  ];
-  const css = [...html.matchAll(/url\(([^)]*)\)|@import\s+([^;]+)/g)];
-  return [...attributes, ...css].map((match) => match[1] ?? match[2] ?? '');
+  const attributes = html.matchAll(
+    /\s(?:src|href|action|data|srcset|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g,
+  );
+  const css = html.matchAll(/url\(([^)]*)\)|@import\s+([^;]+)/g);
+  return [...attributes, ...css].map(
+    ([, ...found]) => found.find((url) => url !== undefined) ?? '',
+  );
 }
 
 const COLOUR_PROPERTY =
   /^(?:color|background(?:-color)?|border(?:-\w+)*|outline(?:-color)?|fill|stroke|box-shadow)$/;
-const THEMED = /var\(\s*--vscode-[\w-]+\s*,\s*[A-Z][A-Za-z]+\s*\)/g;
+// CSS Color 4's system colours, the ones C-EXT I-28 names among them (decision 11a).
+const SYSTEM_COLOUR =
+  'AccentColor(?:Text)?|ActiveText|Button(?:Border|Face|Text)|Canvas(?:Text)?|Field(?:Text)?|GrayText|' +
+  'Highlight(?:Text)?|LinkText|Mark(?:Text)?|SelectedItem(?:Text)?|VisitedText';
+const THEMED = new RegExp(String.raw`var\(\s*--vscode-[\w-]+\s*,\s*(?:${SYSTEM_COLOUR})\s*\)`, 'g');
 const NOT_A_COLOUR = /^(?:-?\d*\.?\d+(?:px|em|rem|%)?|solid|dashed|dotted|none|inherit)$/;
 
 /** The colour declarations of the page's CSS that name anything but a themed colour. */
@@ -50,7 +56,9 @@ function literalColours(html: string): { declarations: number; literal: string[]
   const css = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)]
     .map((m) => m[1] ?? '')
     .join('');
-  const styles = [...html.matchAll(/\sstyle\s*=\s*"([^"]*)"/g)].map((m) => `x { ${m[1] ?? ''} }`);
+  const styles = [...html.matchAll(/\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(
+    ([, double, single]) => `x { ${double ?? single ?? ''} }`,
+  );
   const found = [...`${css}${styles.join('')}`.matchAll(/([\w-]+)\s*:\s*([^;{}]+)/g)].filter(
     ([, property]) => COLOUR_PROPERTY.test(property ?? ''),
   );
@@ -130,12 +138,19 @@ describe('the scans themselves (anti-vacuity)', () => {
     'a { color: var(--vscode-foreground, #cccccc); }',
     'a { color: var(--vscode-foreground, white); }',
     'a { color: var(--my-own, Canvas); }',
+    // Round two (review a5).
+    'a { color: var(--vscode-foreground, White); }',
   ])('finds the literal colour in %s', (css) => {
     expect(literalColours(`<style>${css}</style>`).literal).toHaveLength(1);
   });
 
-  it('finds URLs in attributes and in CSS', () => {
-    const html = '<img src="a"><a href="b"><style>@import "c"; x { background: url(d) }</style>';
-    expect(urls(html)).toEqual(['a', 'b', '"c"', 'd']);
+  it('finds URLs in attributes, however quoted, and in CSS', () => {
+    const html = `<img src="a"><a href='b'><img src=e><style>@import "c"; x { background: url(d) }</style>`;
+    expect(urls(html)).toEqual(['a', 'b', 'e', '"c"', 'd']);
+  });
+
+  it('finds a literal colour in a style attribute, however quoted', () => {
+    const { literal } = literalColours(`<p style='color: #ccc'><p style="color: red">`);
+    expect(literal).toHaveLength(2);
   });
 });

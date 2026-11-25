@@ -366,7 +366,8 @@ describe('BufferStore.masked', () => {
 // U3.1.1 part 3 (controller decision 32): a theme's node colours.
 describe('BufferStore.recolour', () => {
   const THEME = {
-    nodeColors: { FILE: '#336699', DIRECTORY: '#000000' },
+    // Round two (review a3): `red` is no colour a point can be drawn in, so CALL takes the default.
+    nodeColors: { FILE: '#336699', DIRECTORY: '#000000', CALL: 'red' },
     defaultNodeColor: '#ff0000',
   };
   const BLUE = f32([0x33 / 255, 0x66 / 255, 0x99 / 255, 1]);
@@ -387,7 +388,7 @@ describe('BufferStore.recolour', () => {
     store.recolour(THEME);
     store.applyDelta(remove('g'), new Map(), always(0.5));
     store.applyDelta(
-      add(node('n'), node('m', 'MODULE'), node('g', 'DIRECTORY'), node('f', 'MODULE')),
+      add(node('n'), node('m', 'MODULE'), node('g', 'DIRECTORY'), node('f', 'CALL')),
       new Map(),
       always(0.5),
     );
@@ -398,6 +399,16 @@ describe('BufferStore.recolour', () => {
       BLUE,
       RED,
     ]);
+    store.recolour({ nodeColors: { CALL: 'red', MODULE: '' }, defaultNodeColor: 'x' });
+    expect([1, 4].map((index) => rgba(store, index))).toEqual([f32(GREY), f32(GREY)]);
+  });
+
+  // Round two (review b2).
+  it("a load after a recolour still takes its layout's colours", () => {
+    const store = loaded();
+    store.recolour(THEME);
+    store.load(layoutOf([{ id: 'x', type: 'FILE', x: 7, y: 8, size: 20 }]), payloadOf([node('x')]));
+    expect(Array.from(store.colors)).toEqual([0, 0.25, 0.5, 1]);
   });
 
   it('takes the latest colours, and the registry ones again when handed them', () => {

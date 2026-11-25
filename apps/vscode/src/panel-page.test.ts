@@ -2,7 +2,16 @@
 // bundle is missing, a message naming the build command. The shell contract itself is in
 // shell.conformance.test.ts. The last block joins @cpg/inspector's front door to the panel's host.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseWebviewMessage } from '@cpg/inspector';
@@ -12,7 +21,8 @@ import { PanelGraphHost } from './graph-host';
 import { PAGE_SCRIPT, pageDirectory, panelHtml } from './panel-page';
 import { panelTheme } from './theme';
 
-const REPO = join(__dirname, '..', '..', '..');
+// Round two (review d2): require.resolve answers with real paths.
+const REPO = realpathSync(join(__dirname, '..', '..', '..'));
 const CSP_SOURCE = "'self' https://*.vscode-cdn.net";
 const asUri = (path: string): string => `https://file+.vscode-resource.vscode-cdn.net${path}`;
 
@@ -28,11 +38,14 @@ function directory(name = 'page'): string {
   return dir;
 }
 
-function built(): string {
+/** A new directory, filled by `fill`. */
+function holding(fill: (dir: string) => void): string {
   const dir = directory();
-  writeFileSync(join(dir, PAGE_SCRIPT), '');
+  fill(dir);
   return dir;
 }
+
+const built = (): string => holding((dir) => writeFileSync(join(dir, PAGE_SCRIPT), ''));
 
 const nonceOf = (html: string): string | undefined => /script-src 'nonce-([^']+)'/.exec(html)?.[1];
 
@@ -40,6 +53,25 @@ describe('pageDirectory', () => {
   it("is the installed @cpg/inspector's dist/page, which build:inspector writes", () => {
     expect(pageDirectory()).toBe(join(REPO, 'apps', 'inspector', 'dist', 'page'));
     expect(PAGE_SCRIPT).toBe('graph.js');
+  });
+
+  // Round two (review a1): a packaged extension has another layout. The package is found through its
+  // manifest, not through a path in this repository or the directory its main is in.
+  it('follows the package wherever it is installed', { timeout: 20_000 }, () => {
+    const root = realpathSync(directory('install'));
+    const installed = join(root, 'node_modules', '@cpg', 'inspector');
+    mkdirSync(join(installed, 'lib', 'deep'), { recursive: true });
+    mkdirSync(join(root, 'app'));
+    writeFileSync(join(installed, 'package.json'), '{"main":"./lib/deep/main.js"}');
+    writeFileSync(join(installed, 'lib', 'deep', 'main.js'), '');
+    const copied = join(root, 'app', 'panel-page.js');
+    copyFileSync(join(__dirname, '..', 'dist', 'panel-page.js'), copied);
+    const script = 'process.stdout.write(require(process.argv[1]).pageDirectory())';
+    const run = spawnSync(process.execPath, ['-e', script, copied], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    expect(`${run.stdout}${run.stderr}`).toBe(join(installed, 'dist', 'page'));
   });
 });
 
@@ -73,6 +105,9 @@ describe('panelHtml with no bundle (decision 31: never a blank panel)', () => {
   it.each([
     ['the bundle is missing', () => directory()],
     ['the directory is missing', () => join(directory(), 'nowhere')],
+    // Round two (review a2): whatever is there instead, it can't be read as the bundle.
+    ['a directory is in its place', () => holding((dir) => mkdirSync(join(dir, 'graph.js')))],
+    ['the directory is a file', () => join(built(), 'graph.js')],
   ])('%s: says which file and names the build command, and runs nothing', async (_what, make) => {
     const dir = make();
     const html = await panelHtml({ directory: dir, asUri, cspSource: CSP_SOURCE });
@@ -80,10 +115,19 @@ describe('panelHtml with no bundle (decision 31: never a blank panel)', () => {
     const body = /<body>([\s\S]*)<\/body>/.exec(html)?.[1] ?? '';
     expect(body).toContain('bun run compile');
     expect(body).toContain(join(dir, 'graph.js'));
-    expect(html).toMatch(
-      /<meta http-equiv="Content-Security-Policy" content="default-src 'none';?"/,
-    );
+    const policies = html.match(/<meta http-equiv="Content-Security-Policy"[^>]*>/g);
+    expect(policies).toEqual([
+      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'" />`,
+    ]);
+    expect(html).not.toMatch(/<style|style=/);
     expect(html).not.toMatch(/<script|<link|<img|src=|graph-container/);
+  });
+
+  // C-EXT may_not: sync fs (L-11).
+  it('uses async fs only', () => {
+    const source = readFileSync(join(__dirname, 'panel-page.ts'), 'utf8');
+    expect(source).toContain('node:fs/promises');
+    expect(source).not.toMatch(/\w+Sync\s*\(/);
   });
 
   it('shows the path as text, never as markup', async () => {

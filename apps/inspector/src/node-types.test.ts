@@ -127,6 +127,9 @@ describe('nodeTypeColor', () => {
     'falls back to the registry grey when the default is %j',
     (defaultNodeColor) => {
       expect(nodeTypeColor({ nodeColors: {}, defaultNodeColor }, 'FILE')).toBe('#999999');
+      // Round two (review a4): a bad default spoils no type that has its own colour.
+      const own = { nodeColors: { FILE: '#123456' }, defaultNodeColor };
+      expect(nodeTypeColor(own, 'FILE')).toBe('#123456');
     },
   );
 });
