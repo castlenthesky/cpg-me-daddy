@@ -112,10 +112,8 @@ export class GraphSession {
    * or the extension was deactivated (controller decision 40).
    */
   async verify(): Promise<VerificationReport | undefined> {
-    // SEAT (U3.1.2): the report.
     if (this.judge === undefined) await this.index();
-    void this.judge?.scheduler.now();
-    return undefined;
+    return this.judge?.scheduler.now();
   }
 
   /** The editor's theme changed. */

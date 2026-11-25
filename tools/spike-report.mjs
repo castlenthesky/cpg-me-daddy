@@ -1,7 +1,12 @@
 #!/usr/bin/env node
-// SEAT (U3.1.2, BMO-56): what the spikes measured, as rows to copy into docs/outline/06-measurements.yaml.
+// REAL (U3.1.2, BMO-56): what the spikes measured, as rows to copy into docs/outline/06-measurements.yaml.
 //
 // Usage: node tools/spike-report.mjs [samples.json]
+
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SPIKE_SAMPLES } from './vscode-host.mjs';
 
 /**
  * The nearest-rank percentile of `samples`: the smallest sample that at least `percent` of them are at or
@@ -11,9 +16,13 @@
  * @param {number} percent in (0, 100]
  * @returns {number | undefined}
  */
-export function percentile(_samples, _percent) {
-  throw new Error('SEAT: not built yet: percentile (U3.1.2)');
+export function percentile(samples, percent) {
+  // Multiplied first: 0.07 * 100 is 7.000000000000001, and its rank would be one too high.
+  const rank = Math.ceil((percent * samples.length) / 100);
+  return samples.toSorted((a, b) => a - b)[rank - 1];
 }
+
+const ms = (time) => `${time.toFixed(2)} ms`;
 
 /**
  * One line per series, in order, then one per failure:
@@ -26,6 +35,33 @@ export function percentile(_samples, _percent) {
  *   first?: number, bytes?: number, failed?: string }[] }} measured
  * @returns {string[]}
  */
-export function reportLines(_measured) {
-  throw new Error('SEAT: not built yet: reportLines (U3.1.2)');
+export function reportLines({ conditions, series }) {
+  const lines = [
+    Object.entries(conditions)
+      .map(([name, value]) => `${name}: ${value}`)
+      .join('; '),
+  ];
+  for (const { name, samples, first, bytes, failed } of series) {
+    if (samples.length > 0) {
+      const [p50, p95, max] = [50, 95, 100].map((percent) => ms(percentile(samples, percent)));
+      const cold = first === undefined ? '' : `, first ${ms(first)}`;
+      const size = bytes === undefined ? '' : `, ${bytes} bytes of JSON`;
+      lines.push(`${name}: p50 ${p50}, p95 ${p95}, max ${max}, n=${samples.length}${cold}${size}`);
+    }
+    const why = failed ?? (samples.length === 0 ? 'no samples' : undefined);
+    if (why !== undefined) lines.push(`${name}: not measured: ${why}`);
+  }
+  return lines;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const path = process.argv[2] ?? SPIKE_SAMPLES;
+  try {
+    const measured = JSON.parse(readFileSync(path, 'utf8'));
+    if (measured.series.length === 0) throw new Error('no series');
+    console.log(reportLines(measured).join('\n'));
+  } catch (thrown) {
+    console.error(`spike-report: ${path}: ${thrown.message}`);
+    process.exitCode = 1;
+  }
 }

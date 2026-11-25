@@ -1,5 +1,5 @@
-// REAL (U3.1.1 part 2, BMO-52): when verify runs (C-EXT OQ-5; controller decision 36). No clock of its
-// own: the extension passes setTimeout, the tests a fake.
+// REAL (U3.1.1 part 2, BMO-52; U3.1.2, BMO-56): when verify runs (C-EXT OQ-5; controller decisions 36
+// and 40). No clock of its own: the extension passes setTimeout, the tests a fake.
 
 import type { VerificationReport } from '@cpg/model';
 
@@ -24,8 +24,9 @@ export interface VerifySchedulerOptions {
  * - requests during a run lead to exactly one more: at the end of the run when `now` was called
  *   during it; otherwise VERIFY_DEBOUNCE_MS after the last `changed`, or at the end of the run when
  *   that is later;
- * - `dispose` cancels the timer. After it nothing starts, and a run still going reports nothing. The
- *   host's own dispose is what keeps that run from posting to the page.
+ * - `dispose` cancels the timer. After it nothing starts, a run still going reports nothing, and every
+ *   `now` still open resolves with undefined. The host's own dispose is what keeps that run from posting
+ *   to the page.
  */
 export class VerifyScheduler {
   private readonly options: VerifySchedulerOptions;
@@ -33,6 +34,8 @@ export class VerifyScheduler {
   private running = false;
   /** What asked for the one run to start when the run going ends. */
   private owedTo: 'changed' | 'now' | undefined;
+  /** The `now` requests the owed run answers. */
+  private readonly waiting: ((report: VerificationReport | undefined) => void)[] = [];
   private disposed = false;
 
   constructor(options: VerifySchedulerOptions) {
@@ -44,7 +47,10 @@ export class VerifyScheduler {
     if (this.disposed || this.owedTo === 'now') return;
     this.owedTo = undefined;
     this.cancelTimer();
-    this.cancelTimer = this.options.after(VERIFY_DEBOUNCE_MS, () => this.request('changed'));
+    this.cancelTimer = this.options.after(VERIFY_DEBOUNCE_MS, () => {
+      if (this.running) this.owedTo = 'changed';
+      else void this.run();
+    });
   }
 
   /**
@@ -53,34 +59,39 @@ export class VerifyScheduler {
    * 40). undefined when there is no report: the run threw, or dispose came first. Never rejects.
    */
   now(): Promise<VerificationReport | undefined> {
-    // SEAT (U3.1.2): the report. Until then nothing is ever resolved with one.
     if (this.disposed) return Promise.resolve(undefined);
     this.cancelTimer();
-    this.request('now');
-    return Promise.resolve(undefined);
+    if (!this.running) return this.run();
+    this.owedTo = 'now';
+    return new Promise<VerificationReport | undefined>((resolve) => {
+      this.waiting.push(resolve);
+    });
   }
 
   dispose(): void {
     this.disposed = true;
     this.cancelTimer();
+    for (const resolve of this.waiting.splice(0)) resolve(undefined);
   }
 
-  private request(by: 'changed' | 'now'): void {
-    if (this.running) this.owedTo = by;
-    else void this.run();
-  }
-
-  private async run(): Promise<void> {
+  private async run(): Promise<VerificationReport | undefined> {
     this.running = true;
     this.owedTo = undefined;
+    const waiters = this.waiting.splice(0);
+    let report: VerificationReport | undefined;
     try {
-      const report = await this.options.verify();
-      if (!this.disposed) this.options.onReport(report);
+      const finished = await this.options.verify();
+      if (!this.disposed) {
+        report = finished;
+        this.options.onReport(finished);
+      }
     } catch (thrown) {
       if (!this.disposed) this.options.onError(thrown);
     } finally {
       this.running = false;
+      for (const resolve of waiters) resolve(report);
       if (this.owedTo !== undefined && !this.disposed) void this.run();
     }
+    return report;
   }
 }
