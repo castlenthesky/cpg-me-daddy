@@ -84,7 +84,8 @@ describe('verificationDiagnostics: each offender on the file it is in', () => {
     const stale = report('fail', {
       'revision-reconciliation': {
         state: 'fail',
-        localisedTo: ['src/a.ts', 'src/odd:%name.ts'],
+        // Round two (review a10): the order is localisedTo's, not sorted.
+        localisedTo: ['src/odd:%name.ts', 'src/a.ts'],
         detail: '2 revision mismatches',
       },
     });
@@ -93,8 +94,8 @@ describe('verificationDiagnostics: each offender on the file it is in', () => {
       message: 'revision-reconciliation: 2 revision mismatches',
     };
     expect(verificationDiagnostics(stale)).toStrictEqual([
-      { ...entry, filePath: 'src/a.ts' },
       { ...entry, filePath: 'src/odd:%name.ts' },
+      { ...entry, filePath: 'src/a.ts' },
     ]);
   });
 
@@ -124,6 +125,13 @@ describe('verificationDiagnostics: each offender on the file it is in', () => {
     const made = verificationDiagnostics(
       report('fail', {
         'filesystem-reconciliation': { state: 'fail', localisedTo: ['.', 'src'], detail: 'd' },
+        // Round two (review b1, a8): no offenders before U6c, and ids parseNodeId refuses.
+        'identity-invariants': { state: 'fail', localisedTo: ['file:a.ts', 'a.ts'] },
+        'resolution-health': { state: 'fail', localisedTo: ['file:a.ts', 'a.ts'] },
+        'render-reconciliation': {
+          state: 'fail',
+          localisedTo: ['file:.', 'file:../x', 'file:a.ts:bad', 'file:a%2Fb.ts', 'file:'],
+        },
         'id-uniqueness': { state: 'fail', localisedTo: ['dir:src', 'sym', 'file:b.ts'] },
         'revision-reconciliation': { state: 'fail', localisedTo: ['.', '../x', '/abs', 'c.ts'] },
       }),
@@ -136,13 +144,14 @@ describe('verificationDiagnostics: each offender on the file it is in', () => {
       report('fail', {
         'id-uniqueness': { state: 'fail', localisedTo: ['file:z.ts'] },
         'render-reconciliation': { state: 'fail', localisedTo: ['file:y.ts'], detail: 'd' },
-        'revision-reconciliation': { state: 'fail', localisedTo: ['a.ts'] },
+        // Round two (review a9): the state that stands in is the check's own.
+        'revision-reconciliation': { state: 'stale', localisedTo: ['a.ts'] },
       }),
     );
     expect(made.map((entry) => entry.message)).toEqual([
       'id-uniqueness: fail (file:z.ts)',
       'render-reconciliation: d (file:y.ts)',
-      'revision-reconciliation: fail',
+      'revision-reconciliation: stale',
     ]);
   });
 

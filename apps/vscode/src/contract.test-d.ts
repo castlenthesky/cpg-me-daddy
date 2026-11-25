@@ -1,9 +1,17 @@
 // C-EXT's host types, pinned against the contract's text (05-contracts.yaml, C-EXT types). The
 // literals below are typed from it, not read back from the code.
 import { describe, expectTypeOf, it } from 'vitest';
-import type { Epoch, GraphPayload, Seq, SourceRange, WorkspacePath } from '@cpg/model';
+import type {
+  Epoch,
+  GraphPayload,
+  Seq,
+  SourceRange,
+  VerificationReport,
+  WorkspacePath,
+} from '@cpg/model';
 import type {
   DeltaMeta,
+  FilesystemProbe,
   GraphHost,
   GraphSink,
   ProtocolFault,
@@ -54,6 +62,18 @@ describe('C-EXT host types', () => {
       ]
     >();
     expectTypeOf<ReturnType<SourceOpener['open']>>().toEqualTypeOf<Promise<void>>();
+  });
+
+  // Round two (review b3).
+  it('a probe lists and digests workspace paths; reveal and verify take what C-EXT says', () => {
+    expectTypeOf<FilesystemProbe>().toEqualTypeOf<{
+      listFiles(): Promise<WorkspacePath[]>;
+      digest(filePath: WorkspacePath): Promise<string | undefined>;
+    }>();
+    expectTypeOf<Parameters<GraphHost['reveal']>>().toEqualTypeOf<[nodeId: string]>();
+    expectTypeOf<ReturnType<GraphHost['reveal']>>().toEqualTypeOf<Promise<RevealOutcome>>();
+    expectTypeOf<Parameters<GraphHost['verify']>>().toEqualTypeOf<[fs: FilesystemProbe]>();
+    expectTypeOf<ReturnType<GraphHost['verify']>>().toEqualTypeOf<Promise<VerificationReport>>();
   });
 
   it('a GraphHost is a GraphSink with a payload always there, and the class is one', () => {

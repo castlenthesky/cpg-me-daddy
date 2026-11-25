@@ -154,6 +154,20 @@ describe('a run that fails', () => {
   });
 });
 
+// Round two (review a7).
+it('an onReport that throws does not drop the run owed', async () => {
+  const { scheduler, end, starts, errors } = setUp({
+    onReport: () => {
+      throw new Error('gone');
+    },
+  });
+  scheduler.now();
+  scheduler.now();
+  await end();
+  expect(errors).toHaveLength(1);
+  expect(starts).toHaveLength(2);
+});
+
 describe('dispose', () => {
   it('cancels the timer, and nothing starts after it', () => {
     const { clock, scheduler, starts } = setUp();

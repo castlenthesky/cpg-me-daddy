@@ -146,18 +146,22 @@ const drew = (epoch: number, seq: number, nodes: number, over: Partial<RenderRep
 };
 
 function setUp() {
-  /** The host's seq at each onChange. */
+  /** The host's seq and render-report at each onChange. */
   const changes: number[] = [];
+  const reports: unknown[] = [];
   const host = new PanelGraphHost({
     theme: { kind: 'dark', nodeColors: {}, defaultNodeColor: 'x' },
     parse: (message) => message as WebviewToHost, // oxlint-disable-line typescript/no-unsafe-type-assertion -- the fake page sends only WebviewToHost
     opener: { open: () => Promise.resolve() },
     onReveal: noop,
-    onChange: () => changes.push(host.seq()),
+    onChange: () => {
+      changes.push(host.seq());
+      reports.push(host.renderReport());
+    },
   });
   const page = new FakeTransport();
   host.attach(page);
-  return { host, page, changes };
+  return { host, page, changes, reports };
 }
 /** `payload` at epoch 1, the page ready, and its render-report in (by default, everything drawn). */
 async function showing(payload = P, report = drew(1, payload.seq, payload.nodes.length)) {
@@ -291,6 +295,19 @@ describe('E4: one stale revision fails only revision-reconciliation', () => {
     const { host } = await showing({ ...P, nodes });
     expect(row(await host.verify(new FakeProbe()), REVISION)).toBe('fail 1/0 a.ts');
   });
+
+  // Round two (review a1): a node is held to its FILE, never to the disk.
+  it('counts the stale FILE once, not the nodes in step with it, and nodes of a FILE off the disk', async () => {
+    const nodes: GraphNode[] = [
+      fileNode('a.ts', 'old'),
+      methodNode('in-step', 'a.ts', 'old'),
+      fileNode('gone.ts', 'rg'),
+      methodNode('behind', 'gone.ts', 'before'),
+    ];
+    const { host } = await showing({ ...P, nodes });
+    const report = await host.verify(new FakeProbe({ 'a.ts': 'new' }));
+    expect(row(report, REVISION)).toBe('fail 2/0 a.ts gone.ts');
+  });
 });
 
 describe('the disk checks: the payload against the probe', () => {
@@ -318,12 +335,13 @@ describe('the disk checks: the payload against the probe', () => {
   it("a FILE's path is its property, not its id; one with no path is an offender, not dropped", async () => {
     const nodes: GraphNode[] = [
       { ...fileNode('odd:name.ts', 'ro'), id: 'file:odd%3Aname.ts' },
-      { id: 'file:nowhere.ts', type: 'FILE', data: { revision_id: 'rn' } },
+      // Round two (review a3): the id's own directory says which stand-in was used.
+      { id: 'file:sub/nowhere.ts', type: 'FILE', data: { revision_id: 'rn' } },
       { id: 'd', type: 'DIRECTORY', data: { path: 'a.ts', revision_id: 'ra' } },
     ];
     const { host } = await showing({ ...P, nodes });
     const report = await host.verify(new FakeProbe({ 'odd:name.ts': 'ro' }));
-    expect(row(report, FS)).toBe('fail 2/1 .');
+    expect(row(report, FS)).toBe('fail 2/1 file:sub');
     expect(row(report, REVISION)).toBe('pass 0/0');
   });
 
@@ -373,6 +391,16 @@ describe('decision 29: a probe that throws is unavailable with the error, never 
     expect(states(report)).toBe('pass unavailable pass pass unavailable unavailable');
     expect(find(report, REVISION)?.detail).toBe(said);
   });
+
+  // Round two (review a4).
+  it.each(failing)('digest %s: the listing alone decides what is admitted', async (_how, fail) => {
+    const { host } = await showing();
+    const report = await host.verify({
+      listFiles: () => new FakeProbe().listFiles(),
+      digest: (at) => (at === 'src/b.py' ? fail() : Promise.resolve(undefined)),
+    });
+    expect(row(report, FS)).toBe('pass 2/2');
+  });
 });
 
 describe('I-10, I-19: render-reconciliation', () => {
@@ -385,6 +413,13 @@ describe('I-10, I-19: render-reconciliation', () => {
     expect(row(report, FS)).toBe('pass 2/2');
     const { host: short } = await showing(P, drew(1, 4, 2));
     expect(row(await short.verify(new FakeProbe()), RENDER)).toBe('fail 2/4');
+  });
+
+  // Round two (review a2).
+  it('an id two node types share is a duplicate too: the payload is one list of ids', async () => {
+    const nodes: GraphNode[] = [...P.nodes, { id: 'm', type: 'DIRECTORY' }];
+    const { host } = await showing({ ...P, nodes });
+    expect(row(await host.verify(new FakeProbe()), UNIQUE)).toBe('fail 5/4 m');
   });
 
   it('is unavailable with no render-report, and says what to open', async () => {
@@ -489,6 +524,18 @@ describe('decision 36: what asks for a verify', () => {
     page.send(drew(1, 5, 4));
     await host.onSnapshot({ ...P, seq: 8 }, { seq: 8, cause: 'catch-up' });
     expect(changes).toEqual([4, 5, 5, 8]);
+  });
+
+  // Round two (review b2).
+  it('a first catch-up and a first delta ask too, and the report is in before it is asked', async () => {
+    const first = setUp();
+    await first.host.onSnapshot({ ...P, seq: -1 }, { seq: -1, cause: 'catch-up' });
+    const other = setUp();
+    await other.host.onDelta(delta(0), { seq: 0, cause: 'live' });
+    expect([first.changes, other.changes]).toEqual([[-1], [0]]);
+
+    const { reports } = await showing();
+    expect(reports).toEqual([undefined, drew(1, 4, 4)]);
   });
 
   it('nothing else: what was dropped, refused or only answered, and verify itself', async () => {

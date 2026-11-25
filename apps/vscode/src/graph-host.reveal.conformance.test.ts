@@ -57,6 +57,11 @@ const NODES: readonly GraphNode[] = [
   method('anonymous', { filePath: A, range: RANGE }),
   method('bare', undefined),
   method('garbled', { filePath: A, range: { startRow: 9 } }),
+  // Round two (review a5): a malformed location is one readNodeLocation refuses, whatever is wrong.
+  method('outside', { filePath: '../secret.ts', range: RANGE, nameRange: NAME }),
+  method('the root', { filePath: '.', range: RANGE }),
+  method('misnamed', { filePath: A, range: RANGE, nameRange: { startRow: 1 } }),
+  method('backwards', { filePath: A, range: { ...RANGE, endRow: 2 } }),
   file('file:pathless', {}),
   file('file:rooted', { path: '.' }),
   file('file:climbing', { path: '../secret.ts' }),
@@ -119,6 +124,13 @@ async function showing(
   return { host, opener, page, outcomes };
 }
 
+/** Round two (review c1): concurrent reveals finish in no set order, so by reason, successes last. */
+const byKind = (outcomes: readonly RevealOutcome[]) =>
+  outcomes.toSorted(
+    (a, b) => Number(reasonOf(a) > reasonOf(b)) - Number(reasonOf(a) < reasonOf(b)),
+  );
+const reasonOf = (outcome: RevealOutcome) => (outcome.ok ? '~' : outcome.reason);
+
 const delta = (seq: number, parts: Partial<GraphDelta>): GraphDelta => ({
   seq,
   file: A,
@@ -177,15 +189,23 @@ describe('I-16: every reveal returns a discriminated outcome; none throws or ret
     expect(opener.opened).toEqual([]);
   });
 
-  it.each(['dir:src', 'bare', 'garbled', 'file:pathless', 'file:rooted', 'file:climbing'])(
-    'no-location: %s, and nothing is opened',
-    async (nodeId) => {
-      const { host, opener } = await showing();
-      const reason = 'no-location';
-      expect(await host.reveal(nodeId)).toStrictEqual({ ok: false, reason, nodeId });
-      expect(opener.opened).toEqual([]);
-    },
-  );
+  it.each([
+    'dir:src',
+    'bare',
+    'garbled',
+    'outside',
+    'the root',
+    'misnamed',
+    'backwards',
+    'file:pathless',
+    'file:rooted',
+    'file:climbing',
+  ])('no-location: %s, and nothing is opened', async (nodeId) => {
+    const { host, opener } = await showing();
+    const reason = 'no-location';
+    expect(await host.reveal(nodeId)).toStrictEqual({ ok: false, reason, nodeId });
+    expect(opener.opened).toEqual([]);
+  });
 
   it.each([
     ['rejects', async () => Promise.reject(new RangeError('gone')), 'RangeError', 'gone'],
@@ -213,9 +233,9 @@ describe('I-17: an inbound reveal is its id and nothing else', () => {
     page.reveal('bare', { location, ...flat });
     await allMicrotasks();
     expect(opener.opened).toStrictEqual([{ filePath: A, selection: NAME, frame: RANGE }]);
-    expect(outcomes).toStrictEqual([
-      { ok: true, filePath: A, target: 'nameRange' },
+    expect(byKind(outcomes)).toStrictEqual([
       { ok: false, reason: 'no-location', nodeId: 'bare' },
+      { ok: true, filePath: A, target: 'nameRange' },
     ]);
     expect(page.posted).toEqual(['theme', 'graph']);
     expect(host.faults()).toEqual([]);
@@ -228,10 +248,10 @@ describe('decision 37: what becomes of an inbound reveal', () => {
     for (const nodeId of [id(A), 'nope', 'bare']) page.reveal(nodeId);
     await host.reveal('named');
     await allMicrotasks();
-    expect(outcomes).toStrictEqual([
-      { ok: true, filePath: A, target: 'whole-file' },
-      { ok: false, reason: 'unknown-node', nodeId: 'nope' },
+    expect(byKind(outcomes)).toStrictEqual([
       { ok: false, reason: 'no-location', nodeId: 'bare' },
+      { ok: false, reason: 'unknown-node', nodeId: 'nope' },
+      { ok: true, filePath: A, target: 'whole-file' },
     ]);
   });
 
@@ -256,6 +276,10 @@ describe('decision 37: what becomes of an inbound reveal', () => {
     await host.onDelta(delta(5, {}), { seq: 5, cause: 'live' });
     expect(opener.opened).toHaveLength(1);
     expect(page.posted).toEqual(['theme', 'graph', 'graph-delta']);
+    // Round two (review a6): nor a later reveal.
+    page.reveal(id(ODD));
+    await allMicrotasks();
+    expect(opener.opened).toHaveLength(2);
   });
 
   const failingCallbacks: readonly (readonly [string, () => unknown])[] = [
