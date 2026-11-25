@@ -1,7 +1,7 @@
 // The C-EXT conformance suite for the VS Code panel's host (05-contracts.yaml, C-EXT), one block per
 // invariant, written fresh from the contract: the archived reference suite it cites is in no
 // reachable commit. Part 1's groups: I-2, I-3, I-4, I-6, I-8, I-11, I-12, I-13, the connection rules
-// and the faults. A fake transport records what would cross to the page; every merged payload is
+// and the faults (part 2's are graph-host.reveal and graph-host.verify.conformance.test.ts). A fake transport records what would cross to the page; every merged payload is
 // @cpg/model's applyGraphDelta (the one shared merge). Fixtures are frozen, so a host that mutates
 // what it is handed throws.
 
@@ -16,7 +16,7 @@ import {
   type WorkspacePath,
 } from '@cpg/model';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { FilesystemProbe, WebviewTransport } from './contract';
+import type { WebviewTransport } from './contract';
 import { PanelGraphHost } from './graph-host';
 
 type Fail = (message: HostToWebview) => unknown;
@@ -172,7 +172,13 @@ beforeEach(() => {
 });
 
 const makeHost = () =>
-  new PanelGraphHost({ theme: LIGHT, parse: (message) => accepted.get(message) });
+  new PanelGraphHost({
+    theme: LIGHT,
+    parse: (message) => accepted.get(message),
+    opener: { open: () => Promise.resolve() },
+    onReveal: () => undefined,
+    onChange: () => undefined,
+  });
 
 /** A host holding P at epoch 1 with `t` ready; `t` has heard [theme, graph of P]. */
 async function readyHost(t = new FakeTransport()) {
@@ -723,13 +729,6 @@ describe('messages from the page', () => {
     expect(t.posted).toEqual([]);
     expect(host.faults()).toStrictEqual([{ kind: 'unknown-message', received: 'a newer page' }]);
   });
-
-  it('does nothing with a reveal yet (SEAT until part 2)', async () => {
-    const { host, t, heard } = await readyHost();
-    t.send(known({ type: 'reveal', nodeId: 'f' }));
-    expect(heard()).toEqual([]);
-    expect(host.faults()).toEqual([]);
-  });
 });
 
 describe('post-failed: a post that throws is recorded and stops nothing', () => {
@@ -784,18 +783,5 @@ describe('post-failed: a post that throws is recorded and stops nothing', () => 
       'unknown-message',
       'post-failed',
     ]);
-  });
-});
-
-describe('SEAT until part 2', () => {
-  const probe: FilesystemProbe = {
-    listFiles: () => Promise.resolve([]),
-    digest: () => Promise.resolve(undefined),
-  };
-
-  it('reveal and verify reject, naming themselves SEAT', async () => {
-    const { host } = await readyHost();
-    await expect(host.reveal('f')).rejects.toThrow(/^SEAT: PanelGraphHost\.reveal/);
-    await expect(host.verify(probe)).rejects.toThrow(/^SEAT: PanelGraphHost\.verify/);
   });
 });

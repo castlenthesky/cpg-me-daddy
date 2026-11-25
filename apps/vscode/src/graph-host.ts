@@ -1,7 +1,7 @@
 // REAL (U3.1.1 part 1, BMO-52): the VS Code panel's GraphHost. Plain node, no vscode import. Ports
-// 21754b4:src/views/graphViewProvider.ts (ready handshake, merge locally and post only the delta)
-// onto C-EXT's protocol. `reveal` and `verify` stay SEAT until part 2. Product code does not call
-// `onDelta` before U4 (controller decision 28).
+// 21754b4:src/views/graphViewProvider.ts (ready handshake, merge locally and post only the delta,
+// id-only reveal against the host's payload) onto C-EXT's protocol. SEAT (part 2): `reveal`, `verify`
+// and the `onChange` calls. Product code does not call `onDelta` before U4 (controller decision 28).
 
 import {
   applyGraphDelta,
@@ -21,10 +21,11 @@ import type {
   GraphHost,
   ProtocolFault,
   RevealOutcome,
-  SerializedError,
   SnapshotMeta,
+  SourceOpener,
   WebviewTransport,
 } from './contract';
+import { serializeError } from './errors';
 
 export type RenderReportMessage = Extract<WebviewToHost, { type: 'render-report' }>;
 
@@ -33,15 +34,21 @@ export interface GraphHostOptions {
   readonly theme: ThemeSnapshot;
   /** One inbound message as its C-EXT type, or undefined. The host acts only on what this returns. */
   readonly parse: (message: unknown) => WebviewToHost | undefined;
+  /** What reveal opens a node's source with. */
+  readonly opener: SourceOpener;
+  /**
+   * The outcome of each `reveal` from the page, once, dispose or not (controller decision 37). What
+   * it throws or rejects with changes nothing in the host.
+   */
+  readonly onReveal: (outcome: RevealOutcome) => void;
+  /**
+   * Called after a snapshot or a delta has changed the payload, and after a render-report is
+   * accepted (controller decision 36): VerifyScheduler.changed. Nothing else calls it.
+   */
+  readonly onChange: () => void;
 }
 
 const EMPTY_PAYLOAD: GraphPayload = { seq: -1, nodes: [], edges: [] };
-
-function serializeError(thrown: unknown): SerializedError {
-  return thrown instanceof Error
-    ? { name: thrown.name, message: thrown.message }
-    : { name: 'Error', message: String(thrown) };
-}
 
 /**
  * The VS Code panel's GraphHost: one merged payload, its epoch, and at most one page kept in step.
@@ -68,7 +75,8 @@ function serializeError(thrown: unknown): SerializedError {
  *   a page not ready, or with no graph yet, nothing;
  * - `render-report` at the host's epoch is kept as the latest (renderReport). At another epoch it is
  *   a bad-epoch fault and is not kept;
- * - `reveal` is ignored until part 2 (SEAT);
+ * - `reveal` is `reveal(nodeId)` and its outcome goes to `options.onReveal`. Only the id is read: any
+ *   location-shaped field is ignored (I-17), and nothing is posted or recorded for it;
  * - what parse refuses, and a `ready` at another protocol, is an unknown-message fault holding the
  *   message as received.
  *
@@ -173,7 +181,16 @@ export class PanelGraphHost implements GraphHost {
     return this.currentEpoch;
   }
 
-  /** SEAT: part 2 (C-EXT I-15 to I-17). */
+  /**
+   * Opens the source of the node `nodeId` names in the merged payload (I-15) and says what happened
+   * (I-16); never rejects. SEAT.
+   * - A FILE opens whole, at its `path` property and whatever its `data.location` says.
+   * - Any other node opens at its `data.location` (readNodeLocation): the cursor on `nameRange`, or on
+   *   `range` when there is none, with `range` framed.
+   * - `unknown-node`: no node has that id. `no-location`: the node has no location, a malformed one, or
+   *   is a FILE whose `path` is not a file's workspace path. Neither opens anything.
+   * - `open-failed`: the opener threw or rejected.
+   */
   async reveal(_nodeId: string): Promise<RevealOutcome> {
     throw new Error('SEAT: PanelGraphHost.reveal lands with U3.1.1 part 2');
   }
@@ -184,14 +201,19 @@ export class PanelGraphHost implements GraphHost {
     this.postTheme();
   }
 
-  /** SEAT: part 2 (C-EXT I-18, I-19, I-22). */
+  /**
+   * The six checks over the payload, epoch and render-report held when it is called (verifyPayload,
+   * I-18): what lands while it runs makes the report's seq or epoch lag and is not judged. Every
+   * completed run is posted as a `verification` carrying its report's epoch and seq (I-22), to a page
+   * that is ready then (I-2); after dispose it posts nothing. Never rejects. SEAT.
+   */
   async verify(_fs: FilesystemProbe): Promise<VerificationReport> {
     throw new Error('SEAT: PanelGraphHost.verify lands with U3.1.1 part 2');
   }
 
   /**
    * The latest render-report at the current epoch from the page now showing, or undefined: verify's
-   * input for render-reconciliation (part 2). Gone after attach, detach, `ready` and an 'initial'
+   * input for render-reconciliation. Gone after attach, detach, `ready` and an 'initial'
    * snapshot, because a page that has not drawn the graph since then has reported nothing (I-19).
    */
   renderReport(): RenderReportMessage | undefined {

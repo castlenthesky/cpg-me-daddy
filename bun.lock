@@ -65,6 +65,7 @@
       "name": "@cpg/vscode-host",
       "version": "0.0.1",
       "dependencies": {
+        "@cpg/engine": "*",
         "@cpg/model": "*",
       },
     },

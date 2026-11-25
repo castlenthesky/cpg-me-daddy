@@ -1,7 +1,7 @@
 // C-EXT's host types, pinned against the contract's text (05-contracts.yaml, C-EXT types). The
 // literals below are typed from it, not read back from the code.
 import { describe, expectTypeOf, it } from 'vitest';
-import type { Epoch, GraphPayload, Seq } from '@cpg/model';
+import type { Epoch, GraphPayload, Seq, SourceRange, WorkspacePath } from '@cpg/model';
 import type {
   DeltaMeta,
   GraphHost,
@@ -10,6 +10,7 @@ import type {
   RevealOutcome,
   SerializedError,
   SnapshotMeta,
+  SourceOpener,
 } from './contract';
 import type { PanelGraphHost } from './graph-host';
 
@@ -40,6 +41,19 @@ describe('C-EXT host types', () => {
       readonly name: string;
       readonly message: string;
     }>();
+  });
+
+  it('a SourceOpener is asked for a file, and may be given where to put the cursor and what to frame', () => {
+    expectTypeOf<Parameters<SourceOpener['open']>>().toEqualTypeOf<
+      [
+        request: {
+          readonly filePath: WorkspacePath;
+          readonly selection?: SourceRange;
+          readonly frame?: SourceRange;
+        },
+      ]
+    >();
+    expectTypeOf<ReturnType<SourceOpener['open']>>().toEqualTypeOf<Promise<void>>();
   });
 
   it('a GraphHost is a GraphSink with a payload always there, and the class is one', () => {
