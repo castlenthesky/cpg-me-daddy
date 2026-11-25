@@ -65,10 +65,8 @@ export class GraphPanel {
   private async adopt(surface: PanelSurface): Promise<void> {
     this.current = surface;
     surface.onDidDispose(() => {
-      if (this.current === surface) {
-        this.current = undefined;
-        this.options.host.detach();
-      }
+      this.current = undefined;
+      this.options.host.detach();
     });
     this.options.host.attach(surface.transport);
     const { directory } = this.options;
