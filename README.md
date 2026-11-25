@@ -18,7 +18,7 @@ bun install
 bun run compile
 ```
 
-Then press F5 in VS Code to launch the Extension Development Host and run **CPG: Hello World**.
+Then press F5 in VS Code to launch the Extension Development Host, and run **CPG: Open Graph** and **CPG: Verify**.
 
 ## Commands
 

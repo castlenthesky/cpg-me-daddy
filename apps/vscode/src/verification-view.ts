@@ -94,6 +94,16 @@ export interface StatusBarView {
  * Tooltip: `CPG verify at seq <seq>: <state>`, then a line per check in report order,
  * `<id>: <state>`, with `: <detail>` when it has one.
  */
-export function statusBarView(_report: VerificationReport): StatusBarView {
-  throw new Error('SEAT: statusBarView (U3.1.1 part 4)');
+export function statusBarView(report: VerificationReport): StatusBarView {
+  const { glyph, failing } = verificationStatus(report);
+  const text = failing > 0 ? `$(${glyph}) CPG ${String(failing)}` : `$(${glyph}) CPG`;
+  const lines = [
+    `CPG verify at seq ${String(report.seq)}: ${report.state}`,
+    ...report.checks.map((check) =>
+      check.detail === undefined
+        ? `${check.id}: ${check.state}`
+        : `${check.id}: ${check.state}: ${check.detail}`,
+    ),
+  ];
+  return { text, tooltip: lines.join('\n') };
 }

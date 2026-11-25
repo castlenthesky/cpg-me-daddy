@@ -5,6 +5,8 @@
     "": {
       "name": "cpg-me-daddy",
       "dependencies": {
+        "@cpg/engine": "*",
+        "@cpg/inspector": "*",
         "@cpg/model": "*",
       },
       "devDependencies": {

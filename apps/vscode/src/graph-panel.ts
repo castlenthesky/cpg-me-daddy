@@ -1,7 +1,9 @@
-// SEAT (U3.1.1 part 4, BMO-52): the one graph panel (controller decision 38). Plain node: a panel is a
+// REAL (U3.1.1 part 4, BMO-52): the one graph panel (controller decision 38). Plain node: a panel is a
 // PanelSurface, which adapters/webview-transport.ts makes from VS Code's WebviewPanel.
 
+import { join } from 'node:path';
 import type { Disposable, GraphHost, WebviewTransport } from './contract';
+import { PAGE_SCRIPT, panelHtml } from './panel-page';
 
 /** One WebviewPanel as GraphPanel uses it. */
 export interface PanelSurface {
@@ -32,21 +34,48 @@ export interface GraphPanelOptions {
  */
 export class GraphPanel {
   private readonly options: GraphPanelOptions;
+  private current: PanelSurface | undefined;
 
   constructor(options: GraphPanelOptions) {
     this.options = options;
   }
 
   /** Reveals the panel, or makes it. Resolves when a panel it made has its HTML (panelHtml). */
-  show(): Promise<void> {
-    throw new Error('SEAT: GraphPanel.show (U3.1.1 part 4)');
+  async show(): Promise<void> {
+    if (this.current !== undefined) {
+      this.current.reveal();
+      return;
+    }
+    await this.adopt(this.options.create());
   }
 
   /**
    * Takes over a panel VS Code restored (WebviewPanelSerializer) as if it had been made here. When there
    * is a panel already, the restored one is closed and the panel is revealed.
    */
-  restore(_surface: PanelSurface): Promise<void> {
-    throw new Error('SEAT: GraphPanel.restore (U3.1.1 part 4)');
+  async restore(surface: PanelSurface): Promise<void> {
+    if (this.current !== undefined) {
+      surface.dispose();
+      this.current.reveal();
+      return;
+    }
+    await this.adopt(surface);
+  }
+
+  private async adopt(surface: PanelSurface): Promise<void> {
+    this.current = surface;
+    surface.onDidDispose(() => {
+      if (this.current === surface) {
+        this.current = undefined;
+        this.options.host.detach();
+      }
+    });
+    this.options.host.attach(surface.transport);
+    const { directory } = this.options;
+    // Asked for now: a panel closed during the await can't answer any more.
+    const script = surface.asUri(join(directory, PAGE_SCRIPT));
+    const { cspSource } = surface.transport;
+    const html = await panelHtml({ directory, asUri: () => script, cspSource });
+    if (this.current === surface) surface.setHtml(html);
   }
 }
