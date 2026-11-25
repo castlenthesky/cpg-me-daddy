@@ -169,6 +169,12 @@ describe('statusBarView: the glyph and the failing count, with every check in th
     expect(statusBarView(report(state)).text).toBe(text);
   });
 
+  // Sabotage: one failing check is counted too.
+  it('counts a single failing check', () => {
+    const one = report('fail', { 'revision-reconciliation': { state: 'fail' } });
+    expect(statusBarView(one).text).toBe('$(error) CPG 1');
+  });
+
   it('counts the failing checks, and says why each is what it is', () => {
     const mixed = report('fail', {
       'filesystem-reconciliation': { state: 'fail', detail: 'sources differ' },

@@ -164,6 +164,10 @@ describe('a bad file is a ConfigError naming it', () => {
     if (process.getuid?.() === 0) return;
     const error = await configError(root);
     expect(error.message).toContain(`${join(root, CONFIG_FILE_NAME)}: cannot read config file: `);
-    expect(error.source).toBe(join(root, CONFIG_FILE_NAME));
+    expect([error.key, error.layer, error.source]).toEqual([
+      '',
+      'file',
+      join(root, CONFIG_FILE_NAME),
+    ]);
   });
 });

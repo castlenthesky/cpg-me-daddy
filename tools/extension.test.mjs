@@ -354,8 +354,9 @@ describe('cpg.openGraph', () => {
     expect(panel.webview.options.localResourceRoots.map((uri) => uri.path)).toEqual([
       PAGE_DIRECTORY,
     ]);
-    // Either the shell or, when the bundle is not built, the page that says so.
+    // Either the shell on the bundle or, when it is not built, the page naming it (sabotage).
     expect(panel.webview.html).toContain("default-src 'none'");
+    expect(panel.webview.html).toContain(join(PAGE_DIRECTORY, 'graph.js'));
     expect(panel.revealed).toBe(1);
     expect(seen.errors).toEqual([]);
   });
@@ -525,6 +526,7 @@ describe('a panel VS Code restores', () => {
       PAGE_DIRECTORY,
     ]);
     expect(restored.webview.html).toContain("default-src 'none'");
+    expect(restored.webview.html).toContain(join(PAGE_DIRECTORY, 'graph.js'));
     restored.send(READY);
     await until(() => ofType(restored, 'graph').length === 1);
     await run('cpg.openGraph');
@@ -561,6 +563,7 @@ describe('deactivation', () => {
       0, 0, 0,
     ]);
     expect(panel.closed).toBe(false);
+    expect(panel.listeners).toEqual([]);
     panel.send(READY);
     vi.advanceTimersByTime(5000);
     await tick();

@@ -130,6 +130,7 @@ function setUp(over: SetUp = {}) {
   const panels: FakeSurface[] = [];
   const engines: { version: string; consumers: unknown }[] = [];
   const closes: number[] = [];
+  const connects: unknown[] = [];
   /** The directories verify listed: a run starts by listing '.'. */
   const listed: string[] = [];
   const timers: { ms: number; callback: () => void; cancelled: boolean }[] = [];
@@ -145,6 +146,7 @@ function setUp(over: SetUp = {}) {
         ...real,
         ...over.engine?.(real, n),
         connect: async (target, opts) => {
+          connects.push([target, opts]);
           const opened = await real.connect(target, opts);
           return {
             ...opened,
@@ -211,6 +213,7 @@ function setUp(over: SetUp = {}) {
     panels,
     engines,
     closes,
+    connects,
     listed,
     timers,
     scheduledRun,
@@ -238,11 +241,16 @@ function gate() {
 describe('cpg.openGraph', () => {
   it('shows the panel and delivers the index as an initial snapshot', async () => {
     const root = await directory({ 'a.ts': 'a', 'b.py': 'b' });
-    const { session, panels, engines, messages } = setUp({ root });
+    const { session, panels, engines, connects, messages } = setUp({ root });
     await session.openGraph();
     expect(panels).toHaveLength(1);
-    expect(panels[0]?.html).not.toBe('');
+    // Sabotage: the page directory, the theme and the connection are the ones asked for.
+    expect(panels[0]?.html).toContain(join(root, 'page', 'graph.js'));
+    expect(connects).toEqual([
+      [{ host: '127.0.0.1', port: 6382, graph: 'cpg' }, { readOnly: false }],
+    ]);
     panels[0]?.send(READY);
+    expect(panels[0]?.posted[0]).toMatchObject({ type: 'theme', theme: THEME });
     expect(panels[0]?.posted.map(({ type, epoch }) => [type, epoch])).toEqual([
       ['theme', 1],
       ['graph', 1],
@@ -256,7 +264,7 @@ describe('cpg.openGraph', () => {
 
   it('again: reveals the panel and indexes again, with nothing left of a deleted file', async () => {
     const root = await directory({ 'a.ts': 'a', 'gone.ts': '' });
-    const { session, panels, closes } = setUp({ root });
+    const { session, panels, closes, timers } = setUp({ root });
     await session.openGraph();
     panels[0]?.send(READY);
     await rm(join(root, 'gone.ts'));
@@ -268,6 +276,8 @@ describe('cpg.openGraph', () => {
       [2, ['.', 'a.ts', 'new.ts']],
     ]);
     expect(closes).toEqual([1, 2]);
+    // Sabotage: one scheduler for every index, so one run is pending, not one per index.
+    expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1);
   });
 
   it('resolves when the index is done, and requests meanwhile share that index', async () => {
@@ -646,6 +656,29 @@ describe('deactivation', () => {
     await session.verify();
     await allMicrotasks();
     expect(listed).toEqual([]);
+  });
+
+  // Sabotage: an index that fails after deactivation says nothing either.
+  it('in an index that then fails: nothing is said', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { opened, open } = gate();
+    const reached = gate();
+    const { session, messages } = setUp({
+      root,
+      engine: () => ({
+        index: async () => {
+          reached.open();
+          await opened;
+          throw new Error('disk on fire');
+        },
+      }),
+    });
+    const opening = session.openGraph();
+    await reached.opened;
+    session.dispose();
+    open();
+    await opening;
+    expect(messages).toEqual([]);
   });
 
   // Post-implementation (review of the diff): the index of a restored panel starts after its HTML.
