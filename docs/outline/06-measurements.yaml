@@ -53,6 +53,15 @@ latency:
     value: "~46 ms/file, linear, zero batching benefit; k=10 -> 517 ms p95; k=25 -> 1,224 ms p95; ~11 files crosses 500 ms"
     what: "cascade cost (S1a only, UNREPLICATED) measured against the 16-query write path"
     boundary: "COUNTERFACTUAL: cascade is zero in the shipped code because the feature is absent. Re-measure after the atomic write (U5) and with the resolver present (U7)."
+  M-LATENCY-render-leg:
+    value: "graph: p50 1.86 ms, p95 2.91 ms, max 105.59 ms (n=50; the cold first graph 116.58 ms). graph-delta of one FILE: p50 2.62 ms, p95 3.19 ms, max 4.67 ms (n=50)"
+    what: "SPIKE-3 (U3.1.2, controller decision 41): the render leg only, from GraphHost's post of a graph or graph-delta to the arrival of the page's render-report at that epoch and seq (renderedSeq, C-SINK Q6), in a real VS Code panel on fixtures/ladder (60 nodes, 59 edges, 32 FILEs); samples 50 ms apart"
+    boundary: "NOT T0->T3: there is no watcher before U4, so T0, T1 and T2 do not exist for the panel; T0->T3 is not measured until U4. The page posts its report when it has handed the graph to its renderer, not when a picture is on screen (render-reconciliation counts the page's buffers). Software GL: VS Code 1.148.0 (Electron 43.8.10) headless, WebGL2 ANGLE SwiftShader; AMD Ryzen 9 7900X x24, Linux 7.0.0-43; load 1.13 1.41 0.98; 2026-11-25. Re-run on a GPU with CPG_HOST_DISPLAY=1 bun run spike:vscode-host."
+  M-TRANSFER-postmessage:
+    value: "10k nodes (4.68 MB of JSON): p50 73.35 ms, p95 82.34 ms; 100k (46.8 MB): p50 880.73 ms, p95 912.08 ms; 500k (233.9 MB): p50 4,701.90 ms, p95 4,863.64 ms (n=20 each after one cold sample). Of that, webview.postMessage blocks the extension host's thread for p50 26.61 / 326.88 / 1,667.89 ms"
+    what: "SU-9 (U3.1.2, controller decision 41): transfer, not drawing. A graph message with a synthetic payload in the filesystem tier's own shape (N nodes, N-1 HAS_ENTRY edges, the fixture's ratio), from just before webview.postMessage to the acknowledgement of a page that only counts the nodes and edges it got. Linear: about 9.4 us per node, about 20 ms per MB"
+    threshold: "not needed, on transfer grounds: the cost is linear in the message's size, so a delta always costs less to send than the snapshot it would replace, at every size measured. A snapshot is never cheaper to transfer; what can call for one is a gap or a stale epoch (C-EXT, C-MODEL I-10), not size. Against re-sending: a full 100k-node snapshot holds the extension host's thread for about 330 ms"
+    boundary: "VS Code 1.148.0 headless, the same machine and load as M-LATENCY-render-leg (1.10-1.37 at start), 2026-11-25; one run per size under a 6 GB memory cap. The decode of the page's 'message' event is included; the product page's parse, layout and render are not"
   M-LATENCY-cold-index:
     value: "1,802 files / 887k LOC -> 497k nodes in 43.1 s (23.9 ms/file)"
     what: "cold bulk index of the Python stdlib fixture"
@@ -358,7 +367,7 @@ still_unmeasured:
   - { id: SU-6, gap: "the expression tier as built rather than modelled", when: "only if the tier is ever enabled" }
   - { id: SU-7, gap: "storage/memory per tier (GRAPH.MEMORY USAGE reports at MB granularity and returned 1 for every spike graph)", when: "U7 with INFO memory deltas at scale" }
   - { id: SU-8, gap: "query-side cost of an expression-tier graph (read latency, layout/WebGL at ~6x nodes)", when: "only if the tier is ever enabled" }
-  - { id: SU-9, gap: "postMessage structured-clone cost of a large GraphPayload; delta size above which to snapshot", when: "U3 spike" }
+  - { id: SU-9, gap: "MEASURED at U3.1.2: M-TRANSFER-postmessage (threshold not needed); the GPU and the drawing cost remain unmeasured", when: "re-run on a GPU when the owner wants it" }
   - { id: SU-10, gap: "@parcel/watcher overflow signalling; case-insensitive volume key folding (Linux event shapes are now M-RESEARCH-watcher-linux)", when: "U4 spikes" }
   - { id: SU-11, gap: "DELETE-only and MERGE rollback under FalkorDB timeout; pipelined many-small writes", when: "U5" }
   - { id: SU-12, gap: "MemoryStore RSS at 488k nodes in the extension host", when: "U7" }
