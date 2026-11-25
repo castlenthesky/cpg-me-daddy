@@ -691,6 +691,29 @@ const CASES = [
     },
   },
   {
+    // The gate is the CI job `vscode-host` (U3.1.2, controller decision 33): it downloads VS Code, so it
+    // is slow. The probe must be the one failure, so a VS Code that will not start, or a run that finds no
+    // tests, can't pass for a rejection.
+    slow: true,
+    name: 'test:vscode-host fails on a failing host test',
+    expectOutput: /\b1 failing\b[\s\S]*gate probe/,
+    command: ['bun', 'run', '--silent', 'test:vscode-host', '--label', 'current'],
+    plant() {
+      writeFileSync(
+        at('apps/vscode/host-tests/__gate_probe.test.ts'),
+        "import { strict as assert } from 'node:assert';\n\n" +
+          "suite('gate probe', () => {\n  test('fails', () => {\n    assert.equal(1, 2);\n  });\n});\n",
+      );
+    },
+    cleanup() {
+      rmSync(at('apps/vscode/host-tests/__gate_probe.test.ts'), { force: true });
+      // tsc -b leaves the output of a source that is gone.
+      const built = at('apps/vscode/dist/host-tests');
+      for (const f of existsSync(built) ? readdirSync(built) : [])
+        if (f.startsWith('__gate_probe')) rmSync(`${built}/${f}`, { force: true });
+    },
+  },
+  {
     // Not part of `bun run check`, but it is the agent feedback loop: it must exit 2 on a lint error.
     name: 'claude post-edit hook exits exactly 2 on a lint violation',
     expectOutput: /no-debugger/,

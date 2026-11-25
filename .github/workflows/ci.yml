@@ -95,3 +95,27 @@ jobs:
       - run: bun run check:gates
         env:
           PROVE_GATES_SKIP_SLOW: '1'
+
+  # The graph inside VS Code (U3.1.2, BMO-56; controller decisions 33 and 42): @vscode/test-cli on two
+  # pinned versions, the oldest that engines.vscode promises and a current one. Not in `bun run check`,
+  # because it downloads VS Code and wants a display.
+  vscode-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pin: [current, oldest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      # CPG_HOST_DISPLAY=1 uses the display there is: here, the virtual one xvfb-run makes.
+      - run: xvfb-run -a bun run test:vscode-host --label ${{ matrix.pin }}
+        env:
+          CPG_HOST_DISPLAY: '1'
