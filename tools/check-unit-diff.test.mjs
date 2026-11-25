@@ -173,10 +173,12 @@ describe('a feat/u3.* pull request', () => {
     const { root, base } = repo();
     const tip = commit(root, { 'packages/model/src/a.ts': 'export const a = 3;\n' });
     setBase(root, tip);
-    git(root, 'checkout', '-q', '-b', 'head', base);
+    git(root, 'checkout', '-q', '-b', 'topic', base);
     commit(root, { [path]: 'export const changed = 1;\n' });
     git(root, 'checkout', '-q', '--detach', tip);
-    git(root, 'merge', '-q', '--no-ff', '-m', 'merge', 'head');
+    git(root, 'merge', '-q', '--no-ff', '-m', 'merge', 'topic');
+    // Not 'head': a case-insensitive filesystem reads it as HEAD, and the merge does nothing.
+    expect(git(root, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ')).toHaveLength(3);
     const { status, out } = run(root);
     expect(listed(out)).toEqual(expected === 1 ? [path] : []);
     expect(status).toBe(expected);
