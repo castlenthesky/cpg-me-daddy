@@ -24,6 +24,7 @@ class FakeSurface implements PanelSurface {
     onMessage: () => ({ dispose: () => undefined }),
   };
   private closed: (() => void)[] = [];
+  private gone = false;
   readonly name: string;
   private readonly log: string[];
 
@@ -31,7 +32,9 @@ class FakeSurface implements PanelSurface {
     this.name = name;
     this.log = log;
   }
+  /** As VS Code: a closed panel's webview can't be used. */
   asUri(path: string): string {
+    if (this.gone) throw new Error('Webview is disposed');
     return `webview:${path}`;
   }
   setHtml(html: string): void {
@@ -47,6 +50,7 @@ class FakeSurface implements PanelSurface {
   }
   /** As VS Code: the listeners are called whoever closes it, once. */
   dispose(): void {
+    this.gone = true;
     this.log.push(`close ${this.name}`);
     for (const listener of this.closed.splice(0)) listener();
   }
@@ -124,6 +128,14 @@ describe('show', () => {
     await shown;
     expect(log).toEqual(['create 1', 'attach 1', 'close 1', 'detach']);
     expect(made[0]?.html).toBeUndefined();
+  });
+
+  // Post-implementation (review of the diff): VS Code throws for a closed panel's webview.
+  it('a panel closed at once does not fail show', async () => {
+    const { made, panel } = setUp();
+    const shown = panel.show();
+    made[0]?.dispose();
+    await expect(shown).resolves.toBeUndefined();
   });
 
   it('a panel closed and replaced while its HTML was made leaves the new one its own', async () => {

@@ -120,6 +120,7 @@ interface SetUp {
   /** Changes one engine, by the order it was made in (from 1). */
   readonly engine?: (made: CpgEngine, n: number) => Partial<CpgEngine>;
   readonly opener?: SourceOpener;
+  readonly closeFails?: boolean;
   readonly onReport?: (report: VerificationReport) => void;
 }
 
@@ -150,6 +151,7 @@ function setUp(over: SetUp = {}) {
             close: async () => {
               closes.push(n);
               await opened.close();
+              if (over.closeFails === true) throw new Error('stuck');
             },
           };
         },
@@ -532,6 +534,21 @@ describe('what goes wrong is said once and leaves the extension usable', () => {
     },
   );
 
+  // Post-implementation (review of the diff): the error is said, not left as a rejected command.
+  it('a session that will not close: the graph is not delivered, and it is said', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session, messages, page, reports } = setUp({
+      root,
+      closeFails: true,
+    });
+    await session.openGraph();
+    page().send(READY);
+    expect(page().graphs).toEqual([]);
+    expect(messages).toEqual(['error: CPG: the index failed: stuck']);
+    await session.verify();
+    expect(reports).toEqual([]);
+  });
+
   it('a first index that fails: cpg.verify says so and judges nothing', async () => {
     const root = await directory({ 'a.ts': 'a' });
     const { session, messages, reports, engines } = setUp({
@@ -629,6 +646,22 @@ describe('deactivation', () => {
     await session.verify();
     await allMicrotasks();
     expect(listed).toEqual([]);
+  });
+
+  // Post-implementation (review of the diff): the index of a restored panel starts after its HTML.
+  it('in a restored panel, before its index: nothing starts, nothing is said', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session, engines, messages, timers } = setUp({ root });
+    const restored = new FakeSurface();
+    const shown = session.restorePanel(restored);
+    session.dispose();
+    await shown;
+    expect(restored.html).not.toBe('');
+    // A session that is not disposed, started later, makes its engine: time enough for this one.
+    const control = setUp({ root });
+    await control.session.restorePanel(new FakeSurface());
+    await until(() => control.engines.length === 1);
+    expect([engines.length, messages.length, timers.length]).toEqual([0, 0, 0]);
   });
 
   it.each(['index', 'inspect'] as const)(
