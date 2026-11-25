@@ -92,6 +92,8 @@ function delta(seq: number, parts: Partial<GraphDelta> = {}): GraphDelta {
 const edgeOnly = (seq: number): GraphDelta =>
   delta(seq, { addedNodes: [], addedEdges: [{ source: 'f', target: 'd', type: 'IMPORTS' }] });
 
+const fileOf = (data: Record<string, unknown>) => ({ id: 'f', type: 'FILE', data });
+
 /** applyGraphDelta's applied payload; a fixture that does not apply is a broken test. */
 function merged(payload: GraphPayload, ...deltas: GraphDelta[]): GraphPayload {
   let current = payload;
@@ -366,6 +368,41 @@ describe('I-8: the merged payload is applyGraphDelta(payload, delta)', () => {
   });
 });
 
+describe('I-8, round two (review a1): the merge is by owner, not a whole-node replace', () => {
+  it("keeps the code tier's key when the filesystem tier re-adds a FILE, and the reverse", async () => {
+    const { host, heard } = await readyHost();
+    const code = delta(5, {
+      producer: 'code',
+      addedNodes: [fileOf({ interface_hash: 'i1' })],
+      addedEdges: [],
+    });
+    const disk = delta(6, { addedNodes: [fileOf({ content_hash: 'c2' })], addedEdges: [] });
+    const again = delta(7, {
+      producer: 'code',
+      addedNodes: [fileOf({ interface_hash: 'i3' })],
+      addedEdges: [],
+    });
+    for (const next of [code, disk, again]) await host.onDelta(next, live(next));
+    const file = host.snapshot().nodes.find((node) => node.id === 'f');
+    expect(file?.data).toStrictEqual({ content_hash: 'c2', interface_hash: 'i3' });
+    expect(host.snapshot()).toStrictEqual(merged(P, code, disk, again));
+    expect(heard()).toStrictEqual([deltaOf(code), deltaOf(disk), deltaOf(again)]);
+  });
+
+  it('rejects a same-tier re-add of a METHOD without its removal', async () => {
+    const { host, heard } = await readyHost();
+    const method = { id: 'm', type: 'METHOD' };
+    const first = delta(5, { producer: 'code', addedNodes: [method], addedEdges: [] });
+    const twice = delta(6, { producer: 'code', addedNodes: [method], addedEdges: [] });
+    await host.onDelta(first, live(first));
+    await expect(host.onDelta(twice, live(twice))).rejects.toThrow(
+      'malformed delta at seq 6: readd-without-removal m',
+    );
+    expect(heard()).toStrictEqual([deltaOf(first)]);
+    expect(host.snapshot()).toStrictEqual(merged(P, first));
+  });
+});
+
 describe('I-11: onDelta resolves on merge and never awaits the webview', () => {
   it('resolves with the payload updated while a post never settles', async () => {
     const stuck: unknown = new Promise(() => undefined);
@@ -446,6 +483,7 @@ describe('I-12: seq strictly increases per epoch, and a gap is a recorded fault'
     expect(heard()).toEqual([]);
     expect(host.snapshot()).toBe(P);
     expect(host.seq()).toBe(4);
+    expect(host.faults()).toEqual([]);
   });
 });
 
@@ -492,6 +530,46 @@ describe('I-13: cause initial replaces the payload and bumps the epoch; catch-up
     expect(host.epoch()).toBe(0);
     expect(host.snapshot()).toBe(fresh);
     expect(t.posted).toStrictEqual([themeOf(0), graphOf(fresh, 0)]);
+  });
+
+  // Round two (review a2): an indexed payload is at seq -1 until deltas exist, the same seq as a
+  // host that holds nothing, so "is there a graph" is not a question about seq.
+  it.each([
+    ['initial' as const, 1],
+    ['catch-up' as const, 0],
+  ])('a first %s snapshot at seq -1 is a graph like any other', async (cause, epoch) => {
+    const host = makeHost();
+    const fresh: GraphPayload = { ...Q, seq: -1 };
+    const stale: GraphPayload = { ...P, seq: -1 };
+    await host.onSnapshot(fresh, { seq: -1, cause });
+    const t = new FakeTransport();
+    host.attach(t);
+    t.send(READY);
+    t.send(resync(epoch, -1, 'render-error'));
+    await host.onSnapshot(stale, catchUp(stale));
+    await host.onDelta(delta(0), live(delta(0)));
+    expect(t.posted).toStrictEqual([
+      themeOf(epoch),
+      graphOf(fresh, epoch),
+      graphOf(fresh, epoch),
+      deltaOf(delta(0), epoch),
+    ]);
+    expect(host.snapshot()).toStrictEqual(merged(fresh, delta(0)));
+  });
+
+  // Round two (review b2).
+  it('a first delta before any page is a graph too: ready, resync and catch-up see it', async () => {
+    const host = makeHost();
+    await host.onDelta(delta(0), live(delta(0)));
+    const t = new FakeTransport();
+    host.attach(t);
+    t.send(READY);
+    t.send(resync(0, 0, 'gap'));
+    const level: GraphPayload = { ...Q, seq: 0 };
+    await host.onSnapshot(level, catchUp(level));
+    const first = graphOf(merged(EMPTY, delta(0)), 0);
+    expect(t.posted).toStrictEqual([themeOf(0), first, first]);
+    expect(host.snapshot()).toStrictEqual(merged(EMPTY, delta(0)));
   });
 });
 
@@ -589,6 +667,16 @@ describe('messages from the page', () => {
     ]);
   });
 
+  // Round two (review b1): a catch-up, taken or not, leaves the page where it was; its report then
+  // lags, which is verify's to judge (I-19), not the host's to drop.
+  it.each([9, 4, 3])('keeps the render-report across a catch-up at seq %i', async (seq) => {
+    const { host, t } = await readyHost();
+    t.send(known(report(1, 4)));
+    const next: GraphPayload = { ...Q, seq };
+    await host.onSnapshot(next, catchUp(next));
+    expect(host.renderReport()).toStrictEqual(report(1, 4));
+  });
+
   it('acts on what parse returns, never on the raw message', async () => {
     const host = makeHost();
     const t = new FakeTransport();
@@ -600,6 +688,8 @@ describe('messages from the page', () => {
     expect(host.faults()).toStrictEqual([{ kind: 'unknown-message', received: lookalike }]);
     t.send(known(READY, 'the page is up'));
     expect(t.posted).toStrictEqual([themeOf(1), graphOf(P)]);
+    t.send(known(report(1, 4), 'a report'));
+    expect(host.renderReport()).toStrictEqual(report(1, 4));
   });
 
   it.each([{ type: 'nope' }, 'ready', undefined])(
@@ -617,13 +707,11 @@ describe('messages from the page', () => {
     const t = new FakeTransport();
     await host.onSnapshot(P, initial(P));
     host.attach(t);
-    const newer = known({ type: 'ready', protocol: 2 });
-    t.send(newer);
+    // Round two (review a3): `received` is the message as received, not what parse made of it.
+    t.send(known({ type: 'ready', protocol: 2 }, 'a newer page'));
     await host.onDelta(delta(5), live(delta(5)));
     expect(t.posted).toEqual([]);
-    expect(host.faults()).toStrictEqual([
-      { kind: 'unknown-message', received: { type: 'ready', protocol: 2 } },
-    ]);
+    expect(host.faults()).toStrictEqual([{ kind: 'unknown-message', received: 'a newer page' }]);
   });
 
   it('does nothing with a reveal yet (SEAT until part 2)', async () => {

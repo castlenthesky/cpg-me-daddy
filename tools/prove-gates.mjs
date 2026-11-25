@@ -25,7 +25,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -258,19 +258,19 @@ const CASES = [
       /feat\/u3\.1\.1-probe changes packages\/[\s\S]*\n {2}packages\/model\/src\/__gate_probe\.ts/,
     run() {
       const dir = mkdtempSync(`${tmpdir()}/cpg-unit-diff-`);
-      const inDir = (...args) =>
-        must(
-          sh(dir, 'git', [
-            '-c',
-            'user.name=probe',
-            '-c',
-            'user.email=probe@example.invalid',
-            '-c',
-            'commit.gpgsign=false',
-            ...args,
-          ]),
-          args.join(' '),
-        );
+      // No GIT_* from a hook and no user config (hooks, signing): only the throwaway repository.
+      const env = {
+        ...Object.fromEntries(Object.entries(PLAIN_ENV).filter(([k]) => !k.startsWith('GIT_'))),
+        GIT_CONFIG_GLOBAL: devNull,
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_AUTHOR_NAME: 'probe',
+        GIT_AUTHOR_EMAIL: 'probe@example.invalid',
+        GIT_COMMITTER_NAME: 'probe',
+        GIT_COMMITTER_EMAIL: 'probe@example.invalid',
+        GITHUB_HEAD_REF: 'feat/u3.1.1-probe',
+        GITHUB_BASE_REF: 'probe',
+      };
+      const inDir = (...args) => must(sh(dir, 'git', args, { env }), args.join(' '));
       try {
         inDir('init', '-q');
         inDir('commit', '-q', '--allow-empty', '-m', 'base');
@@ -279,9 +279,7 @@ const CASES = [
         writeFileSync(`${dir}/packages/model/src/__gate_probe.ts`, 'export const probe = 1;\n');
         inDir('add', '-A');
         inDir('commit', '-q', '-m', 'violation');
-        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:unit-diff', dir], {
-          env: { ...PLAIN_ENV, GITHUB_HEAD_REF: 'feat/u3.1.1-probe', GITHUB_BASE_REF: 'probe' },
-        });
+        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:unit-diff', dir], { env });
         const problem = verdict(r, this);
         if (problem) throw new Error(problem);
       } finally {

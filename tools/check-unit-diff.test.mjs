@@ -183,6 +183,35 @@ describe('a feat/u3.* pull request', () => {
   });
 });
 
+// Round two (review a4, a5).
+describe('what is judged', () => {
+  it('the commits, not the working tree: an uncommitted package edit passes', () => {
+    const { root } = repo();
+    commit(root, { 'apps/vscode/src/x.ts': 'export const x = 2;\n' });
+    write(root, {
+      'packages/model/src/a.ts': 'export const a = 2;\n',
+      'packages/model/src/untracked.ts': 'export const u = 1;\n',
+    });
+    git(root, 'add', 'packages/model/src/a.ts');
+    expect(run(root)).toMatchObject({ status: 0 });
+  });
+
+  it('without an argument, the repository the script is in, wherever it is started', () => {
+    const { root } = repo();
+    commit(root, {
+      'packages/model/src/a.ts': 'export const a = 2;\n',
+      'tools/check-unit-diff.mjs': readFileSync(SCRIPT, 'utf8'),
+    });
+    const r = spawnSync(process.execPath, [join(root, 'tools/check-unit-diff.mjs')], {
+      cwd: tmpdir(),
+      encoding: 'utf8',
+      env: { ...CLEAN_ENV, GITHUB_HEAD_REF: HEAD, GITHUB_BASE_REF: BASE },
+    });
+    expect(listed(`${r.stdout}${r.stderr}`)).toEqual(['packages/model/src/a.ts']);
+    expect(r.status).toBe(1);
+  });
+});
+
 describe('any other branch', () => {
   it.each(['fix/u3-prep-engine', 'feat/u30.1', 'feat/u3-x', 'x/feat/u3.1', 'feat/u4.1.2-coalesce'])(
     '%s passes whatever it changes, with a line saying the rule does not apply',
@@ -191,6 +220,17 @@ describe('any other branch', () => {
       commit(root, { 'packages/model/src/a.ts': 'export const a = 2;\n' });
       const { status, out } = run(root, { GITHUB_HEAD_REF: head, GITHUB_BASE_REF: BASE });
       expect(out).toContain(`check-unit-diff: the rule does not apply to ${head}`);
+      expect(status).toBe(0);
+    },
+  );
+
+  // Round two (review a7): nothing about the base matters there, so nothing is asked of it.
+  it.each([{}, { GITHUB_BASE_REF: '' }, { GITHUB_BASE_REF: 'never-fetched' }])(
+    'passes whatever the base is (%j)',
+    (base) => {
+      const { root } = repo();
+      const { status, out } = run(root, { GITHUB_HEAD_REF: 'fix/u3-prep-engine', ...base });
+      expect(out).toContain('check-unit-diff: the rule does not apply to fix/u3-prep-engine');
       expect(status).toBe(0);
     },
   );
@@ -242,6 +282,10 @@ describe('the refs never reach a shell', () => {
     [`${HEAD}$(touch pwned)`, BASE, 0],
     [HEAD, 'gone;touch pwned', 1],
     [HEAD, '$(touch pwned)', 1],
+    // Round two (review a6): quotes, which a quoted interpolation would let through.
+    [HEAD, "gone';touch pwned;'", 1],
+    [HEAD, 'gone";touch pwned;"', 1],
+    [`${HEAD}';touch pwned;'`, BASE, 0],
   ])('head %s, base %s exits %i and runs nothing', (head, base, expected) => {
     const { root } = repo();
     const { status, out } = run(root, { GITHUB_HEAD_REF: head, GITHUB_BASE_REF: base });
