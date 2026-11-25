@@ -66,6 +66,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@cpg/engine": "*",
+        "@cpg/inspector": "*",
         "@cpg/model": "*",
       },
     },

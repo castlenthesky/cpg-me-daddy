@@ -33,6 +33,11 @@ export interface GraphPage<E extends ViewElement<E>> {
   readonly makeSurface: (events: SurfaceEvents) => GraphSurface;
   /** The shell's #cpg-verification region, which shows the latest verify report. */
   readonly banner: E;
+  /**
+   * SEAT: not called yet. Re-reads the page's computed colours and gives them to the surface (controller
+   * decision 32). Called on every `theme`; the visualizer takes the node colours itself.
+   */
+  readonly recolour?: () => void;
   /** The clock frameMs is measured on; performance.now() by default. */
   readonly now?: () => number;
 }

@@ -15,6 +15,16 @@ export interface PageColours {
 }
 
 /**
+ * SEAT. The config fields that follow the page's colours, for setConfigPartial when a theme arrives
+ * (controller decision 32). graphConfig uses them too, so the two cannot drift apart.
+ */
+export function colourConfig(
+  _colours: PageColours,
+): Pick<GraphConfig, 'backgroundColor' | 'hoveredPointRingColor' | 'hoveredLinkColor'> {
+  throw new Error('SEAT: colourConfig');
+}
+
+/**
  * The config the page constructs cosmos.gl's Graph with: the archive's physics, sizing and hover
  * settings, with the visualizer's `events` as the callbacks and `colours` for the canvas and the
  * hover highlight, so the picture follows light or dark mode (controller decision 14). Node and link

@@ -6,6 +6,8 @@
   "bin": {
     "cpg-inspector": "./dist/main.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist",
     "!dist/.tsbuildinfo"

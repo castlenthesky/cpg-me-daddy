@@ -177,3 +177,17 @@ describe.each([
     expect(code).not.toMatch(/\bimport\s*\(/);
   });
 });
+
+// U3.1.1 part 3 (controller decision 31): `bun run compile`, F5's build task, builds the bundle the
+// panel loads. Read from the two manifests: running it here would rebuild the dist other tests load.
+it("F5's build task runs tsc -b, then the page bundle, stopping on a failure", () => {
+  const tasks = JSON.parse(read(join(REPO, '.vscode', 'tasks.json')));
+  const build = tasks.tasks.filter((task) => task.group?.isDefault === true);
+  expect(build.map((task) => task.script)).toEqual(['compile']);
+  const { scripts } = JSON.parse(read(join(REPO, 'package.json')));
+  const steps = scripts.compile.split('&&').map((step) => step.trim());
+  expect(steps[0]).toBe('tsc -b');
+  expect(steps.slice(1)).toContain('bun run build:inspector');
+  expect(scripts.compile).not.toMatch(/[;|]|(?<!&)&(?!&)/);
+  expect(scripts['build:inspector']).toBe('node tools/build-inspector.mjs');
+});

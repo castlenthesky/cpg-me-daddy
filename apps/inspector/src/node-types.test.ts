@@ -9,7 +9,9 @@ import {
   DEFAULT_NODE_COLOR,
   NODE_TYPE_COLORS,
   NODE_TYPES,
+  REGISTRY_NODE_COLORS,
   hexToRgba,
+  nodeTypeColor,
 } from './node-types';
 import { DEFAULT_RELATIONSHIP_COLOR } from './relationship-types';
 
@@ -81,4 +83,50 @@ describe('fallback colours', () => {
     expect(DEFAULT_LINK_COLOR_HEX).toBe('#4b4b4b');
     expect(DEFAULT_RELATIONSHIP_COLOR).toBe(DEFAULT_LINK_COLOR_HEX);
   });
+});
+
+// U3.1.1 part 3 (controller decision 32): the palette a theme carries, and what the page makes of one.
+describe('REGISTRY_NODE_COLORS', () => {
+  it('is the registry palette as a theme carries it: the rows, and the neutral grey as hex', () => {
+    expect(REGISTRY_NODE_COLORS).toEqual({
+      nodeColors: {
+        DIRECTORY: '#ff9933',
+        FILE: '#4db3ff',
+        METHOD: '#4FC1FF',
+        TYPE_DECL: '#4EC9B0',
+        CALL: '#CE9178',
+        IMPORT: '#C586C0',
+        SYMBOL: '#DCDCAA',
+      },
+      // 0.6 of 255 is 153, 0x99.
+      defaultNodeColor: '#999999',
+    });
+  });
+});
+
+describe('nodeTypeColor', () => {
+  const colors = {
+    nodeColors: { FILE: '#123456', METHOD: '#ABCdef', CALL: 'red', IMPORT: '#12345', SYMBOL: '' },
+    defaultNodeColor: '#0a0b0c',
+  };
+
+  it.each([
+    ['its own colour', 'FILE', '#123456'],
+    ['its own colour, either case', 'METHOD', '#ABCdef'],
+    ['the default for a type with none, registered or not', 'DIRECTORY', '#0a0b0c'],
+    ['the default for an unregistered type', 'MODULE', '#0a0b0c'],
+    ['the default for a colour name', 'CALL', '#0a0b0c'],
+    ['the default for a short hex', 'IMPORT', '#0a0b0c'],
+    ['the default for an empty colour', 'SYMBOL', '#0a0b0c'],
+    ['the default for a prototype name', 'constructor', '#0a0b0c'],
+  ])('is %s (%s)', (_what, type, expected) => {
+    expect(nodeTypeColor(colors, type)).toBe(expected);
+  });
+
+  it.each(['x', '', '#fff', '#12345678', '##123456', ' #123456', '#12345g', 'rgb(1,2,3)'])(
+    'falls back to the registry grey when the default is %j',
+    (defaultNodeColor) => {
+      expect(nodeTypeColor({ nodeColors: {}, defaultNodeColor }, 'FILE')).toBe('#999999');
+    },
+  );
 });

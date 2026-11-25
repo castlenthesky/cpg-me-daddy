@@ -8,7 +8,7 @@ import {
   SPACE_SIZE,
   type LayoutResult,
 } from './layout';
-import { DEFAULT_NODE_COLOR, NODE_TYPE_COLORS, type Rgba } from './node-types';
+import { DEFAULT_NODE_COLOR, NODE_TYPE_COLORS, type NodeColors, type Rgba } from './node-types';
 
 const SPACE_CENTER = SPACE_SIZE / 2;
 
@@ -122,6 +122,14 @@ export class BufferStore {
         this.baseSizes.push(size);
       }
     }
+  }
+
+  /**
+   * SEAT. Gives every point its type's colour under `colors` (nodeTypeColor), and colours what later
+   * deltas add the same way. Positions and sizes are untouched, and `load` still takes its layout's.
+   */
+  recolour(_colors: NodeColors): void {
+    throw new Error('SEAT: BufferStore.recolour');
   }
 
   /** Copies finite live positions into finite base slots so tombstones are never lifted. */

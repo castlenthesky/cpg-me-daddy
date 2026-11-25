@@ -177,6 +177,8 @@
         "packages/**",
         "tools/**",
         "fixtures/**",
+        // build-inspector.test.mjs reads F5's build task (U3.1.1 part 3).
+        ".vscode/tasks.json",
         "*.ts",
         "*.mts",
         "*.cts",

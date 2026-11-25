@@ -57,3 +57,34 @@ export function queuedChannel(send: (text: string) => void): QueuedChannel {
     },
   };
 }
+
+/** What `acquireVsCodeApi()` returns in a VS Code webview: the part the page uses. */
+export interface VsCodeApi {
+  postMessage(message: WebviewToHost): void;
+}
+
+/** The slice of `window` a channel needs. */
+export interface PageWindow {
+  /** VS Code's webview API, which may be acquired only once; a browser has none. */
+  readonly acquireVsCodeApi?: () => VsCodeApi;
+  addEventListener(type: 'message', listener: (event: { readonly data: unknown }) => void): void;
+}
+
+/** The slice of a WebSocket the browser inspector's channel needs. */
+export interface PageSocket {
+  send(text: string): void;
+  addEventListener(type: 'open', listener: () => void): void;
+  addEventListener(type: 'message', listener: (event: { readonly data: unknown }) => void): void;
+}
+
+/**
+ * SEAT. The page's channel to its host (controller decision 31).
+ * - In a VS Code webview (`acquireVsCodeApi` is there): the API, acquired once. A post is the message
+ *   itself, at once; each `message` event's data goes to the handler as it is. One handler, the
+ *   latest; data that arrives before any is dropped. `openSocket` is never called, since the panel's
+ *   CSP allows no connection.
+ * - In a browser: `openSocket()`'s WebSocket, through queuedChannel (owner decision 8a).
+ */
+export function pageChannel(_page: PageWindow, _openSocket: () => PageSocket): PageChannel {
+  throw new Error('SEAT: pageChannel');
+}

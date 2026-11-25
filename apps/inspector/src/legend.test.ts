@@ -53,6 +53,16 @@ describe('nodeLegendRows', () => {
     expect(rows.find((row) => row.key === 'DIRECTORY')?.pressed).toBe(true);
   });
 
+  // U3.1.1 part 3 (controller decision 32): the swatch is the colour the points are drawn in.
+  it("takes each swatch from the theme's node colours", () => {
+    const colors = { nodeColors: { FILE: '#123456' }, defaultNodeColor: '#0a0b0c' };
+    const rows = nodeLegendRows(['FILE', 'DIRECTORY'], new Set(['FILE']), colors);
+    expect(rows.map((row) => [row.key, row.color, row.pressed])).toEqual([
+      ['DIRECTORY', '#0a0b0c', true],
+      ['FILE', '#123456', false],
+    ]);
+  });
+
   it('follows the registry order whatever order the types arrive in', () => {
     const all = NODE_TYPES.map((type) => type.key);
     expect(nodeLegendRows(all.toReversed(), none).map((row) => row.key)).toEqual(all);

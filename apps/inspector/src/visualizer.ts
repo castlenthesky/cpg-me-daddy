@@ -12,6 +12,7 @@ import {
   layoutPayload,
 } from './layout';
 import { nodeLegendRows, relationshipLegendRows, type LegendRow } from './legend';
+import type { NodeColors } from './node-types';
 import { relationshipKey } from './relationship-types';
 import type { DrawnGraph } from './render-report';
 import { linkTooltipText, nodeTooltipText, TOOLTIP_GAP_PX } from './tooltip';
@@ -206,6 +207,15 @@ export class GraphVisualizer {
     } catch (error) {
       console.error('@cpg/inspector: failed to apply graph delta', error);
     }
+  }
+
+  /**
+   * SEAT. Draws the points and the node legend's swatches in `colors`, now and on every later render and
+   * delta (controller decision 32). It only recolours: positions, links, hidden types, the camera and
+   * the simulation are untouched, and before the first render it hands the surface nothing.
+   */
+  setNodeColors(_colors: NodeColors): void {
+    throw new Error('SEAT: GraphVisualizer.setNodeColors');
   }
 
   fitView(): void {

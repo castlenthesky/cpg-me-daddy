@@ -25,6 +25,7 @@ import { verificationText } from './banner';
 import type { ViewDocument, ViewElement, ViewStyle } from './dom-views';
 import { PAGE_SEED, startGraphApp, type PageChannel } from './graph-app';
 import { layoutPayload } from './layout';
+import { hexToRgba, REGISTRY_NODE_COLORS } from './node-types';
 import { GraphVisualizer, type GraphSurface, type SurfaceEvents } from './visualizer';
 
 class FakeElement implements ViewElement<FakeElement> {
@@ -67,11 +68,14 @@ const doc: ViewDocument<FakeElement> = { createElement: () => new FakeElement() 
 
 class FakeSurface implements GraphSurface {
   positions: number[] | undefined;
+  colors: number[] = [];
   fits = 0;
   setPointPositions(pointPositions: Float32Array): void {
     this.positions = Array.from(pointPositions);
   }
-  setPointColors(): void {}
+  setPointColors(pointColors: Float32Array): void {
+    this.colors = Array.from(pointColors);
+  }
   setPointSizes(): void {}
   setLinks(): void {}
   setLinkWidths(): void {}
@@ -140,6 +144,7 @@ function start(
   makeSurface?: (events: SurfaceEvents) => GraphSurface,
   /** The page clock; 'default' leaves it out, so the page falls back to performance.now(). */
   now: (() => number) | 'default' = () => 0,
+  recolour?: () => void,
 ): Page {
   const container = new FakeElement();
   const banner = new FakeElement();
@@ -151,6 +156,7 @@ function start(
       container,
       banner,
       ...(now === 'default' ? {} : { now }),
+      ...(recolour === undefined ? {} : { recolour }),
       makeSurface:
         makeSurface ??
         ((events) => {
@@ -303,12 +309,6 @@ describe('startGraphApp', () => {
     { ...G, protocol: '1' },
     { ...G, epoch: '1' },
     { ...G, seq: undefined },
-    {
-      type: 'theme',
-      protocol: 1,
-      epoch: 1,
-      theme: { kind: 'dark', nodeColors: {}, defaultNodeColor: 'x' },
-    },
     { type: 'verification', protocol: 1, epoch: 1, seq: 0, report: {} },
     { type: 'ready', protocol: 1 },
     { type: 'reveal', nodeId: 'd' },
@@ -721,5 +721,101 @@ describe('startGraphApp: the #cpg-verification banner (BMO-35 line 5)', () => {
     const before = page.surface.positions;
     page.channel.deliver(verification(report));
     expect(page.surface.positions).toBe(before);
+  });
+});
+
+// U3.1.1 part 3 (controller decision 32): on `theme` the page re-reads its computed colours and applies
+// the node colours. A theme belongs to no graph, so the page keeps its epoch, payload and picture.
+const colours = (...hex: string[]): number[] =>
+  Array.from(Float32Array.from(hex.flatMap((value) => [...hexToRgba(value)])));
+const themePage = () => {
+  const calls = { recolour: 0 };
+  const page = start(new FakeChannel(), undefined, undefined, () => {
+    calls.recolour += 1;
+  });
+  return { page, calls };
+};
+
+describe('startGraphApp: theme (C-EXT I-4)', () => {
+  const THEME = { kind: 'dark', nodeColors: { FILE: '#336699' }, defaultNodeColor: '#ff0000' };
+  const themed = (epoch: number, theme: unknown = THEME) => ({
+    type: 'theme',
+    protocol: 1,
+    epoch,
+    theme,
+  });
+
+  it('before the first graph: re-reads the page colours, draws and posts nothing, then draws in them', () => {
+    const { page, calls } = themePage();
+    page.channel.deliver(themed(1));
+    expect(calls.recolour).toBe(1);
+    expect(page.surface.positions).toBeUndefined();
+    expect(page.channel.posted).toStrictEqual([READY]);
+    expect(page.banner.textContent).toBeNull();
+    page.channel.deliver(graphMessage(P1));
+    expect(page.surface.colors).toEqual(colours('#ff0000', '#336699', '#336699'));
+    expect(calls.recolour).toBe(1);
+  });
+
+  it('after a graph: recolours the points and the legend where they are, and posts nothing', () => {
+    const { page, calls } = themePage();
+    page.channel.deliver(graphMessage(P1));
+    const before = page.surface.positions;
+    const posted = page.channel.posted.length;
+    page.channel.deliver(themed(1));
+    page.channel.deliver(themed(1, { ...THEME, nodeColors: { DIRECTORY: '#010203' } }));
+    expect(calls.recolour).toBe(2);
+    expect(page.surface.colors).toEqual(colours('#010203', '#ff0000', '#ff0000'));
+    const swatches = page.container.find('legend')?.children.map((item) => item.children[0]?.style);
+    expect(swatches?.map((style) => style?.background)).toEqual(['#010203', '#ff0000']);
+    expect(page.surface.positions).toBe(before);
+    expect(page.channel.posted).toHaveLength(posted);
+  });
+
+  it("the registry's own colours draw the picture a page with no theme draws", () => {
+    const { page, calls } = themePage();
+    const browser = start();
+    page.channel.deliver(themed(1, { ...THEME, ...REGISTRY_NODE_COLORS }));
+    expect(calls.recolour).toBe(1);
+    for (const each of [page, browser]) each.channel.deliver(graphMessage(P1));
+    expect(page.surface.colors).toEqual(browser.surface.colors);
+    expect(page.surface.colors).toEqual(Array.from(layoutPayload(P1, { seed: PAGE_SEED }).colors));
+  });
+
+  it("keeps the page's own epoch: a delta at the theme's epoch is stale, one at the page's applies", () => {
+    const { page } = themePage();
+    page.channel.deliver(graphMessage(P1));
+    page.channel.deliver(themed(2));
+    const added = delta({
+      addedNodes: [node('h', 'FILE')],
+      addedEdges: [edge('d', 'h', 'HAS_ENTRY')],
+    });
+    page.channel.deliver(deltaMessage(added, 2));
+    expect(page.channel.posted.at(-1)).toStrictEqual({
+      type: 'resync',
+      epoch: 1,
+      seq: 0,
+      reason: 'stale-epoch',
+    });
+    page.channel.deliver(deltaMessage(added, 1));
+    expect(page.surface.colors).toEqual(colours('#ff0000', '#336699', '#336699', '#336699'));
+  });
+
+  it('a page with no recolour still takes the node colours', () => {
+    const page = start();
+    page.channel.deliver(themed(1));
+    page.channel.deliver(graphMessage(P1));
+    expect(page.surface.colors).toEqual(colours('#ff0000', '#336699', '#336699'));
+  });
+
+  it('ignores a malformed theme, and takes the next one', () => {
+    const { page, calls } = themePage();
+    page.channel.deliver(themed(1, { ...THEME, nodeColors: null }));
+    page.channel.deliver(graphMessage(P1));
+    expect(calls.recolour).toBe(0);
+    expect(page.surface.colors).toEqual(Array.from(layoutPayload(P1, { seed: PAGE_SEED }).colors));
+    page.channel.deliver(themed(1));
+    expect(calls.recolour).toBe(1);
+    expect(page.surface.colors).toEqual(colours('#ff0000', '#336699', '#336699'));
   });
 });
