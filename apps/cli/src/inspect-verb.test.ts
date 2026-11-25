@@ -349,6 +349,18 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     await l.done;
   });
 
+  // Round two (review a4): the sent count is payload.nodes.length, not the number of distinct ids.
+  it('a duplicate id: a page reporting the distinct count fails (3 sent, 2 drawn)', async () => {
+    const dup = { ...PAYLOAD, nodes: [...PAYLOAD.nodes, { id: 'f', type: 'FILE' }] };
+    const l = live(['inspect', await payloadFile(envelope(dup))]);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    l.inspector.report(4, { payloadNodeCount: 2, renderedNodeCount: 2, droppedNodeIds: [] });
+    await until(() => l.inspector.sent.length >= 3, 'the fail');
+    expect(renderAt(l.inspector, 2)).toMatchObject({ state: 'fail', observed: 2, expected: 3 });
+    l.abort();
+    await l.done;
+  });
+
   it('cpg index --inspect uses the indexed payload count: a page reporting another count still fails', async () => {
     const root = await workspace();
     const l = live(['index', root, '--inspect']);

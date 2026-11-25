@@ -213,6 +213,17 @@ describe('renderReconciliation (controller decisions 21 and 25)', () => {
     });
   });
 
+  // Round two (review a5): a sent count of 0 is a count, not a missing one.
+  it('a page that drew nodes of an empty payload fails: the sent count 0 is used', () => {
+    const r = report({ payloadNodeCount: 3, renderedNodeCount: 3 });
+    expect(check(1, { seq: 1, report: r }, 0)).toMatchObject({
+      state: 'fail',
+      observed: 3,
+      expected: 0,
+      detail: '3 of 0 payload nodes drawn',
+    });
+  });
+
   it('with no report the sent count decides nothing: unavailable, 0 and 0 (no other semantics change)', () => {
     expect(check(5, null, 42)).toEqual({
       id: 'render-reconciliation',

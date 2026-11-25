@@ -400,12 +400,10 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
     const root = await workspace('version: 1\nconsumers: { vscode: true }\n');
     const r = await cli(['index', root], fakeEngine().engine);
     expect(r.code).toBe(EXIT.USAGE);
-    const err = r.stderr.join('\n');
-    expect(err).toContain(
-      `consumers.vscode true from file ${join(root, 'cpg.config.yaml')} (the VS Code extension turns this on itself; nothing in the CLI does)`,
-    );
-    expect(err).not.toContain('VS Code panel');
-    expect(err).not.toContain('U3');
+    // Round two (review d): the whole line, so no random temp suffix can match a fragment.
+    expect(r.stderr).toEqual([
+      `cpg: not built yet: consumers.vscode true from file ${join(root, 'cpg.config.yaml')} (the VS Code extension turns this on itself; nothing in the CLI does)`,
+    ]);
   });
 
   it('every switch that is not built is named, each with its own source', async () => {

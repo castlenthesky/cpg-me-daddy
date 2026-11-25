@@ -151,6 +151,34 @@ describe('idUniqueness: ids unique within each list (C3a)', () => {
     expect(r.detail).toBeDefined();
   });
 
+  // Round two (review a2): a repeat inside two different lists is a repeat in each of them.
+  it('repeats in two lists: counts add up, localisedTo is distinct across the lists', () => {
+    // list 1: src twice (2 ids, 1 distinct); list 2: b twice and src twice (4 ids, 2 distinct)
+    expect(
+      idUniqueness(
+        [
+          ['src', 'src'],
+          ['b', 'src', 'src', 'b'],
+        ],
+        1,
+      ),
+    ).toMatchObject({
+      state: 'fail',
+      observed: 6,
+      expected: 3,
+      localisedTo: ['b', 'src'],
+    });
+  });
+
+  // Round two (review a3): code-unit order puts 'Z' before 'a'; localeCompare would not.
+  it('localisedTo is in UTF-16 code-unit order', () => {
+    expect(idUniqueness([['b', 'a', 'Z', 'a', 'b', 'a', 'Z']], 1)).toMatchObject({
+      observed: 7,
+      expected: 3,
+      localisedTo: ['Z', 'a', 'b'],
+    });
+  });
+
   it('the same id in two lists is not a duplicate (labels never collide)', () => {
     expect(idUniqueness([['src'], ['src']], 1)).toMatchObject({
       state: 'pass',
@@ -236,6 +264,25 @@ describe('revisionReconciliation: FILE revisions vs disk, and nodes vs their FIL
     });
   });
 
+  // Round two (review a6): a FILE listed twice is compared twice; a later match hides nothing.
+  it('a FILE listed twice: its earlier mismatch still counts', () => {
+    expect(
+      revisionReconciliation([rev('a.ts', 'r1')], [grev('a.ts', 'old'), grev('a.ts', 'r1')], [], 1),
+    ).toMatchObject({ state: 'fail', observed: 1, localisedTo: ['a.ts'] });
+  });
+
+  // Round two (review a7): a stale node counts even when its file is not among the admitted ones.
+  it('a stale node in a file the disk side left out: fail, localised to its file', () => {
+    expect(
+      revisionReconciliation(
+        [rev('a.ts', 'r1')],
+        [grev('a.ts', 'r1'), grev('b.ts', 'r2')],
+        [{ file: 'b.ts' }],
+        1,
+      ),
+    ).toMatchObject({ state: 'fail', observed: 1, localisedTo: ['b.ts'] });
+  });
+
   it('a graph FILE not on disk, and a disk file not in the graph, are left to another check', () => {
     expect(
       revisionReconciliation([rev('new.ts', 'r9')], [grev('gone.ts', 'old')], [], 1),
@@ -282,7 +329,10 @@ describe('the exported checks agree with engine.verify', () => {
     await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
   });
 
-  async function brokenWorkspace() {
+  const TARGET = { host: 'localhost', port: 6382, graph: 'cpg' };
+
+  /** A workspace with a.ts and src/b.py, indexed into `memory`. */
+  async function indexedWorkspace() {
     const root = await mkdtemp(join(tmpdir(), 'cpg-host-checks-'));
     roots.push(root);
     await mkdir(join(root, 'src'));
@@ -293,10 +343,7 @@ describe('the exported checks agree with engine.verify', () => {
       { version: '0', consumers: { inspect: false, store: 'memory', vscode: false } },
       { memoryStore: memory },
     );
-    const session = await engine.connect(
-      { host: 'localhost', port: 6382, graph: 'cpg' },
-      { readOnly: false },
-    );
+    const session = await engine.connect(TARGET, { readOnly: false });
     await engine.index(
       { config: { root }, session, resumeFrom: null },
       () => {},
@@ -306,26 +353,54 @@ describe('the exported checks agree with engine.verify', () => {
     return { root, memory, engine };
   }
 
+  // Everything is read inside one read session: the memory store answers only while it is open.
+  async function rowsAndReads(
+    { root, memory, engine }: Awaited<ReturnType<typeof indexedWorkspace>>,
+    plant?: () => Promise<void>,
+  ) {
+    const session = await engine.connect(TARGET, { readOnly: true });
+    try {
+      if (plant !== undefined) await plant();
+      const report = await engine.verify(session, { root }, null);
+      const seq = (await memory.inspect()).highWaterSeq;
+      return {
+        seq,
+        row: (id: string) => report.checks.find((c) => c.id === id),
+        states: await memory.fileStates(),
+        keyLists: await Promise.all(NODE_LABELS.map((spec) => memory.nodeKeys(spec.label))),
+        stale: await memory.staleNodes(),
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  // Round two (review a1): the id-uniqueness row agrees too, on a graph that really fails it.
+  it('a planted duplicate id: the id-uniqueness row equals the engine row and fails', async () => {
+    const ws = await indexedWorkspace();
+    const { seq, row, keyLists } = await rowsAndReads(ws, async () => {
+      const graph = await ws.memory.readAll();
+      const twin = graph.nodes.find((n) => n.type === 'FILE');
+      if (twin === undefined) throw new Error('no FILE node to repeat');
+      const plantedSeq = graph.seq + 1;
+      await ws.memory.onSnapshot(
+        { ...graph, seq: plantedSeq, nodes: [...graph.nodes, twin] },
+        { seq: plantedSeq, cause: 'initial' },
+      );
+    });
+    expect(row('id-uniqueness')?.state).toBe('fail');
+    expect(idUniqueness(keyLists, seq)).toEqual(row('id-uniqueness'));
+  });
+
   it('a missing file, a changed file and an extra file: every row equals the engine row', async () => {
-    const { root, memory, engine } = await brokenWorkspace();
+    const ws = await indexedWorkspace();
+    const { root } = ws;
     await writeFile(join(root, 'src', 'b.py'), 'b = 3\n');
     await rm(join(root, 'a.ts'));
     await writeFile(join(root, 'new.ts'), 'export const n = 1;\n');
-
-    const session = await engine.connect(
-      { host: 'localhost', port: 6382, graph: 'cpg' },
-      { readOnly: true },
-    );
-    const report = await engine.verify(session, { root }, null);
-    await session.close();
-
+    const { seq, row, states, keyLists, stale } = await rowsAndReads(ws);
     const walk = await walkWorkspace({ root, languageOf: () => undefined });
-    const states = await memory.fileStates();
-    const keyLists = await Promise.all(NODE_LABELS.map((spec) => memory.nodeKeys(spec.label)));
-    const stale = await memory.staleNodes();
-    const seq = (await memory.inspect()).highWaterSeq;
 
-    const row = (id: string) => report.checks.find((c) => c.id === id);
     expect(filesystemReconciliation(walk.files, states, seq)).toEqual(
       row('filesystem-reconciliation'),
     );
