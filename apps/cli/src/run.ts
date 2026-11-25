@@ -177,7 +177,15 @@ function refuseUnbuiltConsumers(verb: string, resolved: ResolvedConfig): void {
       ),
     );
   }
-  if (vscode.value) parts.push(describeConsumer('vscode', vscode, 'the VS Code panel, U3'));
+  if (vscode.value) {
+    parts.push(
+      describeConsumer(
+        'vscode',
+        vscode,
+        'the VS Code extension turns this on itself; nothing in the CLI does',
+      ),
+    );
+  }
   if (parts.length > 0) {
     throw new Fail({
       kind: 'not-built',

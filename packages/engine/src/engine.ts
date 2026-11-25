@@ -86,7 +86,6 @@ function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
 function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
   const parts: string[] = [];
   if (consumers.store === 'falkor') parts.push('consumers.store falkor (FalkorStore, U5)');
-  if (consumers.vscode) parts.push('consumers.vscode (the VS Code panel, U3)');
   return parts;
 }
 
