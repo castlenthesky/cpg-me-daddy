@@ -182,6 +182,16 @@ describe('dispose', () => {
     expect(clock.pending).toBe(0);
   });
 
+  // Post-implementation: closes sabotage survivor "changed after dispose sets a timer".
+  it('a change after it sets no timer', () => {
+    const { clock, scheduler, starts } = setUp();
+    scheduler.dispose();
+    scheduler.changed();
+    expect(clock.pending).toBe(0);
+    clock.advance(10_000);
+    expect(starts).toEqual([]);
+  });
+
   it.each([undefined, new Error('late')])(
     'a run that ends after it (error: %s) reports nothing, and the one owed never starts',
     async (error) => {
