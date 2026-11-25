@@ -327,6 +327,16 @@ describe('I-4: theme precedes the first graph, and a theme change is the theme a
     host.setTheme(DARK);
     expect(heard()).toStrictEqual([graphOf(Q, 2), themeOf(2, DARK)]);
   });
+
+  // Post-implementation: closes sabotage survivor "setTheme needs a graph".
+  it('re-posts the theme to a page that is ready before any graph', () => {
+    const host = makeHost();
+    const t = new FakeTransport();
+    host.attach(t);
+    t.send(READY);
+    host.setTheme(DARK);
+    expect(t.posted).toStrictEqual([themeOf(0), themeOf(0, DARK)]);
+  });
 });
 
 describe('I-6: an edge-only delta is delivered', () => {
