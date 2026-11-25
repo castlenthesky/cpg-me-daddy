@@ -707,10 +707,12 @@ const CASES = [
     },
     cleanup() {
       rmSync(at('apps/vscode/host-tests/__gate_probe.test.ts'), { force: true });
-      // tsc -b leaves the output of a source that is gone.
+      // tsc -b leaves the output of a source that is gone, and its build info would call the same probe
+      // planted again up to date, with nothing emitted for it: the second run would pass.
       const built = at('apps/vscode/dist/host-tests');
       for (const f of existsSync(built) ? readdirSync(built) : [])
-        if (f.startsWith('__gate_probe')) rmSync(`${built}/${f}`, { force: true });
+        if (f.startsWith('__gate_probe') || f === '.tsbuildinfo')
+          rmSync(`${built}/${f}`, { force: true });
     },
   },
   {
