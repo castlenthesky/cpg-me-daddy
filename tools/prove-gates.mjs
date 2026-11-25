@@ -250,6 +250,45 @@ const CASES = [
       rmSync(at('docs/outline/__gate_probe.md'), { force: true });
     },
   },
+  {
+    // Controller decision 26. The gate judges commits, so the violation is a commit in a throwaway
+    // repository; what runs is the package script the CI check job runs.
+    name: 'check:unit-diff rejects a packages/ change on a feat/u3.* pull request',
+    expectOutput:
+      /feat\/u3\.1\.1-probe changes packages\/[\s\S]*\n {2}packages\/model\/src\/__gate_probe\.ts/,
+    run() {
+      const dir = mkdtempSync(`${tmpdir()}/cpg-unit-diff-`);
+      const inDir = (...args) =>
+        must(
+          sh(dir, 'git', [
+            '-c',
+            'user.name=probe',
+            '-c',
+            'user.email=probe@example.invalid',
+            '-c',
+            'commit.gpgsign=false',
+            ...args,
+          ]),
+          args.join(' '),
+        );
+      try {
+        inDir('init', '-q');
+        inDir('commit', '-q', '--allow-empty', '-m', 'base');
+        inDir('update-ref', 'refs/remotes/origin/probe', 'HEAD');
+        mkdirSync(`${dir}/packages/model/src`, { recursive: true });
+        writeFileSync(`${dir}/packages/model/src/__gate_probe.ts`, 'export const probe = 1;\n');
+        inDir('add', '-A');
+        inDir('commit', '-q', '-m', 'violation');
+        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:unit-diff', dir], {
+          env: { ...PLAIN_ENV, GITHUB_HEAD_REF: 'feat/u3.1.1-probe', GITHUB_BASE_REF: 'probe' },
+        });
+        const problem = verdict(r, this);
+        if (problem) throw new Error(problem);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
   // check:deps on the real tree: the three tier violations U0.2.2 names, one per rule. Every other
   // rule and specifier form is planted on fixtures in tools/check-deps.test.mjs; the case after
   // these proves `bun run test` runs that file.
