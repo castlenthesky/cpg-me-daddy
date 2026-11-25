@@ -16,7 +16,7 @@ import { webglRenderer } from './webgl';
 const FILES = 3;
 const NODES = 5;
 const STALE = 'shapes/square.py';
-const DRAW_MS = 30_000;
+const DRAW_MS = 20_000;
 const VERIFY_STATES = {
   'filesystem-reconciliation': 'pass',
   'identity-invariants': 'unavailable', // until U6c
@@ -89,10 +89,11 @@ suite('the graph in VS Code', () => {
   function needsWebGL(context: Mocha.Context): void {
     if (renderer === undefined && process.env['CPG_HOST_PIN'] === 'oldest') context.skip();
   }
-  /** What the next test starts from, whatever the one before it left: a fresh index, drawn. */
-  async function fresh(): Promise<VerificationReport> {
+  /** What the E4 tests start from, whatever the one before left: a fresh index, drawn when it can be. */
+  async function fresh(): Promise<void> {
     await openGraph();
-    return renderer === undefined ? verify() : drawn();
+    if (renderer === undefined) return;
+    assert.equal(check(await drawn(), 'render-reconciliation').state, 'pass', 'not drawn');
   }
 
   suiteSetup(async () => {
@@ -123,7 +124,8 @@ suite('the graph in VS Code', () => {
   });
 
   test('passes every check of the U2 gate, on files and ids', async () => {
-    const report = await fresh();
+    await openGraph();
+    const report = await verify();
     const { 'render-reconciliation': _render, ...expected } = VERIFY_STATES;
     const { 'render-reconciliation': _state, ...states } = statesOf(report);
     assert.deepEqual(states, expected);
@@ -138,7 +140,8 @@ suite('the graph in VS Code', () => {
 
   test('draws the whole graph in a real webview: render-reconciliation', async function () {
     needsWebGL(this);
-    const report = await fresh();
+    await openGraph();
+    const report = await drawn();
     const render = check(report, 'render-reconciliation');
     assert.deepEqual([render.state, render.observed, render.expected], ['pass', NODES, NODES]);
     assert.equal(report.state, 'unavailable'); // the worst of the six, until U6c

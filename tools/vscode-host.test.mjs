@@ -42,6 +42,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -59,7 +60,19 @@ function argument({ launchArgs }, name) {
   expect(values).toHaveLength(1);
   return values[0].slice(name.length + 3);
 }
+/** The display variables VS Code would see, were both set where it is started. */
+const displayOf = ({ env }) => {
+  const { DISPLAY, WAYLAND_DISPLAY } = { ...desktop, ...env };
+  return [DISPLAY, WAYLAND_DISPLAY];
+};
 const isUnder = (dir, path) => isAbsolute(path) && path.startsWith(`${dir}/`);
+
+const QUIET = { 'telemetry.telemetryLevel': 'off', 'update.mode': 'none' };
+/** The user settings a configuration starts VS Code with. */
+const profileOf = (configuration) =>
+  JSON.parse(
+    readFileSync(join(argument(configuration, 'user-data-dir'), 'User', 'settings.json'), 'utf8'),
+  );
 
 describe('the pins', () => {
   it('are exact, and the oldest is what engines.vscode promises', () => {
@@ -106,6 +119,11 @@ describe('displayPolicy', () => {
     expect(displayPolicy().headless).toBe(false);
     vi.stubEnv('CPG_HOST_DISPLAY', '0');
     expect(displayPolicy({ platform: 'linux' }).headless).toBe(true);
+    // Round two (review 2): the platform too, whichever one this is.
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    expect(() => displayPolicy()).toThrow(/CPG_HOST_DISPLAY=1/);
+    platform.mockReturnValue('linux');
+    expect(displayPolicy().headless).toBe(true);
   });
 });
 
@@ -125,10 +143,10 @@ describe('hostConfigurations', () => {
   it('applies the display policy, refusal included', () => {
     const [headless] = hostConfigurations(join(scratch, 'a'), linux);
     expect(headless.launchArgs).toContain(HEADLESS);
-    expect({ ...desktop, ...headless.env }).toMatchObject({ DISPLAY: undefined });
+    expect(displayOf(headless)).toEqual([undefined, undefined]);
     for (const configuration of hostConfigurations(join(scratch, 'b'), onDisplay)) {
       expect(configuration.launchArgs.filter((arg) => arg.startsWith('--ozone'))).toEqual([]);
-      expect(Object.keys(configuration.env)).not.toContain('DISPLAY');
+      expect(displayOf(configuration)).toEqual([':1', 'wayland-0']);
     }
     expect(() => hostConfigurations(scratch, { platform: 'darwin', env: desktop })).toThrow(
       /CPG_HOST_DISPLAY=1/,
@@ -194,11 +212,7 @@ describe('hostConfigurations', () => {
     for (const configuration of hostConfigurations(scratch, onDisplay)) {
       expect(configuration.launchArgs).toEqual(expect.arrayContaining(SOFTWARE_GL));
       expect(configuration.launchArgs).toContain('--disable-telemetry');
-      const profile = join(argument(configuration, 'user-data-dir'), 'User', 'settings.json');
-      expect(JSON.parse(readFileSync(profile, 'utf8'))).toMatchObject({
-        'telemetry.telemetryLevel': 'off',
-        'update.mode': 'none',
-      });
+      expect(profileOf(configuration)).toMatchObject(QUIET);
     }
   });
 });
@@ -207,15 +221,24 @@ describe('spikeConfiguration', () => {
   it('is the current pin on the whole ladder, for an hour', () => {
     const spikes = spikeConfiguration(scratch, linux);
     expect([spikes.label, spikes.version]).toEqual(['spikes', PINS.current]);
+    // Round two (review 4): a glob, its own directories, and the same profile and refusals.
+    expect(isAbsolute(spikes.files)).toBe(false);
     expect(resolve(TOOLS, spikes.files)).toBe(
       join(REPO, 'apps/vscode/dist/host-tests/spikes/*.spike.js'),
     );
-    expect(isUnder(scratch, spikes.workspaceFolder)).toBe(true);
     expect(contents(spikes.workspaceFolder)).toEqual(contents(LADDER));
-    expect(isUnder(scratch, argument(spikes, 'user-data-dir'))).toBe(true);
-    expect(isUnder(scratch, argument(spikes, 'extensions-dir'))).toBe(true);
-    expect(spikes.mocha).toMatchObject({ failZero: true, timeout: 3_600_000 });
-    expect(spikes.extensionDevelopmentPath).toBe(REPO);
+    const directories = [
+      spikes.workspaceFolder,
+      argument(spikes, 'user-data-dir'),
+      argument(spikes, 'extensions-dir'),
+    ];
+    expect(directories.filter((directory) => !isUnder(scratch, directory))).toEqual([]);
+    expect(new Set(directories).size).toBe(3);
+    expect(spikes.mocha).toMatchObject({ failZero: true, forbidOnly: true, timeout: 3_600_000 });
+    expect([spikes.extensionDevelopmentPath, spikes.useInstallation]).toEqual([REPO, undefined]);
+    expect(structuredClone(spikes)).toEqual(spikes);
+    expect(spikes.launchArgs).toContain('--disable-telemetry');
+    expect(profileOf(spikes)).toMatchObject(QUIET);
   });
 
   it('writes its samples outside the profile, where git ignores them', () => {
@@ -227,8 +250,10 @@ describe('spikeConfiguration', () => {
   it('is headless and software-drawn by default, and uses the GPU on a display', () => {
     const headless = spikeConfiguration(join(scratch, 'a'), linux);
     expect(headless.launchArgs).toEqual(expect.arrayContaining([HEADLESS, ...SOFTWARE_GL]));
-    expect({ ...desktop, ...headless.env }).toMatchObject({ DISPLAY: undefined });
+    // Round two (review 3): both variables, and kept on a display.
+    expect(displayOf(headless)).toEqual([undefined, undefined]);
     const shown = spikeConfiguration(join(scratch, 'b'), onDisplay);
+    expect(displayOf(shown)).toEqual([':1', 'wayland-0']);
     expect(shown.launchArgs.filter((arg) => [HEADLESS, ...SOFTWARE_GL].includes(arg))).toEqual([]);
     expect(() =>
       spikeConfiguration(join(scratch, 'c'), { platform: 'darwin', env: desktop }),

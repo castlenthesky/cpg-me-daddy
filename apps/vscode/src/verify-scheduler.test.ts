@@ -222,13 +222,16 @@ describe('what now resolves with', () => {
     expect(starts).toEqual([499]);
   });
 
-  it('undefined for a run that throws, and the report of the one owed', async () => {
+  it('undefined for a run that throws, whatever came before, and the report of the one owed', async () => {
     const { scheduler, end } = setUp();
+    // Round two (review 1): an earlier run's report is not this one's.
+    const before = watch(scheduler.now());
+    await end();
     const asked = [scheduler.now(), scheduler.now()].map(watch);
     await end(new Error('no probe'));
-    expect(asked.map(({ at }) => at)).toEqual([undefined, 'waiting']);
+    expect([before, ...asked].map(({ at }) => at)).toEqual([1, undefined, 'waiting']);
     await end();
-    expect(asked.map(({ at }) => at)).toEqual([undefined, 2]);
+    expect(asked.map(({ at }) => at)).toEqual([undefined, 3]);
   });
 
   it("undefined for a verify that throws before it returns, then the next one's report", async () => {
