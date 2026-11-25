@@ -4,6 +4,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
@@ -121,6 +122,15 @@ describe('panelHtml with no bundle (decision 31: never a blank panel)', () => {
     ]);
     expect(html).not.toMatch(/<style|style=/);
     expect(html).not.toMatch(/<script|<link|<img|src=|graph-container/);
+  });
+
+  // Post-implementation: closes sabotage survivor "the read permission is not checked". Root reads all.
+  it.skipIf(process.getuid?.() === 0)('a bundle it may not read gets the message', async () => {
+    const dir = built();
+    chmodSync(join(dir, PAGE_SCRIPT), 0);
+    const html = await panelHtml({ directory: dir, asUri, cspSource: CSP_SOURCE });
+    expect(html).toContain('bun run compile');
+    expect(html).not.toContain('<script');
   });
 
   // C-EXT may_not: sync fs (L-11).
