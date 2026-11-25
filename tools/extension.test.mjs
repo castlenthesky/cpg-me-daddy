@@ -18,7 +18,7 @@ import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real paths (review d1): require.resolve and the module cache answer with them.
 const REPO = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
@@ -221,8 +221,27 @@ function standIn(root) {
   return { seen, vscode };
 }
 
-let temp = '';
+// One stub for the whole file: Node caches where a directory's `vscode` resolved to.
+let stubs = '';
 let hooks;
+beforeAll(() => {
+  stubs = realpathSync(mkdtempSync(join(tmpdir(), 'extension-vscode-')));
+  const stub = join(stubs, 'vscode.cjs');
+  writeFileSync(stub, 'module.exports = globalThis.vscodeStandIn;\n');
+  hooks = registerHooks({
+    resolve: (specifier, context, next) =>
+      specifier === 'vscode'
+        ? { url: pathToFileURL(stub).href, format: 'commonjs', shortCircuit: true }
+        : next(specifier, context),
+  });
+});
+afterAll(() => {
+  hooks?.deregister();
+  delete globalThis.vscodeStandIn;
+  if (stubs) rmSync(stubs, { recursive: true, force: true });
+});
+
+let temp = '';
 let root = '';
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -234,18 +253,8 @@ beforeEach(() => {
   mkdirSync(join(root, 'sub'));
   writeFileSync(join(root, 'sub', 'c.ts'), '');
   symlinkSync(join(root, 'a.ts'), join(root, 'link.ts'));
-  const stub = join(temp, 'vscode.cjs');
-  writeFileSync(stub, 'module.exports = globalThis.vscodeStandIn;\n');
-  hooks = registerHooks({
-    resolve: (specifier, context, next) =>
-      specifier === 'vscode'
-        ? { url: pathToFileURL(stub).href, format: 'commonjs', shortCircuit: true }
-        : next(specifier, context),
-  });
 });
 afterEach(() => {
-  hooks.deregister();
-  delete globalThis.vscodeStandIn;
   vi.useRealTimers();
   rmSync(temp, { recursive: true, force: true });
 });
@@ -257,7 +266,7 @@ function activate(folder = root) {
   const require = createRequire(MAIN);
   const apps = join(REPO, 'apps', 'vscode', 'dist');
   for (const key of Object.keys(require.cache)) {
-    if (key.startsWith(apps) || key.startsWith(temp)) delete require.cache[key];
+    if (key.startsWith(apps) || key.startsWith(stubs)) delete require.cache[key];
   }
   const extension = require(MAIN);
   const subscriptions = [];
