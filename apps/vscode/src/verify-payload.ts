@@ -1,10 +1,30 @@
-// SEAT (U3.1.1 part 2, BMO-52): the six checks of C-EXT's verify, over the host's own payload and a
+// REAL (U3.1.1 part 2, BMO-52): the six checks of C-EXT's verify, over the host's own payload and a
 // FilesystemProbe (controller decision 29). Every verdict is @cpg/engine's, the one definition the
 // CLI's verify uses (decision 25); this file only feeds it.
 
-import type { RenderObservation } from '@cpg/engine';
-import type { Epoch, GraphPayload, VerificationReport } from '@cpg/model';
+import {
+  filesystemReconciliation,
+  idUniqueness,
+  renderReconciliation,
+  revisionReconciliation,
+  unavailableCheck,
+  worstState,
+  type AdmittedPath,
+  type AdmittedRevision,
+  type GraphFile,
+  type GraphRevision,
+  type RenderObservation,
+} from '@cpg/engine';
+import {
+  WORKSPACE_ROOT,
+  type CheckResult,
+  type Epoch,
+  type GraphPayload,
+  type VerificationReport,
+  type WorkspacePath,
+} from '@cpg/model';
 import type { FilesystemProbe } from './contract';
+import { serializeError } from './errors';
 
 /** What verify judges, read from the host before its first await (C-EXT I-18). */
 export interface VerifySubject {
@@ -15,7 +35,40 @@ export interface VerifySubject {
 }
 
 /** How many digests run at the same time, so a large workspace is not read all at once. */
-export const DIGESTS_AT_ONCE = 32;
+const DIGESTS_AT_ONCE = 32;
+
+function admittedPath({ path }: { readonly path: string }): AdmittedPath {
+  const slash = path.lastIndexOf('/');
+  return { path, parent: slash === -1 ? WORKSPACE_ROOT : path.slice(0, slash) };
+}
+
+/** What the probe answered, or the detail of the checks it feeds. */
+type Answer<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; detail: string };
+
+async function ask<T>(question: () => Promise<T>): Promise<Answer<T>> {
+  try {
+    return { ok: true, value: await question() };
+  } catch (thrown) {
+    const { name, message } = serializeError(thrown);
+    return { ok: false, detail: `the filesystem probe failed: ${name}: ${message}` };
+  }
+}
+
+/** The paths that have a digest, with it. */
+async function digestAll(
+  paths: readonly WorkspacePath[],
+  fs: FilesystemProbe,
+): Promise<readonly AdmittedRevision[]> {
+  const digested: AdmittedRevision[] = [];
+  for (let start = 0; start < paths.length; start += DIGESTS_AT_ONCE) {
+    const batch = paths.slice(start, start + DIGESTS_AT_ONCE).map(async (path) => {
+      const revision_id = await fs.digest(path);
+      if (revision_id !== undefined) digested.push({ path, revision_id });
+    });
+    await Promise.all(batch); // oxlint-disable-line no-await-in-loop -- one batch at a time
+  }
+  return digested;
+}
 
 /**
  * All six checks, once each, in enum order (I-18), each with `asOfSeq` the payload's seq; the report
@@ -41,8 +94,76 @@ export const DIGESTS_AT_ONCE = 32;
  * DIGESTS_AT_ONCE digests are in flight, and each distinct path is asked for once.
  */
 export async function verifyPayload(
-  _subject: VerifySubject,
-  _fs: FilesystemProbe,
+  subject: VerifySubject,
+  fs: FilesystemProbe,
 ): Promise<VerificationReport> {
-  throw new Error('SEAT: verifyPayload lands with U3.1.1 part 2');
+  const { payload, epoch, latest } = subject;
+  const asOfSeq = payload.seq;
+
+  const graphFiles: GraphRevision[] = [];
+  const fileRevisions = new Map<string, string>();
+  for (const node of payload.nodes) {
+    if (node.type !== 'FILE') continue;
+    const path = node.data?.['path'];
+    const rev = node.data?.['revision_id'];
+    graphFiles.push({
+      file: typeof path === 'string' ? path : node.id,
+      revision_id: typeof rev === 'string' ? rev : '',
+    });
+    if (typeof path === 'string' && typeof rev === 'string') {
+      fileRevisions.set(path, rev);
+    }
+  }
+
+  const staleNodes: GraphFile[] = [];
+  for (const node of payload.nodes) {
+    const file = node.data?.['file'];
+    const nodeRev = node.data?.['revision_id'];
+    if (typeof file !== 'string' || typeof nodeRev !== 'string') continue;
+    const fileRev = fileRevisions.get(file);
+    if (fileRev !== undefined && nodeRev !== fileRev) {
+      staleNodes.push({ file });
+    }
+  }
+
+  const listed = await ask(async () => [...new Set(await fs.listFiles())]);
+  const digested = listed.ok ? await ask(() => digestAll(listed.value, fs)) : listed;
+
+  const checks: readonly CheckResult[] = [
+    listed.ok
+      ? filesystemReconciliation(
+          (digested.ok ? digested.value : listed.value.map((path) => ({ path }))).map(admittedPath),
+          graphFiles,
+          asOfSeq,
+        )
+      : unavailableCheck('filesystem-reconciliation', asOfSeq, listed.detail),
+    // SEAT: identity-invariants and resolution-health are computed from U6c, as in engine.verify.
+    unavailableCheck(
+      'identity-invariants',
+      asOfSeq,
+      'identity-invariants is computed from U6c (no code tier yet)',
+    ),
+    idUniqueness([payload.nodes.map((node) => node.id)], asOfSeq),
+    renderReconciliation({
+      payloadSeq: asOfSeq,
+      payloadNodeCount: payload.nodes.length,
+      latest,
+      url: 'the graph panel (CPG: Open Graph)',
+    }),
+    digested.ok
+      ? revisionReconciliation(digested.value, graphFiles, staleNodes, asOfSeq)
+      : unavailableCheck('revision-reconciliation', asOfSeq, digested.detail),
+    unavailableCheck(
+      'resolution-health',
+      asOfSeq,
+      'resolution-health is computed from U6c (no ResolveReport yet)',
+    ),
+  ];
+
+  return {
+    epoch,
+    seq: asOfSeq,
+    checks,
+    state: worstState(checks.map((check) => check.state)),
+  };
 }

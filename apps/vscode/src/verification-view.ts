@@ -1,8 +1,16 @@
-// SEAT (U3.1.1 part 2, BMO-52): a verify report as data for the editor's two surfaces (08-verification
+// REAL (U3.1.1 part 2, BMO-52): a verify report as data for the editor's two surfaces (08-verification
 // §3.3; C-EXT three_surfaces_for_verification). Part 4 gives it to VS Code's StatusBarItem and
 // DiagnosticCollection('cpg'); the third surface, the banner, is the page's.
 
-import type { CheckState, VerificationReport, VerifyCheckId, WorkspacePath } from '@cpg/model';
+import {
+  isWorkspacePath,
+  parseNodeId,
+  WORKSPACE_ROOT,
+  type CheckState,
+  type VerificationReport,
+  type VerifyCheckId,
+  type WorkspacePath,
+} from '@cpg/model';
 
 /** The status bar's one glyph: the worst state, and how many checks failed. */
 export interface VerificationStatus {
@@ -20,9 +28,17 @@ export interface VerificationDiagnostic {
   readonly message: string;
 }
 
+const GLYPHS: Readonly<Record<CheckState, VerificationStatus['glyph']>> = {
+  pass: 'check',
+  fail: 'error',
+  stale: 'history',
+  unavailable: 'question',
+};
+
 /** The report's state as `check` (pass), `error` (fail), `history` (stale) or `question` (unavailable). */
-export function verificationStatus(_report: VerificationReport): VerificationStatus {
-  throw new Error('SEAT: verificationStatus lands with U3.1.1 part 2');
+export function verificationStatus(report: VerificationReport): VerificationStatus {
+  const failing = report.checks.filter((check) => check.state === 'fail').length;
+  return { state: report.state, glyph: GLYPHS[report.state], failing };
 }
 
 /**
@@ -38,7 +54,31 @@ export function verificationStatus(_report: VerificationReport): VerificationSta
  * path, or is the root, has no entry.
  */
 export function verificationDiagnostics(
-  _report: VerificationReport,
+  report: VerificationReport,
 ): readonly VerificationDiagnostic[] {
-  throw new Error('SEAT: verificationDiagnostics lands with U3.1.1 part 2');
+  const diagnostics: VerificationDiagnostic[] = [];
+  for (const check of report.checks) {
+    const detail = check.detail ?? check.state;
+    if (check.id === 'revision-reconciliation') {
+      for (const entry of check.localisedTo) {
+        if (!isWorkspacePath(entry) || entry === WORKSPACE_ROOT) continue;
+        diagnostics.push({
+          filePath: entry,
+          checkId: check.id,
+          message: `${check.id}: ${detail}`,
+        });
+      }
+    } else if (check.id === 'id-uniqueness' || check.id === 'render-reconciliation') {
+      for (const id of check.localisedTo) {
+        const parsed = parseNodeId(id);
+        if (parsed === undefined || parsed.form === 'directory') continue;
+        diagnostics.push({
+          filePath: parsed.path,
+          checkId: check.id,
+          message: `${check.id}: ${detail} (${id})`,
+        });
+      }
+    }
+  }
+  return diagnostics;
 }

@@ -1,11 +1,14 @@
-// REAL (U3.1.1 part 1, BMO-52): the VS Code panel's GraphHost. Plain node, no vscode import. Ports
+// REAL (U3.1.1 parts 1 and 2, BMO-52): the VS Code panel's GraphHost. Plain node, no vscode import. Ports
 // 21754b4:src/views/graphViewProvider.ts (ready handshake, merge locally and post only the delta,
-// id-only reveal against the host's payload) onto C-EXT's protocol. SEAT (part 2): `reveal`, `verify`
-// and the `onChange` calls. Product code does not call `onDelta` before U4 (controller decision 28).
+// id-only reveal against the host's payload) onto C-EXT's protocol. Product code does not call
+// `onDelta` before U4 (controller decision 28).
 
 import {
   applyGraphDelta,
   CPG_PROTOCOL_VERSION,
+  isWorkspacePath,
+  readNodeLocation,
+  WORKSPACE_ROOT,
   type Epoch,
   type GraphDelta,
   type GraphPayload,
@@ -26,6 +29,7 @@ import type {
   WebviewTransport,
 } from './contract';
 import { serializeError } from './errors';
+import { verifyPayload } from './verify-payload';
 
 export type RenderReportMessage = Extract<WebviewToHost, { type: 'render-report' }>;
 
@@ -109,6 +113,7 @@ export class PanelGraphHost implements GraphHost {
     }
     this.currentPayload = payload;
     this.postGraph();
+    this.options.onChange();
   }
 
   async onDelta(delta: GraphDelta, _meta: DeltaMeta): Promise<void> {
@@ -128,6 +133,7 @@ export class PanelGraphHost implements GraphHost {
         } else {
           this.postGraph();
         }
+        this.options.onChange();
         return;
       case 'already-applied':
         return;
@@ -183,7 +189,7 @@ export class PanelGraphHost implements GraphHost {
 
   /**
    * Opens the source of the node `nodeId` names in the merged payload (I-15) and says what happened
-   * (I-16); never rejects. SEAT.
+   * (I-16); never rejects.
    * - A FILE opens whole, at its `path` property and whatever its `data.location` says.
    * - Any other node opens at its `data.location` (readNodeLocation): the cursor on `nameRange`, or on
    *   `range` when there is none, with `range` framed.
@@ -191,8 +197,43 @@ export class PanelGraphHost implements GraphHost {
    *   is a FILE whose `path` is not a file's workspace path. Neither opens anything.
    * - `open-failed`: the opener threw or rejected.
    */
-  async reveal(_nodeId: string): Promise<RevealOutcome> {
-    throw new Error('SEAT: PanelGraphHost.reveal lands with U3.1.1 part 2');
+  async reveal(nodeId: string): Promise<RevealOutcome> {
+    const node = this.snapshot().nodes.find((entry) => entry.id === nodeId);
+    if (node === undefined) {
+      return { ok: false, reason: 'unknown-node', nodeId };
+    }
+
+    let request: Parameters<SourceOpener['open']>[0];
+    let target: 'nameRange' | 'range' | 'whole-file';
+    if (node.type === 'FILE') {
+      const path = node.data?.['path'];
+      if (typeof path !== 'string' || !isWorkspacePath(path) || path === WORKSPACE_ROOT) {
+        return { ok: false, reason: 'no-location', nodeId };
+      }
+      request = { filePath: path };
+      target = 'whole-file';
+    } else {
+      const location = readNodeLocation(node);
+      if (location.state !== 'present') {
+        return { ok: false, reason: 'no-location', nodeId };
+      }
+      const { filePath, range, nameRange } = location.value;
+      request = { filePath, selection: nameRange ?? range, frame: range };
+      target = nameRange !== undefined ? 'nameRange' : 'range';
+    }
+
+    try {
+      await this.options.opener.open(request);
+      return { ok: true, filePath: request.filePath, target };
+    } catch (thrown) {
+      return {
+        ok: false,
+        reason: 'open-failed',
+        nodeId,
+        filePath: request.filePath,
+        error: serializeError(thrown),
+      };
+    }
   }
 
   /** Posts `theme` alone to a ready page (I-4); every later connection starts with it. */
@@ -205,10 +246,23 @@ export class PanelGraphHost implements GraphHost {
    * The six checks over the payload, epoch and render-report held when it is called (verifyPayload,
    * I-18): what lands while it runs makes the report's seq or epoch lag and is not judged. Every
    * completed run is posted as a `verification` carrying its report's epoch and seq (I-22), to a page
-   * that is ready then (I-2); after dispose it posts nothing. Never rejects. SEAT.
+   * that is ready then (I-2); after dispose it posts nothing. Never rejects.
    */
-  async verify(_fs: FilesystemProbe): Promise<VerificationReport> {
-    throw new Error('SEAT: PanelGraphHost.verify lands with U3.1.1 part 2');
+  async verify(fs: FilesystemProbe): Promise<VerificationReport> {
+    const subject = {
+      payload: this.snapshot(),
+      epoch: this.currentEpoch,
+      latest: this.latestRenderReport ?? null,
+    };
+    const report = await verifyPayload(subject, fs);
+    this.post({
+      type: 'verification',
+      protocol: CPG_PROTOCOL_VERSION,
+      epoch: report.epoch,
+      seq: report.seq,
+      report,
+    });
+    return report;
   }
 
   /**
@@ -292,9 +346,13 @@ export class PanelGraphHost implements GraphHost {
           return;
         }
         this.latestRenderReport = parsed;
+        this.options.onChange();
         return;
       case 'reveal':
-        // SEAT (U3.1.1 part 2): inbound reveal opens source via SourceOpener.
+        // Fire-and-forget; whatever onReveal does stays out of the host (controller decision 37).
+        void this.reveal(parsed.nodeId)
+          .then((outcome) => this.options.onReveal(outcome))
+          .catch(() => undefined);
         return;
     }
   }
