@@ -248,6 +248,19 @@ describe('what now resolves with', () => {
     await expect(scheduler.now()).resolves.toBe(report);
   });
 
+  // Post-implementation: closes sabotage survivor "a request whose owed run has no report never settles".
+  it.each([
+    ['throws', new Error('no probe')],
+    ['is going at dispose', undefined],
+  ])('undefined, not a wait without end, when the run owed %s', async (_what, error) => {
+    const { scheduler, end } = setUp();
+    const asked = [scheduler.now(), scheduler.now(), scheduler.now()].map(watch);
+    await end();
+    if (error === undefined) scheduler.dispose();
+    await end(error);
+    expect(asked.map(({ at }) => at)).toEqual([1, undefined, undefined]);
+  });
+
   it('the finished report, whatever onReport throws', async () => {
     const { scheduler, end, errors } = setUp({
       onReport: () => {
