@@ -11,7 +11,7 @@ import {
   type VerifyCheckId,
 } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
-import { verificationDiagnostics, verificationStatus } from './verification-view';
+import { statusBarView, verificationDiagnostics, verificationStatus } from './verification-view';
 
 const IDS: readonly VerifyCheckId[] = [
   'filesystem-reconciliation',
@@ -157,5 +157,35 @@ describe('verificationDiagnostics: each offender on the file it is in', () => {
 
   it('a report with no offenders has none', () => {
     expect(verificationDiagnostics(report('pass'))).toEqual([]);
+  });
+});
+
+describe('statusBarView: the glyph and the failing count, with every check in the tooltip', () => {
+  it.each([
+    ['pass', '$(check) CPG'],
+    ['stale', '$(history) CPG'],
+    ['unavailable', '$(question) CPG'],
+  ] as const)('%s', (state, text) => {
+    expect(statusBarView(report(state)).text).toBe(text);
+  });
+
+  it('counts the failing checks, and says why each is what it is', () => {
+    const mixed = report('fail', {
+      'filesystem-reconciliation': { state: 'fail', detail: 'sources differ' },
+      'identity-invariants': { state: 'unavailable', detail: 'until U6c' },
+      'revision-reconciliation': { state: 'fail' },
+    });
+    expect(statusBarView(mixed)).toStrictEqual({
+      text: '$(error) CPG 2',
+      tooltip: [
+        'CPG verify at seq 4: fail',
+        'filesystem-reconciliation: fail: sources differ',
+        'identity-invariants: unavailable: until U6c',
+        'id-uniqueness: pass',
+        'render-reconciliation: pass',
+        'revision-reconciliation: fail',
+        'resolution-health: pass',
+      ].join('\n'),
+    });
   });
 });

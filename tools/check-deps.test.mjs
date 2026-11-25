@@ -649,3 +649,54 @@ describe('check-deps: ws is the inspector WebSocket server (owner decision 8a)',
     expect(status).toBe(1);
   });
 });
+
+// U3.1.1 part 4, controller decision 27: in apps/vscode/src, the three adapters and the composition root.
+describe('rule 10: apps/vscode/src imports vscode in four files only', () => {
+  const IMPORT = "import * as vscode from 'vscode';\nexport const v = vscode;\n";
+  const FOUR = [
+    'apps/vscode/src/extension.ts',
+    'apps/vscode/src/adapters/webview-transport.ts',
+    'apps/vscode/src/adapters/source-opener.ts',
+    'apps/vscode/src/adapters/filesystem-probe.ts',
+  ];
+
+  it('accepts the four, type imports included, and leaves other directories to rule 2', () => {
+    const four = Object.fromEntries(
+      FOUR.map((path) => [
+        path,
+        `${IMPORT}import type { Uri } from 'vscode';\nexport type U = Uri;\n`,
+      ]),
+    );
+    const { status, out } = run({
+      ...CLEAN,
+      ...four,
+      'apps/vscode/src/theme.ts': "// import 'vscode' is a word here\nexport const t = 'vscode';\n",
+      'apps/vscode/host-tests/open.ts': IMPORT,
+    });
+    expect(out).toContain('check-deps: ok');
+    expect(status).toBe(0);
+  });
+
+  it.each([
+    ['a value import', 'apps/vscode/src/graph-host.ts', IMPORT],
+    [
+      'a type import',
+      'apps/vscode/src/x.ts',
+      "import type { Uri } from 'vscode';\nexport type U = Uri;\n",
+    ],
+    ['an import type', 'apps/vscode/src/x.ts', "export type U = import('vscode').Uri;\n"],
+    ['a re-export', 'apps/vscode/src/x.ts', "export * from 'vscode';\n"],
+    ['a require', 'apps/vscode/src/x.ts', "export const v = require('vscode');\n"],
+    ['a dynamic import', 'apps/vscode/src/x.ts', "export const v = import('vscode');\n"],
+    ['a subpath', 'apps/vscode/src/x.ts', "import 'vscode/x';\n"],
+    ['a test', 'apps/vscode/src/x.test.ts', IMPORT],
+    ['another adapter', 'apps/vscode/src/adapters/other.ts', IMPORT],
+    ['a same-named file elsewhere', 'apps/vscode/src/views/extension.ts', IMPORT],
+    ['an adapter in a deeper directory', 'apps/vscode/src/x/adapters/source-opener.ts', IMPORT],
+  ])('rejects %s', (_name, path, text) => {
+    const { status, out } = run({ ...CLEAN, [path]: text });
+    expect(out).toContain('[vscode-importer]');
+    expect(out).toContain(`${path}:1`);
+    expect(status).toBe(1);
+  });
+});

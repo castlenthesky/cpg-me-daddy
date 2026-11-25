@@ -82,3 +82,18 @@ export function verificationDiagnostics(
   }
   return diagnostics;
 }
+
+/** The status bar item's text and tooltip. */
+export interface StatusBarView {
+  readonly text: string;
+  readonly tooltip: string;
+}
+
+/**
+ * The report as the status bar shows it. Text: `$(<glyph>) CPG`, then ` <n>` when n > 0 checks fail.
+ * Tooltip: `CPG verify at seq <seq>: <state>`, then a line per check in report order,
+ * `<id>: <state>`, with `: <detail>` when it has one.
+ */
+export function statusBarView(_report: VerificationReport): StatusBarView {
+  throw new Error('SEAT: statusBarView (U3.1.1 part 4)');
+}
