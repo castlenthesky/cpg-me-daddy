@@ -26,7 +26,7 @@ function parentDir(path: string): string {
   return slash === -1 ? WORKSPACE_ROOT : path.slice(0, slash);
 }
 
-function unavailableCheck(id: VerifyCheckId, asOfSeq: number, detail: string): CheckResult {
+function unavailableRow(id: VerifyCheckId, asOfSeq: number, detail: string): CheckResult {
   return {
     id,
     state: 'unavailable',
@@ -194,6 +194,84 @@ function checkRevisionReconciliation(
   };
 }
 
+/**
+ * A file that must be in the graph: the walker's admitted file, or a host's filesystem probe's.
+ * Paths are plain strings on purpose: a malformed path in a payload shows up as an offender rather
+ * than being dropped by a type (controller decision 25).
+ */
+export interface AdmittedPath {
+  readonly path: string;
+  /** The directory that holds `path`; `'.'` for the root. */
+  readonly parent: string;
+}
+
+/** A FILE the graph holds (a store's FileState or a payload's FILE node). */
+export interface GraphFile {
+  readonly file: string;
+}
+
+/** An admitted file with the sha256 of its bytes on disk. */
+export interface AdmittedRevision {
+  readonly path: string;
+  readonly revision_id: string;
+}
+
+/** A FILE the graph holds, with the revision it was derived from. */
+export interface GraphRevision {
+  readonly file: string;
+  readonly revision_id: string;
+}
+
+/**
+ * filesystem-reconciliation (08-verification §3.1, C1): the admitted files equal the graph's FILEs,
+ * per directory, with the offending directories (code-unit order) in `localisedTo`. `observed` is
+ * the number of distinct FILE paths in the graph, `expected` the number admitted. Pure and I/O-free:
+ * the caller walks or lists.
+ */
+export function filesystemReconciliation(
+  _admitted: readonly AdmittedPath[],
+  _graph: readonly GraphFile[],
+  _asOfSeq: number,
+): CheckResult {
+  throw new Error('SEAT: filesystemReconciliation is exported by U3-prep (decision 25)');
+}
+
+/**
+ * id-uniqueness (08-verification §3.1, C3a): node ids are unique within each list. `observed` is the
+ * number of ids, `expected` the number of distinct ones (summed over the lists), `localisedTo` the
+ * repeated ids. The same id in two lists is not a duplicate.
+ */
+export function idUniqueness(
+  _idLists: readonly (readonly string[])[],
+  _asOfSeq: number,
+): CheckResult {
+  throw new Error('SEAT: idUniqueness is exported by U3-prep (decision 25)');
+}
+
+/**
+ * revision-reconciliation (08-verification §3.1, C4): every FILE's revision equals the disk's, and
+ * no node is stale against its FILE. `observed` is the number of mismatches, `expected` 0,
+ * `localisedTo` the offending files. A file in the graph that is not admitted, or admitted but not
+ * in the graph, is filesystem-reconciliation's to report.
+ */
+export function revisionReconciliation(
+  _admitted: readonly AdmittedRevision[],
+  _graph: readonly GraphRevision[],
+  _stale: readonly GraphFile[],
+  _asOfSeq: number,
+): CheckResult {
+  throw new Error('SEAT: revisionReconciliation is exported by U3-prep (decision 25)');
+}
+
+/** A check that could not be computed: `unavailable`, observed 0, expected 0, `detail` says why. */
+export function unavailableCheck(
+  _id: VerifyCheckId,
+  _asOfSeq: number,
+  _detail: string,
+): CheckResult {
+  throw new Error('SEAT: unavailableCheck is exported by U3-prep (decision 25)');
+}
+
 /** The worst of `states`: fail > stale > unavailable > pass; `pass` when empty. */
 export function worstState(states: readonly CheckState[]): CheckState {
   // REAL
@@ -215,6 +293,8 @@ export interface RenderObservation {
 export interface RenderReconciliationInput {
   /** The seq of the payload the renderer was sent: the check's `asOfSeq`. */
   readonly payloadSeq: number;
+  /** `payload.nodes.length` of that payload: `expected` (controller decision 25). */
+  readonly payloadNodeCount: number;
   /** The latest render-report, or null before the page has sent one. */
   readonly latest: RenderObservation | null;
   /** Where the picture is served. The `unavailable` detail names it, so the human knows what to open. */
@@ -325,17 +405,17 @@ export async function verifyStore(
   const rawChecks: readonly CheckResult[] = [
     fsCheck,
     // SEAT: identity-invariants is computed from U6c (no code tier yet).
-    unavailableCheck(
+    unavailableRow(
       'identity-invariants',
       asOfSeq,
       'identity-invariants is computed from U6c (no code tier yet)',
     ),
     idUniquenessCheck,
     // SEAT: every runnable switch set is headless because connect refuses inspect (U2b) and vscode (U3).
-    unavailableCheck('render-reconciliation', asOfSeq, 'no renderer consumer is enabled (ND-8)'),
+    unavailableRow('render-reconciliation', asOfSeq, 'no renderer consumer is enabled (ND-8)'),
     revisionCheck,
     // SEAT: resolution-health is computed from U6c (no ResolveReport yet).
-    unavailableCheck(
+    unavailableRow(
       'resolution-health',
       asOfSeq,
       'resolution-health is computed from U6c (no ResolveReport yet)',

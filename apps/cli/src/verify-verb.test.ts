@@ -366,7 +366,11 @@ describe('cpg verify wiring', () => {
       'a file with vscode: true',
       [],
       'version: 1\nconsumers: { vscode: true }\n',
-      ['consumers.vscode true', 'cpg.config.yaml', 'U3'],
+      [
+        'consumers.vscode true',
+        'cpg.config.yaml',
+        'the VS Code extension turns this on itself; nothing in the CLI does',
+      ],
     ],
     // round two (review b4): a file's store, and two switches each with its own source
     [

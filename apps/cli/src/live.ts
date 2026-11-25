@@ -160,6 +160,7 @@ export async function serveLive(options: LiveOptions): Promise<LiveEnd> {
     if (!ready || procRef === undefined || render === undefined) return;
     const next = renderReconciliation({
       payloadSeq: payload.seq,
+      payloadNodeCount: payload.nodes.length,
       latest: { seq: message.seq, report: message.report },
       url: procRef.url,
     });
@@ -178,7 +179,12 @@ export async function serveLive(options: LiveOptions): Promise<LiveEnd> {
       return { kind: 'interrupted' };
     }
     io.err(`cpg: inspector at ${proc.url} (open it in a browser; Ctrl-C stops it)`);
-    render = renderReconciliation({ payloadSeq: payload.seq, latest: null, url: proc.url });
+    render = renderReconciliation({
+      payloadSeq: payload.seq,
+      payloadNodeCount: payload.nodes.length,
+      latest: null,
+      url: proc.url,
+    });
     proc.send({ type: 'graph', payload });
     proc.send({ type: 'verification', report: liveVerification(checks, render) });
     ready = true;

@@ -514,7 +514,6 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
 
   it.each([
     ['store falkor', { store: 'falkor' }, /consumers\.store falkor.*FalkorStore.*U5/],
-    ['vscode', { vscode: true }, /consumers\.vscode.*VS Code panel.*U3/],
   ] as const)(
     '%s: connect refuses with a labelled SEAT and opens no sink',
     async (_name, consumers, message) => {
@@ -562,15 +561,58 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
     expect(verified.consumers).toEqual(['memory']);
   });
 
-  it('every switch that is not built is named in one refusal', async () => {
+  it('only a switch that is not built is named in the refusal: falkor, never vscode or inspect', async () => {
     const engine = engineWith({ consumers: { store: 'falkor', inspect: true, vscode: true } });
     const refusal = await engine.connect(TARGET, { readOnly: true }).then(
       () => '',
       (e: unknown) => String(e),
     );
-    for (const key of ['consumers.store', 'consumers.vscode']) expect(refusal).toContain(key);
+    expect(refusal).toContain('consumers.store');
     // U2b.1 part 3b: the inspector is built, so it is never named (stop-list 44, the engine copy)
     expect(refusal).not.toContain('consumers.inspect');
+    // Decision 25: the panel lives in the VS Code host, so the engine has nothing to build for it.
+    expect(refusal).not.toContain('consumers.vscode');
+  });
+
+  // Decision 25 (03-architecture §11): the extension passes `consumers { vscode: true }`.
+  it('vscode true: connect opens every sink and index writes memory, as for any other switch', async () => {
+    const root = await tree({ 'a.ts': '' });
+    const log: string[] = [];
+    const memory = recording('memory', undefined, log);
+    const host = recording('host', undefined, log);
+    const engine = engineWith({
+      memory: memory.sink,
+      sinks: [host.sink],
+      consumers: { vscode: true },
+    });
+    const session = await engine.connect(TARGET, { readOnly: false });
+    const report = await engine.index(
+      { config: { root }, session, resumeFrom: null },
+      () => {},
+      new AbortController().signal,
+    );
+    await session.close();
+    expect(report.consumers).toEqual(['memory', 'host']);
+    expect(memory.ops).toHaveLength(1);
+    expect(host.ops).toHaveLength(1);
+    expect(log.length).toBeGreaterThan(0);
+  });
+
+  it('vscode true: verify reads the built-in store through a read session', async () => {
+    const root = await tree({ 'a.ts': '' });
+    const engine = engineWith({ consumers: { vscode: true } });
+    const w = await engine.connect(TARGET, { readOnly: false });
+    await engine.index(
+      { config: { root }, session: w, resumeFrom: null },
+      () => {},
+      new AbortController().signal,
+    );
+    await w.close();
+    const r = await engine.connect(TARGET, { readOnly: true });
+    const report = await engine.verify(r, { root }, null);
+    await r.close();
+    expect(report.consumers).toEqual(['memory']);
+    expect(report.checks.find((c) => c.id === 'filesystem-reconciliation')?.state).toBe('pass');
   });
 
   it('a dry run opens no sink, so it runs under any switches and reports no consumer', async () => {
