@@ -1,6 +1,6 @@
 // REAL (U2b.1 part 2a, BMO-35): ported from 21754b4:packages/graph-visualizer/src/legend.ts (as data rows instead of DOM).
 
-import { NODE_TYPES, REGISTRY_NODE_COLORS, type NodeColors } from './node-types';
+import { NODE_TYPES, nodeTypeColor, REGISTRY_NODE_COLORS, type NodeColors } from './node-types';
 import { relationshipColor, relationshipLabel } from './relationship-types';
 
 export interface LegendRow {
@@ -36,13 +36,13 @@ export function countByType(types: readonly string[]): Map<string, number> {
 }
 
 /**
- * The registered types present, in registry order. SEAT: `_colors` is ignored; each swatch will be
- * its type's colour under it (nodeTypeColor), so the legend and the points cannot drift apart.
+ * The registered types present, in registry order. Each swatch is its type's colour under `colors`
+ * (nodeTypeColor), so the legend and the points cannot drift apart.
  */
 export function nodeLegendRows(
   types: readonly string[],
   hidden: ReadonlySet<string>,
-  _colors: NodeColors = REGISTRY_NODE_COLORS,
+  colors: NodeColors = REGISTRY_NODE_COLORS,
 ): LegendRow[] {
   const counts = countByType(types);
   const rows: LegendRow[] = [];
@@ -50,7 +50,13 @@ export function nodeLegendRows(
     const count = counts.get(nodeType.key);
     if (count === undefined) continue;
     rows.push(
-      makeRow(nodeType.key, nodeType.label, count, nodeType.color, hidden.has(nodeType.key)),
+      makeRow(
+        nodeType.key,
+        nodeType.label,
+        count,
+        nodeTypeColor(colors, nodeType.key),
+        hidden.has(nodeType.key),
+      ),
     );
   }
   return rows;

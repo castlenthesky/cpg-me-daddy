@@ -15,13 +15,17 @@ export interface PageColours {
 }
 
 /**
- * SEAT. The config fields that follow the page's colours, for setConfigPartial when a theme arrives
+ * The config fields that follow the page's colours, for setConfigPartial when a theme arrives
  * (controller decision 32). graphConfig uses them too, so the two cannot drift apart.
  */
 export function colourConfig(
-  _colours: PageColours,
+  colours: PageColours,
 ): Pick<GraphConfig, 'backgroundColor' | 'hoveredPointRingColor' | 'hoveredLinkColor'> {
-  throw new Error('SEAT: colourConfig');
+  return {
+    backgroundColor: colours.background,
+    hoveredPointRingColor: colours.hover,
+    hoveredLinkColor: colours.hover,
+  };
 }
 
 /**
@@ -32,7 +36,7 @@ export function colourConfig(
  */
 export function graphConfig(events: SurfaceEvents, colours: PageColours): GraphConfig {
   return {
-    backgroundColor: colours.background,
+    ...colourConfig(colours),
     spaceSize: SPACE_SIZE,
     randomSeed: 'cpg-me-daddy',
     // We frame the camera ourselves once real data exists (see GraphVisualizer.render's
@@ -63,10 +67,8 @@ export function graphConfig(events: SurfaceEvents, colours: PageColours): GraphC
     // enough to actually see the layout reshape, well short of the 5000 default's ~83s.
     simulationDecay: 600,
     renderHoveredPointRing: true,
-    hoveredPointRingColor: colours.hover,
     hoveredPointCursor: 'pointer',
     hoveredLinkCursor: 'pointer',
-    hoveredLinkColor: colours.hover,
     hoveredLinkWidthIncrease: 2,
     // Spreads the visualizer's eight callbacks, including onPointClick (never the canvas-wide
     // onClick, which also fires on empty canvas clicks with an undefined index).

@@ -44,6 +44,6 @@ Then press F5 in VS Code to launch the Extension Development Host and run **CPG:
 | `bun run test:coverage`     | vitest with coverage thresholds                                                                                  |
 | `bun run test:mutation`     | Stryker mutation testing (slow, not in `check`)                                                                  |
 | `bun run clean`             | SAFE FULL RESET: out, dist, tsbuildinfo, turbo, coverage, reports, stryker                                       |
-| `bun run compile` / `watch` | `tsc -b` / `tsc -b -w`                                                                                           |
+| `bun run compile` / `watch` | `tsc -b`, then the page bundle (F5's build task) / `tsc -b -w`                                                   |
 | `bun run changeset`         | record a semver change for a package                                                                             |
 | `bun run version-packages`  | apply changesets (`changeset version`)                                                                           |

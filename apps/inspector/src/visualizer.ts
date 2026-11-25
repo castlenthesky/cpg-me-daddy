@@ -12,7 +12,7 @@ import {
   layoutPayload,
 } from './layout';
 import { nodeLegendRows, relationshipLegendRows, type LegendRow } from './legend';
-import type { NodeColors } from './node-types';
+import { REGISTRY_NODE_COLORS, type NodeColors } from './node-types';
 import { relationshipKey } from './relationship-types';
 import type { DrawnGraph } from './render-report';
 import { linkTooltipText, nodeTooltipText, TOOLTIP_GAP_PX } from './tooltip';
@@ -110,6 +110,7 @@ export class GraphVisualizer {
   private readonly edges = new EdgeStore();
   private readonly hiddenTypes = new Set<string>();
   private readonly hiddenEdgeTypes = new Set<string>();
+  private nodeColors: NodeColors = REGISTRY_NODE_COLORS;
   private random: () => number;
   private allLinks: LinkBuffers = EMPTY_LINKS;
   // What cosmos.gl was last handed: a link index from a hover means an offset into this, never allLinks.
@@ -165,6 +166,7 @@ export class GraphVisualizer {
       });
       this.random = createMulberry32(this.seed);
       this.points.load(layout, payload);
+      this.points.recolour(this.nodeColors);
       this.edges.replace(payload.edges);
       this.views.tooltip.hide();
       this.pushBuffers(surface);
@@ -210,12 +212,23 @@ export class GraphVisualizer {
   }
 
   /**
-   * SEAT. Draws the points and the node legend's swatches in `colors`, now and on every later render and
+   * Draws the points and the node legend's swatches in `colors`, now and on every later render and
    * delta (controller decision 32). It only recolours: positions, links, hidden types, the camera and
    * the simulation are untouched, and before the first render it hands the surface nothing.
    */
-  setNodeColors(_colors: NodeColors): void {
-    throw new Error('SEAT: GraphVisualizer.setNodeColors');
+  setNodeColors(colors: NodeColors): void {
+    const surface = this.surface;
+    if (!surface) return;
+    this.nodeColors = colors;
+    this.points.recolour(colors);
+    if (this.points.length === 0) return;
+    try {
+      surface.setPointColors(this.points.colors);
+      surface.render();
+      this.refreshNodeLegend(surface);
+    } catch (error) {
+      console.error('@cpg/inspector: failed to recolour graph', error);
+    }
   }
 
   fitView(): void {
@@ -253,7 +266,7 @@ export class GraphVisualizer {
 
   private refreshNodeLegend(surface: GraphSurface): void {
     this.views.legend.showNodeTypes(
-      nodeLegendRows(this.points.liveTypes(), this.hiddenTypes),
+      nodeLegendRows(this.points.liveTypes(), this.hiddenTypes, this.nodeColors),
       (key) => this.toggleNodeType(surface, key),
     );
   }
