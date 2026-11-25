@@ -178,6 +178,12 @@ function setUp(over: SetUp = {}) {
     showWarning: (text) => messages.push(`warning: ${text}`),
     showError: (text) => messages.push(`error: ${text}`),
   });
+  /** The n-th panel made (from 0); a test that talks to one that is not there fails (review a4). */
+  const page = (n = 0): FakeSurface => {
+    const panel = panels[n];
+    if (panel === undefined) throw new Error(`panel ${String(n)} was not made`);
+    return panel;
+  };
   /** Fires the one pending timer and waits for its run's report. */
   const scheduledRun = async () => {
     const pending = timers.filter((timer) => !timer.cancelled);
@@ -207,6 +213,7 @@ function setUp(over: SetUp = {}) {
     timers,
     scheduledRun,
     verified,
+    page,
   };
 }
 
@@ -275,7 +282,8 @@ describe('cpg.openGraph', () => {
       }),
     );
     await session.restorePanel(new FakeSurface());
-    for (let i = 0; i < 20; i += 1) await allMicrotasks(); // oxlint-disable-line no-await-in-loop
+    await until(() => engines.length >= 1);
+    await allMicrotasks();
     expect([done, engines.length]).toEqual([0, 1]);
     open();
     await Promise.all(requests);
@@ -283,6 +291,24 @@ describe('cpg.openGraph', () => {
     expect([engines.length, panels.length]).toEqual([1, 1]);
     await session.openGraph();
     expect(engines).toHaveLength(2);
+  });
+
+  // Round two (review a5): an index cpg.verify began is joined, and the panel still opens and reveals.
+  it('joins an index cpg.verify began, and still shows the panel', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { opened, open } = gate();
+    const { session, engines, panels, page, reports } = setUp({
+      root,
+      engine: (real) => ({ index: (...args) => opened.then(() => real.index(...args)) }),
+    });
+    const requests = [session.verify(), session.openGraph(), session.openGraph()];
+    await until(() => engines.length >= 1 && panels.length >= 1);
+    page().send(READY);
+    open();
+    await Promise.all(requests);
+    await until(() => reports.length === 1);
+    expect([engines.length, panels.length, page().revealed]).toEqual([1, 1, 1]);
+    expect(names(page().graphs[0])).toEqual(['.', 'a.ts']);
   });
 
   it('closing the panel keeps the graph: verify judges it, and a new panel is sent it', async () => {
@@ -388,14 +414,15 @@ describe('cpg.verify', () => {
   it('is not asked for before there is a graph, whatever the page reports', async () => {
     const root = await directory({ 'a.ts': 'a' });
     const { opened, open } = gate();
-    const { session, panels, timers } = setUp({
+    const { session, panels, timers, page } = setUp({
       root,
       engine: (real) => ({ index: (...args) => opened.then(() => real.index(...args)) }),
     });
     const opening = session.openGraph();
-    panels[0]?.send(READY);
+    await until(() => panels.length === 1);
+    page().send(READY);
     const report = { payloadNodeCount: 0, renderedNodeCount: 0, renderedEdgeCount: 0 };
-    panels[0]?.send({
+    page().send({
       type: 'render-report',
       epoch: 0,
       seq: -1,
@@ -461,40 +488,65 @@ describe('what goes wrong is said once and leaves the extension usable', () => {
     expect(panels[0]?.graphs).toHaveLength(2);
   });
 
-  it('a refused store', async () => {
-    const root = await directory({
-      'a.ts': '',
-      [CONFIG]: 'version: 1\nconsumers: { store: falkor }\n',
-    });
-    const { session, messages, reports, closes } = setUp({ root });
+  // Round two (review a6): with a graph held, so a run that clears it, or the scope it is judged by, shows.
+  const NARROW = 'include: ["nothing.ts"]\n';
+
+  it('a refused store: said, and the held graph is still judged as it was indexed', async () => {
+    const root = await directory({ 'a.ts': 'a', 'b.py': 'b' });
+    const { session, messages, reports, closes, page, verified } = setUp({ root });
     await session.openGraph();
-    await session.verify();
-    const refused =
-      'error: CPG: cannot open the graph store: SEAT: not built yet: consumers.store falkor (FalkorStore, U5)';
-    expect(messages).toEqual([refused, refused]);
-    expect([reports.length, closes.length]).toEqual([0, 0]);
+    page().send(READY);
+    await writeFile(join(root, CONFIG), `version: 1\n${NARROW}consumers: { store: falkor }\n`);
+    await session.openGraph();
+    expect(messages.slice(1)).toEqual([
+      'error: CPG: cannot open the graph store: SEAT: not built yet: consumers.store falkor (FalkorStore, U5)',
+    ]);
+    expect([closes, page().graphs.length]).toEqual([[1], 1]);
+    await rm(join(root, CONFIG));
+    expect(await verified()).toBe('pass unavailable pass unavailable pass unavailable');
+    expect(reports).toHaveLength(1);
   });
 
   it.each([
     ['index', { index: () => Promise.reject(new Error('disk on fire')) }],
     ['inspect', { inspect: () => Promise.reject(new Error('disk on fire')) }],
   ] as const)(
-    'a failed %s: said, its session closed, and the next one works',
+    'a failed %s: said, closed, and the held graph is still judged',
     async (_what, fails) => {
-      const root = await directory({ 'a.ts': 'a' });
-      const { session, messages, closes, panels, reports } = setUp({
+      const root = await directory({ 'a.ts': 'a', 'b.py': 'b' });
+      const { session, messages, closes, page, verified } = setUp({
         root,
-        engine: (_real, n) => (n === 1 ? fails : {}),
+        engine: (_real, n) => (n === 2 ? fails : {}),
       });
-      await session.verify();
-      expect(messages).toEqual(['error: CPG: the index failed: disk on fire']);
-      expect([closes, reports]).toEqual([[1], []]);
       await session.openGraph();
-      panels[0]?.send(READY);
-      expect(names(panels[0]?.graphs[0])).toEqual(['.', 'a.ts']);
-      expect(closes).toEqual([1, 2]);
+      page().send(READY);
+      await writeFile(join(root, CONFIG), `version: 1\n${NARROW}`);
+      await session.openGraph();
+      expect(messages.slice(1)).toEqual(['error: CPG: the index failed: disk on fire']);
+      expect([closes, page().graphs.length]).toEqual([[1, 2], 1]);
+      await rm(join(root, CONFIG));
+      expect(await verified()).toBe('pass unavailable pass unavailable pass unavailable');
+      await session.openGraph();
+      expect(page().graphs).toHaveLength(2);
+      expect(closes).toEqual([1, 2, 3]);
     },
   );
+
+  it('a first index that fails: cpg.verify says so and judges nothing', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session, messages, reports, engines } = setUp({
+      root,
+      engine: () => ({ index: () => Promise.reject(new Error('disk on fire')) }),
+    });
+    await session.verify();
+    await session.verify();
+    await allMicrotasks();
+    expect(messages).toEqual([
+      'error: CPG: the index failed: disk on fire',
+      'error: CPG: the index failed: disk on fire',
+    ]);
+    expect([reports.length, engines.length]).toEqual([0, 2]);
+  });
 
   it("shows the warnings: the configuration's, then the index's, zero files included", async () => {
     const root = await directory({
@@ -506,6 +558,21 @@ describe('what goes wrong is said once and leaves the extension usable', () => {
     expect(messages).toEqual([
       `warning: CPG: ${join(root, CONFIG)}: 'languages' is parsed but not applied (ResolvedConfig has no languages key); ${U6A}; no files indexed under ${root}`,
     ]);
+  });
+});
+
+describe('with nothing to warn about', () => {
+  // Round two (review a7): the real index always warns, so this one drops its warnings.
+  it('says nothing', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session, messages } = setUp({
+      root,
+      engine: (real) => ({
+        index: async (...args) => ({ ...(await real.index(...args)), warnings: [] }),
+      }),
+    });
+    await session.openGraph();
+    expect(messages).toEqual([]);
   });
 });
 

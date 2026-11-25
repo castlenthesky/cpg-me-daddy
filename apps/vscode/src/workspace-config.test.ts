@@ -10,9 +10,9 @@ import { loadWorkspaceConfig } from './workspace-config';
 
 let base = '';
 /** A temporary directory tree; `.git` ends any search here, whatever is above the temp directory. */
-async function tree(spec: Readonly<Record<string, string>>): Promise<string> {
+async function tree(spec: Readonly<Record<string, string>>, git = true): Promise<string> {
   base = await realpath(await mkdtemp(join(tmpdir(), 'cpg-config-')));
-  await mkdir(join(base, '.git'));
+  if (git) await mkdir(join(base, '.git'));
   for (const [at, text] of Object.entries(spec)) {
     const file = join(base, at);
     // oxlint-disable-next-line no-await-in-loop -- a few small files
@@ -124,6 +124,13 @@ describe('which file', () => {
     expect((await loadWorkspaceConfig(join(root, 'tree'))).config.include).toEqual(
       DEFAULT_INCLUDES,
     );
+  });
+
+  // Round two (review b2): the search ends at the file system's root when no directory holds .git.
+  it('ends at the root of the file system', async () => {
+    const root = await tree({ 'a/b/.keep': '' }, false);
+    const { config } = await loadWorkspaceConfig(join(root, 'a', 'b'));
+    expect(config.include).toEqual(DEFAULT_INCLUDES);
   });
 
   it('a directory of that name is not one', async () => {

@@ -121,6 +121,9 @@ describe('listFiles and digest equal the walker on the same tree', () => {
     ['two includes', { include: ['/lib/*.ts', '**/*.py'] }],
     ["the file's own excludes, in place of the default ones", { exclude: ['/src/b/**', 'lib'] }],
     ['nothing excluded', { exclude: [] }],
+    // Round two (review a8): a trailing `/` is for directories only, and `x/**` is not the file x.
+    ['directory-only excludes', { exclude: ['README.md/', 'src/b/'] }],
+    ['an include below a file', { include: ['lib.ts/**', '/src/**'] }],
     ['a size cap', { maxFileSizeBytes: 6 }],
     ['a size cap at the largest file', { maxFileSizeBytes: 21 }],
     ['an include that matches nothing', { include: ['/nowhere/*'] }],

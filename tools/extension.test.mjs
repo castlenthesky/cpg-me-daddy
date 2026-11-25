@@ -4,7 +4,15 @@
 // 27, 31, 32, 35, 37 and 38, and the manifest.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -12,7 +20,8 @@ import { dirname, join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+// Real paths (review d1): require.resolve and the module cache answer with them.
+const REPO = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const manifest = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
 const MAIN = join(REPO, manifest.main);
 const PAGE_DIRECTORY = join(REPO, 'apps', 'inspector', 'dist', 'page');
@@ -42,7 +51,7 @@ function Range(a, b, c, d) {
   const [start, end] = a instanceof Position ? [a, b] : [new Position(a, b), new Position(c, d)];
   Object.assign(this, { start, end });
 }
-function Diagnostic(range, message, severity) {
+function Diagnostic(range, message, severity = 0) {
   Object.assign(this, { range, message, severity });
 }
 const disposable = (dispose = () => {}) => ({ dispose });
@@ -63,6 +72,8 @@ function standIn(root) {
     framed: [],
     themeListeners: [],
     openFails: false,
+    fsCalls: [],
+    disposed: [],
   };
   const panel = (viewType, options) => {
     const made = {
@@ -137,14 +148,22 @@ function standIn(root) {
             }
             for (const [path, list] of merged) seen.diagnostics.set(path, list);
           },
-          dispose: () => seen.diagnostics.clear(),
+          dispose: () => {
+            seen.disposed.push('diagnostics');
+            seen.diagnostics.clear();
+          },
         };
       },
     },
     window: {
       activeColorTheme: { kind: 1 },
       createStatusBarItem: (...args) => {
-        const item = { args, shown: false, show: () => (item.shown = true), dispose: () => {} };
+        const item = {
+          args,
+          shown: false,
+          show: () => (item.shown = true),
+          dispose: () => seen.disposed.push('status bar'),
+        };
         seen.statusBars.push(item);
         return item;
       },
@@ -176,6 +195,7 @@ function standIn(root) {
         root === undefined ? undefined : [{ uri: new Uri(root), name: 'w', index: 0 }],
       fs: {
         readDirectory: async (uri) => {
+          seen.fsCalls.push(`readDirectory ${uri.path}`);
           const entries = await readdir(uri.path, { withFileTypes: true });
           return Promise.all(
             entries.map(async (entry) => {
@@ -187,8 +207,14 @@ function standIn(root) {
             }),
           );
         },
-        stat: async (uri) => ({ type: FileType.File, size: (await lstat(uri.path)).size }),
-        readFile: async (uri) => new Uint8Array(await readFile(uri.path)),
+        stat: async (uri) => {
+          seen.fsCalls.push(`stat ${uri.path}`);
+          return { type: FileType.File, size: (await lstat(uri.path)).size };
+        },
+        readFile: async (uri) => {
+          seen.fsCalls.push(`readFile ${uri.path}`);
+          return new Uint8Array(await readFile(uri.path));
+        },
       },
     },
   };
@@ -200,7 +226,7 @@ let hooks;
 let root = '';
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-  temp = mkdtempSync(join(tmpdir(), 'extension-'));
+  temp = realpathSync(mkdtempSync(join(tmpdir(), 'extension-')));
   root = join(temp, 'workspace');
   mkdirSync(join(root, '.git'), { recursive: true });
   writeFileSync(join(root, 'a.ts'), 'export const a = 1;\n');
@@ -261,7 +287,7 @@ async function until(done) {
   }
 }
 const ofType = (panel, type) => panel.posted.filter((message) => message.type === type);
-function draw(panel) {
+function draw(panel, over = {}) {
   const { epoch, seq, payload } = ofType(panel, 'graph').at(-1);
   const count = payload.nodes.length;
   const report = {
@@ -271,6 +297,7 @@ function draw(panel) {
     duplicateEdges: 0,
     droppedNodeIds: [],
     frameMs: 1,
+    ...over,
   };
   panel.send({ type: 'render-report', epoch, seq, report });
 }
@@ -371,29 +398,42 @@ describe('verify in the editor', () => {
     ]);
     await until(() => ofType(panel, 'verification').length === 1);
     writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
+    draw(panel, { renderedNodeCount: 4, droppedNodeIds: ['file:a.ts'] });
     await run('cpg.verify');
     await until(() => status.text.startsWith('$(error)'));
-    expect(status.text).toBe('$(error) CPG 1');
+    expect(status.text).toBe('$(error) CPG 2');
     expect(seen.collections).toEqual(['cpg']);
     expect([...seen.diagnostics.keys()]).toEqual([join(root, 'a.ts')]);
-    const [diagnostic] = seen.diagnostics.get(join(root, 'a.ts'));
-    expect(diagnostic).toMatchObject({
-      severity: 0,
-      source: 'cpg',
-      code: 'revision-reconciliation',
-      range: { start: { line: 0, character: 0 } },
-    });
-    expect(diagnostic.message).toMatch(/^revision-reconciliation: /);
+    // Round two (review a3): two checks name one file, and both entries stay.
+    const entries = seen.diagnostics.get(join(root, 'a.ts'));
+    expect(entries.map(({ code }) => code)).toEqual([
+      'render-reconciliation',
+      'revision-reconciliation',
+    ]);
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ severity: 0, source: 'cpg', range: { start: at(0, 0) } });
+      expect(entry.message.startsWith(`${entry.code}: `)).toBe(true);
+    }
+    // Round two (review b1): closing the panel leaves the verdict where it is.
+    panel.dispose();
+    expect([status.text, seen.diagnostics.size]).toEqual(['$(error) CPG 2', 1]);
     // A re-index and its run clear what it fixed.
     await run('cpg.openGraph');
-    draw(panel);
+    const [, again] = seen.panels;
+    again.send(READY);
+    draw(again);
     vi.advanceTimersByTime(500);
     await until(() => !status.text.startsWith('$(error)'));
     expect([status.text, seen.diagnostics.size]).toEqual(['$(question) CPG', 0]);
   });
 
   it('walks what the walker walks: the same files, through vscode.workspace.fs', async () => {
-    writeFileSync(join(root, 'cpg.config.yaml'), 'version: 1\nexclude: [sub]\n');
+    // Round two (review a1): a file over the cap is only left out by the editor's own stat.
+    writeFileSync(
+      join(root, 'cpg.config.yaml'),
+      'version: 1\nexclude: [sub, .git]\nmax_file_size_bytes: 60\n',
+    );
+    writeFileSync(join(root, 'big.py'), '#'.repeat(61));
     const { seen, run, panel } = await opened();
     await run('cpg.verify');
     await until(() => seen.statusBars[0].shown);
@@ -416,6 +456,12 @@ describe('verify in the editor', () => {
     expect(files.find(({ id }) => id === 'file:b.py').data.revision_id).toBe(
       createHash('sha256').update('b = 1\n').digest('hex'),
     );
+    expect(seen.fsCalls.filter((call) => call.endsWith('.py') || call.endsWith('/sub'))).toEqual([
+      `stat ${join(root, 'b.py')}`,
+      `stat ${join(root, 'big.py')}`,
+      `readFile ${join(root, 'b.py')}`,
+    ]);
+    expect(seen.fsCalls).toContain(`readDirectory ${root}`);
   });
 });
 
@@ -445,6 +491,18 @@ describe('click to source', () => {
     seen.openFails = true;
     panel.send({ type: 'reveal', nodeId: 'file:a.ts' });
     await until(() => seen.warnings.some((text) => text.includes('cannot open a.ts')));
+  });
+});
+
+describe('a panel surface', () => {
+  // Round two (review a2): the page's own URIs and CSP source come from the webview, built bundle or not.
+  it("gives the page the webview's own URIs and CSP source", () => {
+    const { seen } = activate();
+    const { createGraphPanel } = createRequire(MAIN)('./adapters/webview-transport.js');
+    const surface = createGraphPanel(PAGE_DIRECTORY);
+    expect(seen.panels[0].webview.html).toBe('');
+    expect(surface.asUri('/x/graph.js')).toBe('file:///webview/x/graph.js');
+    expect(surface.transport.cspSource).toBe('https://csp.example');
   });
 });
 
@@ -479,11 +537,17 @@ describe('the theme', () => {
 
 describe('deactivation', () => {
   it('unregisters everything and leaves the panel for VS Code to restore', async () => {
-    const { seen, panel, deactivate } = await opened();
-    vi.advanceTimersByTime(500);
-    await until(() => seen.statusBars[0].shown);
+    const { seen, run, panel, deactivate } = await opened();
+    writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
+    await run('cpg.verify');
+    await until(() => seen.diagnostics.size === 1);
+    // Round two (review a9): a run is pending, and the editor's own items are released.
+    draw(panel);
+    expect(vi.getTimerCount()).toBe(1);
     const before = panel.posted.length;
     deactivate();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(new Set(seen.disposed)).toEqual(new Set(['diagnostics', 'status bar']));
     expect([seen.commands.size, seen.serializers.size, seen.themeListeners.length]).toEqual([
       0, 0, 0,
     ]);
