@@ -30,6 +30,7 @@ const CONFIG = 'cpg.config.yaml';
 const U6A = 'the code tier is not built yet (U6a): only the filesystem tier was indexed';
 const THEME: ThemeSnapshot = { kind: 'dark', nodeColors: {}, defaultNodeColor: '#999999' };
 const ALL_PASS = 'pass unavailable pass pass pass unavailable';
+const NOT_DRAWN = 'pass unavailable pass unavailable pass unavailable';
 const READY = { type: 'ready', protocol: 1 };
 const allMicrotasks = () =>
   new Promise<void>((resolve) => {
@@ -461,6 +462,54 @@ describe('cpg.verify', () => {
     broken = false;
     await verified();
     expect([messages.length, reports.length]).toEqual([2, 2]);
+  });
+});
+
+// Controller decision 40 (U3.1.2): what a host test reads.
+describe('what cpg.verify resolves with', () => {
+  it('the report the editor is shown, of the run it caused', async () => {
+    const root = await directory({ 'a.ts': 'a', 'b.py': 'b' });
+    const { session, panels, reports } = setUp({ root });
+    await session.openGraph();
+    panels[0]?.send(READY);
+    panels[0]?.draw();
+    const fine = await session.verify();
+    expect(states(fine)).toBe(ALL_PASS);
+    await writeFile(join(root, 'a.ts'), 'A');
+    const stale = await session.verify();
+    expect(states(stale)).toBe('pass unavailable pass pass fail unavailable');
+    expect([stale?.epoch, stale?.seq]).toEqual([1, -1]);
+    expect([reports.length, reports[0], reports[1]]).toEqual([2, fine, stale]);
+  });
+
+  it("with no graph: the first graph's", async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session, engines } = setUp({ root });
+    const asked = await Promise.all([session.verify(), session.verify()]);
+    expect(asked.map(states)).toEqual([NOT_DRAWN, NOT_DRAWN]);
+    expect(engines).toHaveLength(1);
+  });
+
+  it('undefined when there is nothing to judge, until there is', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session } = setUp({
+      root,
+      engine: (real, n) =>
+        n === 1 ? { index: () => Promise.reject(new Error('disk on fire')) } : real,
+    });
+    expect(await session.verify()).toBeUndefined();
+    expect(states(await session.verify())).toBe(NOT_DRAWN);
+    expect(await setUp({ root: undefined }).session.verify()).toBeUndefined();
+  });
+
+  it('undefined once deactivated, and the run going then', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { session, reports } = setUp({ root });
+    expect(states(await session.verify())).toBe(NOT_DRAWN);
+    const going = session.verify();
+    session.dispose();
+    expect([await going, await session.verify()]).toEqual([undefined, undefined]);
+    expect(reports).toHaveLength(1);
   });
 });
 

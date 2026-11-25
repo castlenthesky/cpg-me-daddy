@@ -47,10 +47,17 @@ export class VerifyScheduler {
     this.cancelTimer = this.options.after(VERIFY_DEBOUNCE_MS, () => this.request('changed'));
   }
 
-  now(): void {
-    if (this.disposed) return;
+  /**
+   * Asks for a run at once. Resolves, when that run ends, with its report: the run started here or, during
+   * a run, the one run this leads to, which every request made in the meantime shares (controller decision
+   * 40). undefined when there is no report: the run threw, or dispose came first. Never rejects.
+   */
+  now(): Promise<VerificationReport | undefined> {
+    // SEAT (U3.1.2): the report. Until then nothing is ever resolved with one.
+    if (this.disposed) return Promise.resolve(undefined);
     this.cancelTimer();
     this.request('now');
+    return Promise.resolve(undefined);
   }
 
   dispose(): void {

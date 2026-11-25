@@ -7,11 +7,14 @@
       "project": ["tools/**/*.mjs"],
       // The root package.json is the extension manifest, and vsce ships only its dependencies:
       // apps/vscode/dist/extension.js loads these at runtime, so the root must list them.
-      "ignoreDependencies": ["@cpg/engine", "@cpg/inspector", "@cpg/model"]
+      // @vscode/test-cli imports @vscode/test-electron by name, only when it runs.
+      "ignoreDependencies": ["@cpg/engine", "@cpg/inspector", "@cpg/model", "@vscode/test-electron"]
     },
     // Entry src/extension.ts is detected from package.json "main" (dist -> src).
     "apps/vscode": {
-      "project": ["src/**/*.ts"],
+      // Run by @vscode/test-cli (tools/vscode-host.config.mjs, tools/vscode-spikes.config.mjs).
+      "entry": ["host-tests/*.test.ts", "host-tests/spikes/*.spike.ts"],
+      "project": ["src/**/*.ts", "host-tests/**/*.ts"],
       // The extension host provides `vscode` at runtime. Its types are @types/vscode in the root
       // manifest, next to engines.vscode.
       "ignoreDependencies": ["vscode"]

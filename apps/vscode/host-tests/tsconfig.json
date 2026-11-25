@@ -1,0 +1,14 @@
+{
+  // The tests @vscode/test-cli runs inside VS Code (U3.1.2, BMO-56), and the spikes. Built by `tsc -b`, so
+  // `bun run check` type-checks them; run only by `bun run test:vscode-host` and `spike:vscode-host`.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    // Under apps/vscode/dist, so clean, git, turbo and check-deps already treat it as built output.
+    "outDir": "../dist/host-tests",
+    "tsBuildInfoFile": "../dist/host-tests/.tsbuildinfo",
+    "rootDir": ".",
+    "types": ["mocha", "node", "vscode"]
+  },
+  "include": ["**/*.ts"],
+  "references": [{ "path": ".." }, { "path": "../../../packages/model" }]
+}
