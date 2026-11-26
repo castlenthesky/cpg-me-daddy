@@ -1,8 +1,11 @@
 // The engine's node:fs WatchProbe (U4.2.1, controller decision 61): the one window @cpg/watch's
 // session has onto the disk (C-WATCH INV-3 keeps node:fs out of packages/watch).
 
-import type { WorkspacePath } from '@cpg/model';
-import type { WatchProbe } from '@cpg/watch';
+import { createHash } from 'node:crypto';
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { isWorkspacePath, WORKSPACE_ROOT, type WorkspacePath } from '@cpg/model';
+import type { ListedEntry, WatchProbe } from '@cpg/watch';
 
 export interface WatchProbeOptions {
   /**
@@ -35,7 +38,76 @@ export interface NodeWatchProbe extends WatchProbe {
  * - `digest(path)`: the lowercase hex sha256 of the file's bytes (INV-26); `undefined` when it cannot
  *   be read (gone, a directory, no permission), as the walker drops an unreadable file.
  */
-export function createWatchProbe(_root: string, _options: WatchProbeOptions = {}): NodeWatchProbe {
-  // SEAT: U4.2.1 part a
-  throw new Error('SEAT: createWatchProbe lands with U4.2.1 part a');
+export function createWatchProbe(root: string, options: WatchProbeOptions = {}): NodeWatchProbe {
+  // REAL
+  const symlinks = new Set<WorkspacePath>();
+  const { enters } = options;
+
+  async function stat(
+    path: WorkspacePath,
+  ): Promise<{ readonly entry: 'file' | 'directory'; readonly sizeBytes: number } | undefined> {
+    let st;
+    try {
+      st = await lstat(join(root, path));
+    } catch {
+      symlinks.delete(path);
+      return undefined;
+    }
+    if (st.isSymbolicLink()) {
+      symlinks.add(path);
+      return { entry: 'file', sizeBytes: st.size };
+    }
+    symlinks.delete(path);
+    if (st.isDirectory()) return { entry: 'directory', sizeBytes: st.size };
+    if (st.isFile()) return { entry: 'file', sizeBytes: st.size };
+    return undefined;
+  }
+
+  async function list(dir: WorkspacePath): Promise<readonly ListedEntry[]> {
+    const dirStat = await stat(dir);
+    if (dirStat?.entry !== 'directory') return [];
+    const out: ListedEntry[] = [];
+
+    async function walk(current: WorkspacePath): Promise<void> {
+      let names: string[];
+      try {
+        names = await readdir(join(root, current));
+      } catch {
+        return;
+      }
+      /* oxlint-disable no-await-in-loop */
+      for (const name of names) {
+        const child = current === WORKSPACE_ROOT ? name : `${current}/${name}`;
+        if (!isWorkspacePath(child)) continue;
+        const info = await stat(child);
+        if (info === undefined) continue;
+        out.push({ path: child, entry: info.entry, sizeBytes: info.sizeBytes });
+        if (info.entry === 'directory' && (enters === undefined || enters(child))) {
+          await walk(child);
+        }
+      }
+      /* oxlint-enable no-await-in-loop */
+    }
+
+    await walk(dir);
+    return out;
+  }
+
+  async function digest(path: WorkspacePath): Promise<string | undefined> {
+    try {
+      const bytes = await readFile(join(root, path));
+      return createHash('sha256').update(bytes).digest('hex');
+    } catch {
+      return undefined;
+    }
+  }
+
+  return {
+    stat,
+    list,
+    digest,
+    isSymlink(path: WorkspacePath): boolean {
+      return symlinks.has(path);
+    },
+  };
 }

@@ -4,6 +4,8 @@
 // directory, because a live event can name a path the walk never reaches.
 
 import type { WorkspacePath } from '@cpg/model';
+import { DEFAULT_EXCLUDES, DEFAULT_INCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from './defaults';
+import { compileMatcher } from './glob';
 
 export interface AdmissionOptions {
   /** Default DEFAULT_INCLUDES. Applies to files only: a directory is never refused by `include`. */
@@ -37,7 +39,29 @@ export interface Admission {
   admits(path: WorkspacePath, entry: AdmissionEntry, sizeBytes?: number): boolean;
 }
 
-export function createAdmission(_options: AdmissionOptions): Admission {
-  // SEAT: U4.2.1 part a
-  throw new Error('SEAT: createAdmission lands with U4.2.1 part a');
+export function createAdmission(options: AdmissionOptions): Admission {
+  // REAL
+  const include = compileMatcher(options.include ?? DEFAULT_INCLUDES);
+  const exclude = compileMatcher(options.exclude ?? DEFAULT_EXCLUDES);
+  const maxFileSizeBytes = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES;
+
+  function check(path: WorkspacePath, entry: AdmissionEntry, sizeBytes?: number): AdmissionVerdict {
+    if (entry === 'symlink') return 'symlink';
+    if (entry === 'directory') return exclude.test(path, true) ? 'excluded' : 'admitted';
+    if (exclude.test(path, false) || !include.test(path, false)) return 'excluded';
+    if (sizeBytes !== undefined && sizeBytes > maxFileSizeBytes) return 'too-large';
+    return 'admitted';
+  }
+
+  function admits(path: WorkspacePath, entry: AdmissionEntry, sizeBytes?: number): boolean {
+    if (check(path, entry, sizeBytes) !== 'admitted') return false;
+    let slash = path.indexOf('/');
+    while (slash !== -1) {
+      if (exclude.test(path.slice(0, slash), true)) return false;
+      slash = path.indexOf('/', slash + 1);
+    }
+    return true;
+  }
+
+  return { check, admits };
 }
