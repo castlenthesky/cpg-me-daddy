@@ -7,7 +7,12 @@
 // the archive's `directory`/`file` were renamed to `DIRECTORY`/`FILE`, and its
 // `LOCAL` row was dropped because `LOCAL` is not a schema label.
 
+import type { ThemeSnapshot } from '@cpg/model';
+
 export type Rgba = readonly [number, number, number, number];
+
+/** The node colours a C-EXT theme carries (controller decision 32). */
+export type NodeColors = Pick<ThemeSnapshot, 'nodeColors' | 'defaultNodeColor'>;
 
 export interface NodeTypeDescriptor {
   readonly key: string;
@@ -39,10 +44,17 @@ export function hexToRgba(hex: string): Rgba {
   return [r, g, b, 1];
 }
 
+const DEFAULT_NODE_COLOR_HEX = '#999999';
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+function isHexColor(value: string | undefined): value is string {
+  return value !== undefined && HEX_COLOR.test(value);
+}
+
 // Points whose type isn't in NODE_TYPES (including the synthetic multi-root
 // anchor `placeNode` introduces — see layout.ts) fall back to this neutral grey
 // rather than being dropped.
-export const DEFAULT_NODE_COLOR: Rgba = [0.6, 0.6, 0.6, 1];
+export const DEFAULT_NODE_COLOR: Rgba = hexToRgba(DEFAULT_NODE_COLOR_HEX);
 
 export const NODE_TYPE_COLORS: ReadonlyMap<string, Rgba> = new Map(
   NODE_TYPES.map((nodeType) => [nodeType.key, hexToRgba(nodeType.color)]),
@@ -53,3 +65,27 @@ export const NODE_TYPE_COLORS: ReadonlyMap<string, Rgba> = new Map(
 // isn't in NODE_TYPE_COLORS, e.g. the synthetic multi-root anchor) so the two
 // can't drift apart — same rationale as NODE_TYPE_COLORS above.
 export const DEFAULT_LINK_COLOR_HEX: string = '#4b4b4b';
+
+/**
+ * The registry's own colours in a theme's form: every NODE_TYPES row, and DEFAULT_NODE_COLOR as
+ * `#rrggbb`. The VS Code host sends these, so the panel and the browser draw the same picture
+ * (controller decision 32).
+ */
+export const REGISTRY_NODE_COLORS: NodeColors = {
+  nodeColors: Object.fromEntries(NODE_TYPES.map((nodeType) => [nodeType.key, nodeType.color])),
+  defaultNodeColor: DEFAULT_NODE_COLOR_HEX,
+};
+
+/**
+ * The `#rrggbb` a node of `type` is drawn in under `colors`: its own entry in `nodeColors`, else
+ * `defaultNodeColor`, else the registry's default. A value that is not `#rrggbb` (either case) counts
+ * as absent, so a theme can recolour the picture and never break it.
+ */
+export function nodeTypeColor(colors: NodeColors, type: string): string {
+  if (Object.hasOwn(colors.nodeColors, type)) {
+    const own = colors.nodeColors[type];
+    if (isHexColor(own)) return own;
+  }
+  if (isHexColor(colors.defaultNodeColor)) return colors.defaultNodeColor;
+  return DEFAULT_NODE_COLOR_HEX;
+}

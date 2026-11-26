@@ -17,6 +17,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { layoutPayload } from './layout';
 import type { LegendRow } from './legend';
+import { hexToRgba, REGISTRY_NODE_COLORS } from './node-types';
 import {
   GraphVisualizer,
   type GraphSurface,
@@ -806,5 +807,83 @@ describe('GraphVisualizer camera', () => {
     expect(surface.fits).toEqual([undefined]);
     viz.dispose();
     expect(surface.destroyed).toBe(true);
+  });
+});
+
+// U3.1.1 part 3 (controller decision 32): a theme's node colours reach the points and the legend.
+const colours = (...hex: string[]): number[] =>
+  Array.from(Float32Array.from(hex.flatMap((value) => [...hexToRgba(value)])));
+const swatches = (legend: FakeLegend): string[] => legend.nodeRows.map((row) => row.color);
+
+describe('GraphVisualizer.setNodeColors', () => {
+  const THEME = {
+    nodeColors: { FILE: '#336699', DIRECTORY: '#000000' },
+    defaultNodeColor: '#ff0000',
+  };
+
+  it('hands the surface nothing before the first render, which then draws in them', () => {
+    const { viz, surface, legend } = mount();
+    viz.setNodeColors(THEME);
+    expect(surface.log).toEqual([]);
+    expect(legend.nodeRows).toEqual([]);
+    viz.render(P1);
+    expect(surface.colors).toEqual(colours('#000000', '#336699', '#336699'));
+    expect(swatches(legend)).toEqual(['#000000', '#336699']);
+  });
+
+  it('recolours what is drawn at once, and only that: no move, no links, no simulation, no camera', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    surface.live[2] = 500;
+    const before = { positions: surface.positions, starts: surface.starts.length };
+    surface.log.length = 0;
+    viz.setNodeColors(THEME);
+    expect(surface.log).toEqual(['setPointColors', 'render']);
+    expect(surface.colors).toEqual(colours('#000000', '#336699', '#336699'));
+    expect(swatches(legend)).toEqual(['#000000', '#336699']);
+    expect(surface.live[2]).toBe(500);
+    expect(surface.positions).toBe(before.positions);
+    expect(surface.starts).toHaveLength(before.starts);
+  });
+
+  it('keeps them for later deltas and renders, until the next ones', () => {
+    const { viz, surface } = mount();
+    viz.setNodeColors(THEME);
+    viz.render(P1);
+    viz.applyDelta(delta({ addedNodes: [node('m', 'MODULE')], addedEdges: [entry('d', 'm')] }));
+    expect(surface.colors.slice(12)).toEqual(colours('#ff0000'));
+    viz.render(P3);
+    // The synthetic centre has no type of its own, so it takes the default.
+    expect(surface.colors).toEqual(colours('#ff0000', '#336699', '#336699'));
+    viz.setNodeColors(REGISTRY_NODE_COLORS);
+    expect(surface.colors).toEqual(Array.from(layoutPayload(P3, { seed: 7 }).colors));
+  });
+
+  it('leaves a hidden type hidden and its legend row unpressed', () => {
+    const { viz, surface, legend } = mount();
+    viz.render(P1);
+    legend.toggleNode('FILE');
+    viz.setNodeColors(THEME);
+    expect(legend.nodeRows.map((row) => [row.key, row.color, row.pressed])).toEqual([
+      ['DIRECTORY', '#000000', true],
+      ['FILE', '#336699', false],
+    ]);
+    expect(surface.positions.slice(2).every(Number.isNaN)).toBe(true);
+    legend.toggleNode('FILE');
+    expect(surface.positions.some(Number.isNaN)).toBe(false);
+    expect(swatches(legend)).toEqual(['#000000', '#336699']);
+  });
+
+  it('logs a surface that fails to recolour, and does nothing without one', () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue(undefined);
+    const m = mount();
+    m.viz.render(P1);
+    m.surface.failOn = 'setPointColors';
+    expect(() => m.viz.setNodeColors(THEME)).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(1);
+    const views = { legend: new FakeLegend(), tooltip: new FakeTooltip() };
+    const broken = new GraphVisualizer(failingSurface, views, { seed: 1 });
+    expect(() => broken.setNodeColors(THEME)).not.toThrow();
+    expect(views.legend.nodeRows).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@
   "main": "./dist/extension.js",
   "dependencies": {
     "@cpg/engine": "*",
+    "@cpg/inspector": "*",
     "@cpg/model": "*"
   }
 }

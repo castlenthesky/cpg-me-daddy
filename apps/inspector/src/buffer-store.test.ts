@@ -8,6 +8,7 @@ import type { GraphEdge, GraphNode, GraphPayload } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
 import { BufferStore, deltaParents } from './buffer-store';
 import type { LayoutResult } from './layout';
+import { REGISTRY_NODE_COLORS } from './node-types';
 
 const GREY = [0.6, 0.6, 0.6, 1];
 const FILE_RGBA = [77 / 255, 179 / 255, 1, 1];
@@ -359,5 +360,63 @@ describe('BufferStore.masked', () => {
     expect(Array.from(store.masked(new Set(['FILE'])))).toEqual([100, 200, NaN, NaN, NaN, NaN]);
     expect(Array.from(store.positions)).toEqual([100, 200, 300, 400, 500, 600]);
     expect(Array.from(store.masked(new Set()))).toEqual([100, 200, 300, 400, 500, 600]);
+  });
+});
+
+// U3.1.1 part 3 (controller decision 32): a theme's node colours.
+describe('BufferStore.recolour', () => {
+  const THEME = {
+    // Round two (review a3): `red` is no colour a point can be drawn in, so CALL takes the default.
+    nodeColors: { FILE: '#336699', DIRECTORY: '#000000', CALL: 'red' },
+    defaultNodeColor: '#ff0000',
+  };
+  const BLUE = f32([0x33 / 255, 0x66 / 255, 0x99 / 255, 1]);
+  const BLACK = [0, 0, 0, 1];
+  const RED = [1, 0, 0, 1];
+
+  it('recolours every point by its type, moving and resizing nothing', () => {
+    const store = loaded();
+    store.recolour(THEME);
+    expect(Array.from(store.colors)).toEqual([...BLACK, ...BLUE, ...BLUE]);
+    expect(Array.from(store.positions)).toEqual([100, 200, 300, 400, 500, 600]);
+    expect(Array.from(store.sizes)).toEqual([20, 9, 9]);
+    expect(store.liveTypes()).toEqual(['DIRECTORY', 'FILE', 'FILE']);
+  });
+
+  it("colours a delta's added, re-added and retyped nodes the same way", () => {
+    const store = loaded();
+    store.recolour(THEME);
+    store.applyDelta(remove('g'), new Map(), always(0.5));
+    store.applyDelta(
+      add(node('n'), node('m', 'MODULE'), node('g', 'DIRECTORY'), node('f', 'CALL')),
+      new Map(),
+      always(0.5),
+    );
+    expect([0, 1, 2, 3, 4].map((index) => rgba(store, index))).toEqual([
+      BLACK,
+      RED,
+      BLACK,
+      BLUE,
+      RED,
+    ]);
+    store.recolour({ nodeColors: { CALL: 'red', MODULE: '' }, defaultNodeColor: 'x' });
+    expect([1, 4].map((index) => rgba(store, index))).toEqual([f32(GREY), f32(GREY)]);
+  });
+
+  // Round two (review b2).
+  it("a load after a recolour still takes its layout's colours", () => {
+    const store = loaded();
+    store.recolour(THEME);
+    store.load(layoutOf([{ id: 'x', type: 'FILE', x: 7, y: 8, size: 20 }]), payloadOf([node('x')]));
+    expect(Array.from(store.colors)).toEqual([0, 0.25, 0.5, 1]);
+  });
+
+  it('takes the latest colours, and the registry ones again when handed them', () => {
+    const store = loaded();
+    store.recolour(THEME);
+    store.recolour(REGISTRY_NODE_COLORS);
+    expect(rgba(store, 0)).toEqual(f32(DIRECTORY_RGBA));
+    store.applyDelta(add(node('n'), node('m', 'MODULE')), new Map(), always(0.5));
+    expect([rgba(store, 3), rgba(store, 4)]).toEqual([f32(FILE_RGBA), f32(GREY)]);
   });
 });

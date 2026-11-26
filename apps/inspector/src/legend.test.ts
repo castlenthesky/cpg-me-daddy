@@ -53,6 +53,18 @@ describe('nodeLegendRows', () => {
     expect(rows.find((row) => row.key === 'DIRECTORY')?.pressed).toBe(true);
   });
 
+  // U3.1.1 part 3 (controller decision 32): the swatch is the colour the points are drawn in.
+  it("takes each swatch from the theme's node colours", () => {
+    // Round two (review a3): `red` is no #rrggbb, so METHOD takes the default, as its points do.
+    const colors = { nodeColors: { FILE: '#123456', METHOD: 'red' }, defaultNodeColor: '#0a0b0c' };
+    const rows = nodeLegendRows(['FILE', 'METHOD', 'DIRECTORY'], new Set(['FILE']), colors);
+    expect(rows.map((row) => [row.key, row.color, row.pressed])).toEqual([
+      ['DIRECTORY', '#0a0b0c', true],
+      ['FILE', '#123456', false],
+      ['METHOD', '#0a0b0c', true],
+    ]);
+  });
+
   it('follows the registry order whatever order the types arrive in', () => {
     const all = NODE_TYPES.map((type) => type.key);
     expect(nodeLegendRows(all.toReversed(), none).map((row) => row.key)).toEqual(all);

@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { LINK_DISTANCE, SPACE_SIZE } from './layout';
 import { DEFAULT_LINK_COLOR_HEX } from './node-types';
-import { graphConfig, type PageColours } from './surface-config';
+import { colourConfig, graphConfig, type PageColours } from './surface-config';
 import type { SurfaceEvents } from './visualizer';
 
 const LIGHT: PageColours = { background: 'rgb(255, 255, 255)', hover: 'rgb(0, 0, 0)' };
@@ -93,4 +93,16 @@ describe('graphConfig', () => {
       expect(config.hoveredLinkColor).toBe(colours.hover);
     },
   );
+});
+
+// U3.1.1 part 3 (controller decision 32): a theme re-reads the page's colours into the live surface.
+describe('colourConfig', () => {
+  it.each([LIGHT, DARK])('is exactly the fields that follow the page (%j)', (colours) => {
+    expect(colourConfig(colours)).toStrictEqual({
+      backgroundColor: colours.background,
+      hoveredPointRingColor: colours.hover,
+      hoveredLinkColor: colours.hover,
+    });
+    expect(graphConfig(events(), colours)).toMatchObject(colourConfig(colours));
+  });
 });

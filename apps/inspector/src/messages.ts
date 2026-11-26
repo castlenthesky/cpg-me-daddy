@@ -11,16 +11,22 @@ import {
   type GraphPayload,
   type HostToWebview,
   type RenderReport,
+  type ThemeSnapshot,
   type VerificationReport,
   type VerifyCheckId,
   type WebviewToHost,
 } from '@cpg/model';
 
-/** The host messages the page acts on; `theme` is not among them yet (controller decision 14). */
-export type PageMessage = Extract<
-  HostToWebview,
-  { type: 'graph' | 'graph-delta' | 'verification' }
->;
+/** The host messages the page acts on: all of them, `theme` included (controller decision 32). */
+export type PageMessage = HostToWebview;
+
+const THEME_KINDS: readonly ThemeSnapshot['kind'][] = [
+  'light',
+  'dark',
+  'high-contrast-light',
+  'high-contrast-dark',
+];
+const THEME_KIND_SET = new Set<unknown>(THEME_KINDS);
 
 const CHECK_STATES: readonly CheckState[] = ['pass', 'fail', 'stale', 'unavailable'];
 const CHECK_STATE_SET = new Set<unknown>(CHECK_STATES);
@@ -90,15 +96,28 @@ function isVerificationReport(value: unknown): value is VerificationReport {
   );
 }
 
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
+}
+
+function isThemeSnapshot(value: unknown): value is ThemeSnapshot {
+  return (
+    isRecord(value) &&
+    THEME_KIND_SET.has(value['kind']) &&
+    isStringRecord(value['nodeColors']) &&
+    typeof value['defaultNodeColor'] === 'string'
+  );
+}
+
 function isPageMessage(value: unknown): value is PageMessage {
   if (!isRecord(value)) return false;
-  if (
-    value['protocol'] !== CPG_PROTOCOL_VERSION ||
-    typeof value['epoch'] !== 'number' ||
-    typeof value['seq'] !== 'number'
-  ) {
+  if (value['protocol'] !== CPG_PROTOCOL_VERSION || typeof value['epoch'] !== 'number') {
     return false;
   }
+  if (value['type'] === 'theme') {
+    return isThemeSnapshot(value['theme']);
+  }
+  if (typeof value['seq'] !== 'number') return false;
   switch (value['type']) {
     case 'graph':
       return isGraphPayload(value['payload']);
@@ -112,8 +131,9 @@ function isPageMessage(value: unknown): value is PageMessage {
 }
 
 /**
- * A `graph`, `graph-delta` or `verification` message at protocol 1 whose every field has its
- * contract type (node and edge fields are not checked, stop-list 55), or undefined. Never throws.
+ * A `theme`, `graph`, `graph-delta` or `verification` message at protocol 1 whose every field has
+ * its contract type (node and edge fields are not checked, stop-list 55), or undefined. Never
+ * throws.
  */
 export function parsePageMessage(value: unknown): PageMessage | undefined {
   return isPageMessage(value) ? value : undefined;

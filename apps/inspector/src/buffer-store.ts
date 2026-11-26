@@ -8,7 +8,13 @@ import {
   SPACE_SIZE,
   type LayoutResult,
 } from './layout';
-import { DEFAULT_NODE_COLOR, NODE_TYPE_COLORS, type Rgba } from './node-types';
+import {
+  hexToRgba,
+  nodeTypeColor,
+  REGISTRY_NODE_COLORS,
+  type NodeColors,
+  type Rgba,
+} from './node-types';
 
 const SPACE_CENTER = SPACE_SIZE / 2;
 
@@ -52,6 +58,7 @@ export class BufferStore {
   private baseSizes: number[] = [];
   private indexById = new Map<string, number>();
   private nodes = new Map<string, GraphNode>();
+  private nodeColors: NodeColors = REGISTRY_NODE_COLORS;
 
   get length(): number {
     return this.ids.length;
@@ -95,7 +102,7 @@ export class BufferStore {
     }
 
     for (const node of delta.addedNodes) {
-      const color = NODE_TYPE_COLORS.get(node.type) ?? DEFAULT_NODE_COLOR;
+      const color = hexToRgba(nodeTypeColor(this.nodeColors, node.type));
       const existing = this.indexById.get(node.id);
       if (existing !== undefined && this.nodes.has(node.id)) {
         // A still-live id keeps its position and size (no random draw) and refreshes metadata.
@@ -121,6 +128,17 @@ export class BufferStore {
         this.baseColors.push(...color);
         this.baseSizes.push(size);
       }
+    }
+  }
+
+  /**
+   * Gives every point its type's colour under `colors` (nodeTypeColor), and colours what later
+   * deltas add the same way. Positions and sizes are untouched, and `load` still takes its layout's.
+   */
+  recolour(colors: NodeColors): void {
+    this.nodeColors = colors;
+    for (const [index, type] of this.types.entries()) {
+      this.writeColor(index, hexToRgba(nodeTypeColor(colors, type)));
     }
   }
 

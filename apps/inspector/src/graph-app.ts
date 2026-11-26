@@ -33,6 +33,11 @@ export interface GraphPage<E extends ViewElement<E>> {
   readonly makeSurface: (events: SurfaceEvents) => GraphSurface;
   /** The shell's #cpg-verification region, which shows the latest verify report. */
   readonly banner: E;
+  /**
+   * Re-reads the page's computed colours and gives them to the surface (controller decision 32).
+   * Called on every `theme`; the visualizer takes the node colours itself.
+   */
+  readonly recolour?: () => void;
   /** The clock frameMs is measured on; performance.now() by default. */
   readonly now?: () => number;
 }
@@ -42,6 +47,8 @@ export interface GraphPage<E extends ViewElement<E>> {
  * - posts `ready` with CPG_PROTOCOL_VERSION last, once the handler is registered, even when the
  *   surface failed to build;
  * - takes only messages parsePageMessage accepts (protocol 1); everything else is ignored;
+ * - `theme`: gives its node colours to the visualizer and calls `page.recolour`. It belongs to no
+ *   graph: it changes neither the epoch nor the payload, and posts nothing;
  * - `graph`: adopts its epoch and payload, renders, and posts a render-report at its seq;
  * - `graph-delta`: before any graph, or on another epoch than the page's, posts resync 'stale-epoch';
  *   otherwise merges it into the held payload with applyGraphDelta: applied draws it and posts a
@@ -80,6 +87,12 @@ export function startGraphApp<E extends ViewElement<E>>(
   channel.onMessage((raw) => {
     const message = parsePageMessage(raw);
     if (message === undefined) return;
+
+    if (message.type === 'theme') {
+      visualizer.setNodeColors(message.theme);
+      page.recolour?.();
+      return;
+    }
 
     if (message.type === 'graph') {
       epoch = message.epoch;

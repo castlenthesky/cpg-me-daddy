@@ -62,6 +62,8 @@ const REPORT = { epoch: 1, seq: 0, checks: CHECKS, state: 'fail' } as const;
 const graph = { type: 'graph', protocol: 1, epoch: 1, seq: 0, payload: P };
 const graphDelta = { type: 'graph-delta', protocol: 1, epoch: 1, seq: 1, delta: D };
 const verification = { type: 'verification', protocol: 1, epoch: 1, seq: 0, report: REPORT };
+const THEME = { kind: 'dark', nodeColors: { FILE: '#123456' }, defaultNodeColor: '#abcdef' };
+const theme = { type: 'theme', protocol: 1, epoch: 1, theme: THEME };
 
 /** `base` with `key` set to `value`, or removed when `value` is undefined. */
 function withField(base: object, key: string, value: unknown): Record<string, unknown> {
@@ -93,6 +95,13 @@ describe('parsePageMessage (host -> page)', () => {
           { ...verification, report: { ...REPORT, state, checks: [{ ...CHECK, state }] } },
         ] as const,
     ),
+    // U3.1.1 part 3 (decision 32): a theme carries no seq.
+    ...(['light', 'dark', 'high-contrast-light', 'high-contrast-dark'] as const).map(
+      (kind) => [`theme of kind ${kind}`, { ...theme, theme: { ...THEME, kind } }] as const,
+    ),
+    ['theme with no node colours', { ...theme, theme: { ...THEME, nodeColors: {} } }],
+    // The contract types a colour as a string; what can't be painted falls back (nodeTypeColor).
+    ['theme whose colour is no #rrggbb', { ...theme, theme: { ...THEME, defaultNodeColor: 'x' } }],
     [
       'verification with an empty detail',
       { ...verification, report: { ...REPORT, checks: [{ ...CHECK, detail: '' }] } },
@@ -103,15 +112,27 @@ describe('parsePageMessage (host -> page)', () => {
 
   const rejected: readonly (readonly [string, unknown])[] = [
     ...NOT_RECORDS.map((value) => [`the non-record ${JSON.stringify(value)}`, value] as const),
+    // U3.1.1 part 3 (decision 32): a theme is acted on, so a malformed one is refused.
+    ['a theme at protocol 2', { ...theme, protocol: 2 }],
+    ['a theme with no epoch', withField(theme, 'epoch', undefined)],
+    ["a theme with epoch '1'", { ...theme, epoch: '1' }],
+    ['a theme message with no theme', withField(theme, 'theme', undefined)],
+    ['a theme that is a list', { ...theme, theme: [] }],
+    ['a theme carrying a payload instead', { ...withField(theme, 'theme', undefined), payload: P }],
+    ["a theme of kind 'sepia'", { ...theme, theme: { ...THEME, kind: 'sepia' } }],
+    ['a theme with no kind', { ...theme, theme: withField(THEME, 'kind', undefined) }],
+    ['a theme with no nodeColors', { ...theme, theme: withField(THEME, 'nodeColors', undefined) }],
+    ['a theme with null nodeColors', { ...theme, theme: { ...THEME, nodeColors: null } }],
     [
-      'a theme message (not acted on yet, decision 14)',
-      {
-        type: 'theme',
-        protocol: 1,
-        epoch: 1,
-        theme: { kind: 'dark', nodeColors: {}, defaultNodeColor: 'x' },
-      },
+      'a theme with a list of nodeColors',
+      { ...theme, theme: { ...THEME, nodeColors: ['#000000'] } },
     ],
+    ['a theme with a numeric colour', { ...theme, theme: { ...THEME, nodeColors: { FILE: 1 } } }],
+    [
+      'a theme with no defaultNodeColor',
+      { ...theme, theme: withField(THEME, 'defaultNodeColor', undefined) },
+    ],
+    ['a theme with a numeric default', { ...theme, theme: { ...THEME, defaultNodeColor: 1 } }],
     ['the protocol-less archive shape', { type: 'graph', payload: P }],
     ['protocol 2', { ...graph, protocol: 2 }],
     ["protocol '1'", { ...graph, protocol: '1' }],
