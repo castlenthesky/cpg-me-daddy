@@ -20,7 +20,6 @@ import type {
   IndexRequest,
   WatchEvent,
   WatchFailure,
-  WatchLatency,
   WatchRequest,
 } from './port';
 import { createAdmission } from './walker/admission';
@@ -92,21 +91,12 @@ type Stop =
   | { readonly reason: 'signal' }
   | { readonly reason: 'error'; readonly failure: WatchFailure };
 
-type WatchEventBody =
-  | { readonly kind: 'ready'; readonly root: string; readonly report: IndexReport }
-  | {
-      readonly kind: 'batch';
-      readonly changes: readonly NormalizedChange[];
-      readonly write: {
-        readonly nodesWritten: number;
-        readonly edgesWritten: number;
-        readonly statementCount: number;
-      };
-      readonly latencyMs: WatchLatency;
-    }
-  | { readonly kind: 'warning'; readonly message: string }
-  | { readonly kind: 'error'; readonly error: WatchFailure }
-  | { readonly kind: 'closed'; readonly reason: 'signal' | 'error' | 'eof' };
+/** A WatchEvent before the emitter stamps its `seq` and `at`. */
+type WatchEventBody = WatchEvent extends infer E
+  ? E extends WatchEvent
+    ? Omit<E, 'seq' | 'at'>
+    : never
+  : never;
 
 const noop = (): void => {};
 
@@ -142,16 +132,17 @@ export function toBatchOp(
       removals.push(change.fromPath);
     }
     const parent = parentOf(change.path);
-    if (change.entry === 'directory') {
+    const isDirectory = change.entry === 'directory';
+    links.push({
+      type: 'HAS_ENTRY',
+      fromLabel: 'DIRECTORY',
+      fromKey: parent,
+      toLabel: isDirectory ? 'DIRECTORY' : 'FILE',
+      toKey: change.path,
+      properties: {},
+    });
+    if (isDirectory) {
       walkedDirs.push({ path: change.path, parent });
-      links.push({
-        type: 'HAS_ENTRY',
-        fromLabel: 'DIRECTORY',
-        fromKey: parent,
-        toLabel: 'DIRECTORY',
-        toKey: change.path,
-        properties: {},
-      });
     } else {
       if (change.revision_id === undefined) {
         throw new Error(`file change missing revision_id: ${change.path}`);
@@ -162,14 +153,6 @@ export function toBatchOp(
         language: languageOf(change.path) ?? null,
         sizeBytes: change.sizeBytes ?? 0,
         revision_id: change.revision_id,
-      });
-      links.push({
-        type: 'HAS_ENTRY',
-        fromLabel: 'DIRECTORY',
-        fromKey: parent,
-        toLabel: 'FILE',
-        toKey: change.path,
-        properties: {},
       });
     }
   }
