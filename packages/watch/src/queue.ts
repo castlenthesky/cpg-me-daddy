@@ -1,4 +1,4 @@
-// C-WATCH layer B's delivery primitives (U4.1.1). SEAT until U4.1.1 lands. Ported from
+// C-WATCH layer B's delivery primitives (U4.1.1). REAL. Ported from
 // e45574f:packages/engine/src/watch/queue.ts with the archive's retry bounds; the sleep between
 // attempts goes through the injected TimerApi (decision 45). The queue owns INV-21 (at most one batch
 // in flight, strictly in order). onDegraded (INV-22) and advancing known state only after confirmed
@@ -18,6 +18,9 @@ export interface SerialQueueOptions {
 export class SerialQueue<T> {
   readonly #process: (item: T) => Promise<void>;
   readonly #options: SerialQueueOptions;
+  readonly #pending: { readonly item: T }[] = [];
+  #draining = false;
+  #disposed = false;
 
   constructor(process: (item: T) => Promise<void>, options: SerialQueueOptions = {}) {
     this.#process = process;
@@ -25,20 +28,39 @@ export class SerialQueue<T> {
   }
 
   /** Queues `item` behind everything already queued. Ignored after `dispose`. */
-  enqueue(_item: T): void {
-    void this.#process;
-    void this.#options;
-    throw new Error('SEAT: SerialQueue.enqueue lands in U4.1.1');
+  enqueue(item: T): void {
+    if (this.#disposed) return;
+    this.#pending.push({ item });
+    void this.#drain();
+  }
+
+  async #drain(): Promise<void> {
+    if (this.#draining) return;
+    this.#draining = true;
+    try {
+      for (;;) {
+        const next = this.#pending.shift();
+        if (next === undefined) break;
+        try {
+          await this.#process(next.item);
+        } catch (error) {
+          this.#options.onError?.(error);
+        }
+      }
+    } finally {
+      this.#draining = false;
+    }
   }
 
   /** Items waiting, not counting one in flight: a cheap backlog signal. */
   get pendingCount(): number {
-    throw new Error('SEAT: SerialQueue.pendingCount lands in U4.1.1');
+    return this.#pending.length;
   }
 
   /** Drops everything not yet started. Does not interrupt the item in flight. Final. */
   dispose(): void {
-    throw new Error('SEAT: SerialQueue.dispose lands in U4.1.1');
+    this.#disposed = true;
+    this.#pending.length = 0;
   }
 }
 
@@ -51,8 +73,18 @@ export interface RetryOptions {
   readonly maxDelayMs?: number;
   /** Called after a failed attempt that will be retried, with that attempt's number (from 1). */
   readonly onRetry?: (attempt: number, error: unknown) => void;
-  /** Default: the global setTimeout/clearTimeout. A test passes a fake clock. */
+  /** Default: the global setTimeout/clearTimeout, looked up at each call. A test passes a fake clock. */
   readonly timers?: TimerApi;
+}
+
+const DEFAULT_MAX_ATTEMPTS = 5;
+const DEFAULT_BASE_DELAY_MS = 200;
+const DEFAULT_MAX_DELAY_MS = 5000;
+
+function wait(timers: TimerApi, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    timers.setTimeout(resolve, ms);
+  });
 }
 
 /**
@@ -60,7 +92,20 @@ export interface RetryOptions {
  * again, up to `maxAttempts` calls. Resolves with the first success; after the last attempt fails it
  * rejects with that attempt's error, and the caller decides what giving up means.
  */
-export async function withRetry<T>(_fn: () => Promise<T>, _options?: RetryOptions): Promise<T> {
-  await Promise.resolve();
-  throw new Error('SEAT: withRetry lands in U4.1.1');
+export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+  const timers = options.timers ?? globalThis;
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt >= maxAttempts) throw error;
+      options.onRetry?.(attempt, error);
+      const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      await wait(timers, delay);
+    }
+  }
 }

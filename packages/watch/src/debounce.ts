@@ -1,4 +1,4 @@
-// C-WATCH layer B's debounce window (U4.1.1). SEAT until U4.1.1 lands. Ported from
+// C-WATCH layer B's debounce window (U4.1.1). REAL. Ported from
 // e45574f:packages/engine/src/watch/debounce.ts with two departures: the archive's dead `now` is gone
 // and the timers come in as one TimerApi (decision 45), and nothing is keyed or merged here (see
 // ChangeBatcher).
@@ -10,9 +10,12 @@ export interface ChangeBatcherOptions {
   readonly trailingMs?: number;
   /** Longest a window stays open, counted from its first add. Default 500 (C-WATCH T1_T2). */
   readonly ceilingMs?: number;
-  /** Default: the global setTimeout/clearTimeout. A test passes a fake clock. */
+  /** Default: the global setTimeout/clearTimeout, looked up at each call. A test passes a fake clock. */
   readonly timers?: TimerApi;
 }
+
+const DEFAULT_TRAILING_MS = 100;
+const DEFAULT_CEILING_MS = 500;
 
 /**
  * A generic debounce window. `add` puts an item in the open window, opening one if none is open. The
@@ -26,22 +29,56 @@ export interface ChangeBatcherOptions {
  */
 export class ChangeBatcher<T> {
   readonly #onFlush: (items: readonly T[]) => void;
-  readonly #options: ChangeBatcherOptions;
+  readonly #trailingMs: number;
+  readonly #ceilingMs: number;
+  readonly #timers: TimerApi;
+  #items: T[] = [];
+  #open = false;
+  #disposed = false;
+  #trailingHandle: unknown;
+  #ceilingHandle: unknown;
 
   constructor(onFlush: (items: readonly T[]) => void, options: ChangeBatcherOptions = {}) {
     this.#onFlush = onFlush;
-    this.#options = options;
+    this.#trailingMs = options.trailingMs ?? DEFAULT_TRAILING_MS;
+    this.#ceilingMs = options.ceilingMs ?? DEFAULT_CEILING_MS;
+    this.#timers = options.timers ?? globalThis;
   }
 
   /** Adds `item` to the open window and restarts its trailing timer. Ignored after `dispose`. */
-  add(_item: T): void {
-    void this.#onFlush;
-    void this.#options;
-    throw new Error('SEAT: ChangeBatcher.add lands in U4.1.1');
+  add(item: T): void {
+    if (this.#disposed) return;
+    this.#items.push(item);
+    if (this.#open) {
+      this.#timers.clearTimeout(this.#trailingHandle);
+    } else {
+      this.#open = true;
+      this.#ceilingHandle = this.#timers.setTimeout(() => this.#flush(), this.#ceilingMs);
+    }
+    this.#trailingHandle = this.#timers.setTimeout(() => this.#flush(), this.#trailingMs);
+  }
+
+  #flush(): void {
+    if (this.#items.length === 0) return;
+    const items = this.#items;
+    this.#items = [];
+    this.#clearTimers();
+    this.#onFlush(items);
+  }
+
+  #clearTimers(): void {
+    if (!this.#open) return;
+    this.#open = false;
+    this.#timers.clearTimeout(this.#trailingHandle);
+    this.#timers.clearTimeout(this.#ceilingHandle);
+    this.#trailingHandle = undefined;
+    this.#ceilingHandle = undefined;
   }
 
   /** Drops the open window without flushing it and clears its timers. Final: later adds are ignored. */
   dispose(): void {
-    throw new Error('SEAT: ChangeBatcher.dispose lands in U4.1.1');
+    this.#disposed = true;
+    this.#items = [];
+    this.#clearTimers();
   }
 }
