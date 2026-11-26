@@ -621,6 +621,7 @@ function scriptedEngine(
       inspected.push({ session, config });
       return Promise.resolve(o.payload ?? PAYLOAD);
     },
+    watch: () => Promise.reject(new Error('scriptedEngine.watch is not driven by these tests')),
     schema: () => {
       throw new Error('scriptedEngine.schema is not driven by these tests');
     },

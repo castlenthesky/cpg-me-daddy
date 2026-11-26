@@ -6,6 +6,7 @@ import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
 import { createMemoryStore, type GraphSink, type MemoryStore } from '@cpg/sink';
 import type { EdgeRow, GraphStore, NodeRow, WriteOp } from '@cpg/store';
+import type { TimerApi, WatchBackend } from '@cpg/watch';
 import { createNullGraphStore } from './null-graph-store';
 import type {
   ConsumerSwitches,
@@ -20,6 +21,8 @@ import type {
   StoreTarget,
   VerifyConfig,
   VerifyReport,
+  WatchEvent,
+  WatchRequest,
 } from './port';
 import { verifyStore } from './verify';
 import { filesystemTier, type FilesystemTier } from './walker/filesystem-tier';
@@ -47,6 +50,19 @@ export interface EngineDeps {
   readonly resolvers?: readonly Resolver[];
   /** SEAT: accepted and unused until the LSP driver (U8). */
   readonly processHost?: ProcessHost;
+  /**
+   * The backend `watch` subscribes with. Default: @parcel/watcher (`createParcelWatchBackend`), on
+   * `now`, with node's `realpath` so macOS real paths map back onto the root.
+   */
+  readonly watchBackend?: WatchBackend;
+  /**
+   * The clock `watch` stamps with: WatchEvent `at`, the session's `clock.settledAt`, the end of a
+   * write, and the default backend's `observedAt` (C-CLI I-30). Default `Date.now`, looked up at
+   * each call.
+   */
+  readonly now?: () => number;
+  /** The watch session's timers (debounce, retry backoff). Default: the global ones. */
+  readonly timers?: TimerApi;
 }
 
 function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
@@ -237,6 +253,12 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         target: null,
         consumers: req.session === null ? [] : sinks.map((s) => s.id),
       };
+    },
+
+    async watch(_req: WatchRequest, _onEvent: (event: WatchEvent) => void, _signal: AbortSignal) {
+      // SEAT: U4.2.1 part a. runWatch (./watch) with index()'s own code (runIndex), its write loop,
+      // languageOf, the backend (deps.watchBackend or parcel), now and timers.
+      throw new Error('SEAT: CpgEngine.watch lands with U4.2.1 part a');
     },
 
     async verify(
