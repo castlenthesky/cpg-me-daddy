@@ -474,6 +474,21 @@ describe('createWatchSession: the window, the clock and the order', () => {
     expect(h.sink.delivered).toEqual([live(0, changes, 7, 140)]);
   });
 
+  // Post-implementation (sabotage #19): settledAt sampled when the batch is built passed every case.
+  it('settledAt is taken as the job starts, before it reads the disk', async () => {
+    const h = await start();
+    h.disk.write('a.ts', 'a');
+    // The read takes 30 ms. It advances the clock after the flush has returned, as a real read would.
+    h.disk.probe.stat.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      h.clock.advance(30);
+      return { entry: 'file', sizeBytes: 1 };
+    });
+    h.emit(['created', 'a.ts']);
+    await h.wait();
+    expect(h.sink.delivered).toEqual([live(0, [file('created', 'a.ts', 'a')], 0, 100)]);
+  });
+
   it('without now, settledAt is Date.now(), looked up at each call', async () => {
     const h = await start({}, ['now']);
     vi.spyOn(Date, 'now').mockReturnValue(4242);
@@ -798,6 +813,17 @@ describe('createWatchSession: close (decision 51, silence after close)', () => {
     await h.wait(1000);
     expect(h.disk.probe.stat.mock.calls).toHaveLength(stats);
     expect(h.sink.calls).toHaveLength(1);
+  });
+
+  // Post-implementation (sabotage #26): a woken retry that rejects kept the retries going after close.
+  it('a retry that wakes after close ends the retries: no timer is left armed', async () => {
+    const h = await start();
+    h.sink.plan.push(new Error('transient'));
+    h.emit(['deleted', 'a.ts']);
+    await h.wait();
+    await h.session.close();
+    await h.wait(200);
+    expect(h.clock.armedCount()).toBe(0);
   });
 
   it('a retry that wakes after close does not call the sink, and onDegraded never fires', async () => {
