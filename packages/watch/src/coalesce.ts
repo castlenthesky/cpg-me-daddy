@@ -1,4 +1,4 @@
-// C-WATCH layer B's pure core (U4.1.2). REAL. WatchSession (not yet written) owns the pending map,
+// C-WATCH layer B's pure core (U4.1.2). REAL. The session (session.ts) owns the pending map,
 // applies the ops and flushes it. MERGE and SOURCE are written from 05-contracts.yaml C-WATCH
 // .merge_table (the archived reference coalesce is in no commit); each departure says AMENDED, and
 // the consumer property in coalesce.property.test.ts is the evidence for it. RANK is ported from
