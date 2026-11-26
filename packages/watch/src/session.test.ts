@@ -1262,6 +1262,29 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
   });
 
   // Round two, my own addition: the fatal error comes while subscribe is pending, which then resolves.
+  // Post-implementation (sabotage #51): a seq 0 sink call that resolves after close confirmed nothing.
+  it('a fatal error while the seq 0 sink call is in flight: that call confirms nothing (S21-3)', async () => {
+    const gate = deferred();
+    const h = open(
+      {},
+      {
+        prepare: ({ backend }) => {
+          backend.closeGate = gate.promise;
+        },
+      },
+    );
+    const hung = deferred();
+    h.sink.plan.push(hung);
+    const outcome = h.ready.catch((error: unknown) => error);
+    await h.wait(0);
+    const fatal = { ...FATAL };
+    h.fail(fatal);
+    hung.resolve();
+    await h.wait(0);
+    gate.resolve();
+    expect(await outcome).toBe(fatal);
+  });
+
   it('a fatal error before subscribe resolves: the subscription closes when it does; createWatchSession rejects', async () => {
     const gate = deferred();
     const h = open(
@@ -1434,6 +1457,25 @@ describe('createWatchSession: the subtree walk, the ancestor rule, unknown delet
     expect(h.disk.probe.stat.mock.calls).toEqual([[wp('gen/sub/x.ts')]]);
     const gen = admit.mock.calls.filter(([path]) => path === 'gen');
     expect(gen.map(([, entry, size]) => `${entry} ${size}`)).toEqual(['directory undefined']);
+  });
+
+  // Post-implementation (sabotage #6): no case deleted a known directory with nothing known under it.
+  it('a deleted known directory with nothing known under it is delivered (decision 58)', async () => {
+    const h = await start({}, { disk: { empty: null } });
+    h.disk.rm('empty');
+    h.emit(['deleted', 'empty']);
+    await h.wait();
+    expect(h.sink.delivered).toEqual([live(1, [gone('directory', 'empty')], 0, 100)]);
+  });
+
+  // Post-implementation (sabotage #31): an ancestor created on a known directory merged its delete away.
+  it('with directoryEvents delete-only, the ancestor rule leaves a known directory delete standing', async () => {
+    const h = await start({}, { caps: { directoryEvents: 'delete-only' }, disk: { a: null } });
+    h.disk.rm('a');
+    h.disk.write('a/x.ts', 'X');
+    h.emit(['deleted', 'a'], ['created', 'a/x.ts']);
+    await h.wait();
+    expect(h.sink.delivered[0]?.changes).toContainEqual(gone('directory', 'a'));
   });
 
   it('a deleted unknown path stays when a known file or directory is under it, as a file (decisions 48, 58)', async () => {
