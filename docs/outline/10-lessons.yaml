@@ -14,7 +14,7 @@ archive_commits:
   - { commit: 21754b47da91a86bbbefc08009cb29d2215308e4, branch: origin/discovery, lineage: discovery, what: "visual-first redo (webview-first, minimal packages)" }
   - { commit: f18ee71b08bb9cab34a1c8fd784930ab8e6deca6, branch: origin/feature/m0-7-9-calls-symbols, lineage: m0-calls-symbols, what: "most advanced engine branch (schema registry, two-pass walker, symbol-id)" }
   - { commit: e45574f1a7868d31ff7180cba42abe488a424157, branch: origin/worktree-cpg-research-sweep, lineage: research-sweep, what: "WatchSink decoupling + doc sweep" }
-  - { commit: 8cd478fa8169fa45d4d9015937f736276f569319, branch: origin/develop, lineage: research-corpus, what: "the docs/ tree pre-distillation (= develop HEAD at the time)" }
+  - { commit: 8cd478fa8169fa45d4d9015937f736276f569319, branch: origin/master, lineage: research-corpus, what: "the docs/ tree pre-distillation (= develop HEAD at the time)" }
 
 failures:
   - id: L-01
