@@ -58,6 +58,15 @@ function mapRawEvents(root: string, events: readonly RawWatchEvent[]): MappedEve
   return mapped;
 }
 
+/**
+ * SEAT (U4.1.2 part b, sprint 21): the root check, the initial and rescan reconcile, the subtree walk,
+ * the ancestor rule, the unknown-delete rule and the backend's errors (decisions 53-58) are not
+ * written yet. Everything below it is part a, REAL.
+ */
+function seatPartB(_options: WatchSessionOptions): void {
+  throw new Error('SEAT: U4.1.2 part b (decisions 53-58) is not implemented');
+}
+
 function memo<T>(
   cache: Map<WorkspacePath, Promise<T>>,
   key: WorkspacePath,
@@ -110,6 +119,7 @@ function memo<T>(
  * window and queued windows are dropped (OQ-3). It does not wait for a sink call in flight.
  */
 export async function createWatchSession(options: WatchSessionOptions): Promise<WatchSession> {
+  seatPartB(options);
   const admit: Admit = options.admit ?? defaultAdmit;
   const timers: TimerApi = options.timers ?? globalThis;
   const files = new Map<WorkspacePath, string>();

@@ -1,7 +1,8 @@
 // C-WATCH layer A plus the seam's outbound vocabulary, types only. Layer B's coalesce/flushBatch are
 // in coalesce.ts, its debounce, pairing and delivery queue in debounce.ts, normalize.ts and queue.ts,
-// its session in session.ts (U4.1.2), whose probe and options are typed here; the engine's cold-index
-// walk emits `cause: 'initial'` batches in U2a.
+// its session in session.ts (U4.1.2), whose probe, seed and options are typed here. The session's
+// own walks are `cause: 'initial'` and `'rescan'`; the engine's cold-index walk emits `cause:
+// 'initial'` batches in U2a.
 //
 // Types only, enforced by check-deps rule `contract-types-only`: the only import is a statement-level
 // `import type` from @cpg/model, and the emitted JS is empty.
@@ -126,6 +127,26 @@ export interface WatchProbe {
   ): Promise<{ readonly entry: 'file' | 'directory'; readonly sizeBytes: number } | undefined>;
   /** sha256 hex of the file's bytes (INV-26). `undefined` means it raced away. */
   digest(path: WorkspacePath): Promise<string | undefined>;
+  /**
+   * Every entry strictly under `dir`, recursively, in any order, with lstat semantics: no symlink is
+   * followed, and a symlink is a `'file'`, left to `admit` (decision 53). `[]` when `dir` is gone.
+   * `dir` may be WORKSPACE_ROOT.
+   */
+  list(dir: WorkspacePath): Promise<readonly ListedEntry[]>;
+}
+
+/** One entry of `WatchProbe.list`. */
+export interface ListedEntry {
+  readonly path: WorkspacePath;
+  readonly entry: 'file' | 'directory';
+  readonly sizeBytes: number;
+}
+
+/** What the consumer already holds when the session starts (decision 55). */
+export interface WatchSeed {
+  /** path -> revision_id. */
+  readonly files: ReadonlyMap<WorkspacePath, string>;
+  readonly directories: ReadonlySet<WorkspacePath>;
 }
 
 export interface WatchSessionOptions {
@@ -136,10 +157,16 @@ export interface WatchSessionOptions {
   readonly probe: WatchProbe;
   /**
    * The walker's admission rule, run on every event with its classified entry (`sizeBytes` from
-   * `probe.stat`, absent for a deleted). A refused path never reaches coalesce. Default: admit
+   * `probe.stat`, absent for a deleted) and on every listed entry. A refused path never reaches
+   * coalesce, and a refused directory's listed descendants are refused with it. Default: admit
    * everything; the engine passes the walker's admission (U4.2.1).
    */
   readonly admit?: (path: WorkspacePath, entry: EntryKind, sizeBytes?: number) => boolean;
+  /**
+   * Known state at the start (decision 55); empty without one. The initial batch is the disk's diff
+   * against it.
+   */
+  readonly seed?: WatchSeed;
   /** Default 100 (C-WATCH budget_boundary.T1_T2). */
   readonly trailingMs?: number;
   /** Default 500 (C-WATCH budget_boundary.T1_T2). */
@@ -154,6 +181,8 @@ export interface WatchSessionOptions {
    * through unchanged (decision 50).
    */
   readonly onDegraded?: (paths: readonly string[], error: unknown) => void;
+  /** INV-25: every error the backend reports, unchanged, until close (decision 57). */
+  readonly onError?: (error: WatchError) => void;
 }
 
 export interface WatchSession {
