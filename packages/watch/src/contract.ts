@@ -1,5 +1,5 @@
-// C-WATCH layer A plus the seam's outbound vocabulary. SEAT (types only): layer B (coalesce,
-// flushBatch, the session) and the parcel / fake backends land in U4; the engine's cold-index walk
+// C-WATCH layer A plus the seam's outbound vocabulary, types only. Layer B's coalesce/flushBatch are
+// in coalesce.ts; the session and the parcel / fake backends land in U4; the engine's cold-index walk
 // emits `cause: 'initial'` batches in U2a.
 //
 // Types only, enforced by check-deps rule `contract-types-only`: the only import is a statement-level
