@@ -116,6 +116,25 @@ describe('ChangeBatcher', () => {
     expect(h.flushes[2]).toEqual({ at: 1300, items: ['e14', 'e15'] });
   });
 
+  it("a ceiling flush leaves no timer armed, its window's trailing timer included", () => {
+    const h = harness();
+    // The last add is at 480 and the clock stops at 560: the ceiling fired at 500, and the window's
+    // trailing timer, due at 580, must have been cleared with it.
+    addEvery(h, 7, 80);
+    expect(h.flushes).toEqual([{ at: 500, items: names('e', 0, 6) }]);
+    expect(h.clock.armedCount()).toBe(0);
+  });
+
+  it('a ceiling shorter than the trailing window flushes first', () => {
+    const h = harness({ trailingMs: 100, ceilingMs: 50 });
+    h.batcher.add('a.ts');
+    h.clock.advance(49);
+    expect(h.flushes).toEqual([]);
+    h.clock.advance(1);
+    expect(h.flushes).toEqual([{ at: 50, items: ['a.ts'] }]);
+    expect(h.clock.armedCount()).toBe(0);
+  });
+
   it('hands over every item in arrival order: nothing is keyed or merged', () => {
     const h = harness();
     h.batcher.add('a.ts');
@@ -194,11 +213,16 @@ describe('ChangeBatcher', () => {
     const armed = vi.spyOn(globalThis, 'setTimeout');
     const cleared = vi.spyOn(globalThis, 'clearTimeout');
     const batcher = new ChangeBatcher<string>(() => {});
-    batcher.add('a.ts');
-    const delays = armed.mock.calls.map(([, ms]) => Number(ms));
-    expect(delays.toSorted((a, b) => a - b)).toEqual([100, 500]);
+    // Only the synchronous add and dispose run between the spies and the reads, and the finally
+    // clears the real timers even when an assertion fails first.
+    try {
+      batcher.add('a.ts');
+      const delays = armed.mock.calls.map(([, ms]) => Number(ms));
+      expect(delays.toSorted((a, b) => a - b)).toEqual([100, 500]);
+    } finally {
+      batcher.dispose();
+    }
     const handles = armed.mock.results.map((result) => result.value);
-    batcher.dispose();
     const clearedHandles = cleared.mock.calls.map(([handle]) => handle);
     expect(handles.filter((handle) => !clearedHandles.includes(handle))).toEqual([]);
   });

@@ -6,7 +6,8 @@ import { SerialQueue, withRetry, type SerialQueueOptions } from './queue';
 // delivery strictly in order) and the archive's queue.ts (e45574f:packages/engine/src/watch/queue.ts):
 // a failed item goes to onError and the queue moves on; dispose drops what has not started; retries
 // make 5 attempts and wait min(200 * 2^(attempt-1), 5000) ms between them (decision 46). Waits run on
-// fake timers; `settle` only lets pending promise callbacks run.
+// fake timers, but for one 3 ms real wait that checks the default; `settle` only lets pending promise
+// callbacks run.
 
 const settle = () =>
   new Promise<void>((resolve) => {
@@ -238,6 +239,13 @@ describe('withRetry', () => {
     expect(delays).toEqual([1000, 2000, 3000, 3000]);
   });
 
+  it('caps the first wait too, when baseDelayMs is over maxDelayMs', async () => {
+    const { delays, timers } = autoTimers();
+    const f = flaky(9);
+    await expect(withRetry(f.fn, { timers, maxDelayMs: 100 })).rejects.toBe(f.errors[4]);
+    expect(delays).toEqual([100, 100, 100, 100]);
+  });
+
   it('maxAttempts 1 calls once and rejects without waiting or reporting a retry', async () => {
     const { delays, timers } = autoTimers();
     const f = flaky(1);
@@ -280,9 +288,11 @@ describe('withRetry', () => {
   });
 
   it('without timers it waits on the global setTimeout', async () => {
+    // One real 3 ms wait; the odd delay keeps another caller's setTimeout from passing for ours.
     const armed = vi.spyOn(globalThis, 'setTimeout');
     const f = flaky(1);
-    await expect(withRetry(f.fn, { baseDelayMs: 0 })).resolves.toBe('ok');
-    expect(armed).toHaveBeenCalledWith(expect.any(Function), 0);
+    await expect(withRetry(f.fn, { baseDelayMs: 3 })).resolves.toBe('ok');
+    expect(armed).toHaveBeenCalledWith(expect.any(Function), 3);
+    expect(f.calls()).toBe(2);
   });
 });

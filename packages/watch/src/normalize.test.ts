@@ -74,6 +74,17 @@ describe('pairFileRenames', () => {
     expect(pairFileRenames(batch, known({ 'src/old.ts': 'h1' }))).toEqual(batch);
   });
 
+  it('a created with no revision_id never pairs, not even with a delete of unknown revision', () => {
+    const directory: NormalizedChange = {
+      kind: 'created',
+      entry: 'directory',
+      path: wp('src/dir'),
+      observedAt: 2,
+    };
+    const batch = [del('src/gone.ts'), directory];
+    expect(pairFileRenames(batch, known({}))).toEqual(batch);
+  });
+
   it('a directory delete never pairs', () => {
     const batch = [del('src/dir', 'directory'), created('src/new.ts', 'h1')];
     expect(pairFileRenames(batch, known({ 'src/dir': 'h1' }))).toEqual(batch);
@@ -104,26 +115,36 @@ describe('pairFileRenames', () => {
     ]);
   });
 
-  it('returns the batch in flushBatch order: moves by path first, then the rest as they were', () => {
-    // a.ts pairs with y.ts and b.ts with x.ts, so pairing order is y then x; m.ts is a native move.
+  it('returns the batch in flushBatch order: moves by path, then the rest as they were', () => {
+    // a.ts pairs with y.ts and b.ts with b/x.ts (pairing order y, b/x); xm.ts is a native move that
+    // sorts between them. The surviving deletes and creates each span two depths (INV-16).
     const batch = [
-      moved('m.ts', 'l.ts', 'h9'),
+      moved('xm.ts', 'l.ts', 'h9'),
+      del('p/q/gone.ts'),
       del('a.ts'),
       del('b.ts'),
       del('gone.ts'),
       file('changed', 'c.ts', 'h3'),
       created('e.ts', 'h4'),
-      created('x.ts', 'h2'),
       created('y.ts', 'h1'),
+      created('b/x.ts', 'h2'),
+      created('a/b/e.ts', 'h7'),
     ];
-    const knownRevisions = known({ 'a.ts': 'h1', 'b.ts': 'h2', 'gone.ts': 'h5' });
+    const knownRevisions = known({
+      'a.ts': 'h1',
+      'b.ts': 'h2',
+      'gone.ts': 'h5',
+      'p/q/gone.ts': 'h6',
+    });
     expect(pairFileRenames(batch, knownRevisions)).toEqual([
-      batch[0],
-      moved('x.ts', 'b.ts', 'h2'),
+      moved('b/x.ts', 'b.ts', 'h2'),
+      moved('xm.ts', 'l.ts', 'h9'),
       moved('y.ts', 'a.ts', 'h1'),
+      del('p/q/gone.ts'),
       del('gone.ts'),
       file('changed', 'c.ts', 'h3'),
       created('e.ts', 'h4'),
+      created('a/b/e.ts', 'h7'),
     ]);
   });
 
