@@ -9,12 +9,13 @@ describe('@cpg/watch front door', () => {
     expect(Object.keys(contract)).toEqual([]);
   });
 
-  it('index exports the backend, coalesce, the batcher, pairing and the queue, and nothing else', () => {
+  it('index exports the backend, coalesce, the batcher, pairing, the queue and the session, and nothing else', () => {
     expect(Object.keys(api).toSorted()).toEqual([
       'ChangeBatcher',
       'SerialQueue',
       'coalesce',
       'createParcelWatchBackend',
+      'createWatchSession',
       'flushBatch',
       'isExcludedPath',
       'pairFileRenames',
