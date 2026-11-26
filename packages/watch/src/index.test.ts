@@ -9,11 +9,16 @@ describe('@cpg/watch front door', () => {
     expect(Object.keys(contract)).toEqual([]);
   });
 
-  it('index exports the parcel backend, coalesce and flushBatch, and nothing else at runtime', () => {
+  it('index exports the backend, coalesce, the batcher, pairing and the queue, and nothing else', () => {
     expect(Object.keys(api).toSorted()).toEqual([
+      'ChangeBatcher',
+      'SerialQueue',
       'coalesce',
       'createParcelWatchBackend',
       'flushBatch',
+      'isExcludedPath',
+      'pairFileRenames',
+      'withRetry',
     ]);
   });
 });
