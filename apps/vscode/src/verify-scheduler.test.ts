@@ -106,7 +106,7 @@ describe('when a run starts', () => {
     for (const step of script) {
       if (typeof step === 'number') clock.advance(step);
       else if (step === 'end') await end();
-      else scheduler[step]();
+      else void scheduler[step]();
     }
     for (let i = 0; i < 4; i += 1) {
       clock.advance(10_000);
@@ -124,13 +124,13 @@ describe('a run that fails', () => {
   it('goes to onError; the run owed and later ones still happen', async () => {
     const { scheduler, end, starts, reports, errors } = setUp();
     const broken = new Error('no probe');
-    scheduler.now();
-    scheduler.now();
+    void scheduler.now();
+    void scheduler.now();
     await end(broken);
     expect(errors).toEqual([broken]);
     expect(starts).toHaveLength(2);
     await end();
-    scheduler.now();
+    void scheduler.now();
     await end();
     expect(reports).toEqual([2, 3]);
     expect(errors).toHaveLength(1);
@@ -146,7 +146,7 @@ describe('a run that fails', () => {
   ])('so does %s', async (_what, over) => {
     const { scheduler, end, errors, going } = setUp(over);
     for (const expected of [1, 2]) {
-      scheduler.now();
+      void scheduler.now();
       if (going.length > 0) await end(); // oxlint-disable-line no-await-in-loop -- one run at a time
       await allMicrotasks(); // oxlint-disable-line no-await-in-loop -- one run at a time
       expect(errors).toEqual(Array.from({ length: expected }, () => broken));
@@ -161,11 +161,132 @@ it('an onReport that throws does not drop the run owed', async () => {
       throw new Error('gone');
     },
   });
-  scheduler.now();
-  scheduler.now();
+  void scheduler.now();
+  void scheduler.now();
   await end();
   expect(errors).toHaveLength(1);
   expect(starts).toHaveLength(2);
+});
+
+/** Where a request stands: 'waiting', then its report's seq, or undefined for no report. */
+function watch(asked: Promise<VerificationReport | undefined>) {
+  const seen: { at: unknown } = { at: 'waiting' };
+  void asked.then((report) => {
+    seen.at = report?.seq;
+  });
+  return seen;
+}
+
+// Controller decision 40 (U3.1.2): `cpg.verify` resolves with the report of the run it led to.
+describe('what now resolves with', () => {
+  it('the report of the run it starts, when that run ends', async () => {
+    const { scheduler, end, reports } = setUp();
+    const asked = watch(scheduler.now());
+    await allMicrotasks();
+    expect([asked.at, reports]).toEqual(['waiting', []]);
+    await end();
+    expect([asked.at, reports]).toEqual([1, [1]]);
+  });
+
+  it.each<[string, Step[]]>([
+    ['one it started', ['now']],
+    ['one a change started', ['changed', 500]],
+    ['one a change started, with another owed to a change', ['changed', 500, 'changed', 500]],
+  ])('in a run (%s): the one run it leads to, shared', async (_what, script) => {
+    const { clock, scheduler, end, starts } = setUp();
+    for (const step of script) {
+      if (typeof step === 'number') clock.advance(step);
+      else if (step !== 'end') void scheduler[step]();
+    }
+    const asked = [scheduler.now(), scheduler.now()].map(watch);
+    scheduler.changed();
+    await end();
+    expect(asked.map(({ at }) => at)).toEqual(['waiting', 'waiting']);
+    const late = watch(scheduler.now());
+    await end();
+    expect(asked.map(({ at }) => at)).toEqual([2, 2]);
+    expect(late.at).toBe('waiting');
+    await end();
+    expect(late.at).toBe(3);
+    expect(starts).toHaveLength(3);
+  });
+
+  it('in place of a pending run: the report of the run at once', async () => {
+    const { clock, scheduler, end, starts } = setUp();
+    scheduler.changed();
+    clock.advance(499);
+    const asked = watch(scheduler.now());
+    await end();
+    expect(asked.at).toBe(1);
+    clock.advance(10_000);
+    expect(starts).toEqual([499]);
+  });
+
+  it('undefined for a run that throws, whatever came before, and the report of the one owed', async () => {
+    const { scheduler, end } = setUp();
+    // Round two (review 1): an earlier run's report is not this one's.
+    const before = watch(scheduler.now());
+    await end();
+    const asked = [scheduler.now(), scheduler.now()].map(watch);
+    await end(new Error('no probe'));
+    expect([before, ...asked].map(({ at }) => at)).toEqual([1, undefined, 'waiting']);
+    await end();
+    expect(asked.map(({ at }) => at)).toEqual([undefined, 3]);
+  });
+
+  it("undefined for a verify that throws before it returns, then the next one's report", async () => {
+    let broken = true;
+    const report: VerificationReport = { epoch: 1, seq: 7, checks: [], state: 'pass' };
+    const { scheduler } = setUp({
+      verify: () => {
+        if (broken) throw new Error('gone');
+        return Promise.resolve(report);
+      },
+    });
+    await expect(scheduler.now()).resolves.toBeUndefined();
+    broken = false;
+    await expect(scheduler.now()).resolves.toBe(report);
+  });
+
+  // Post-implementation: closes sabotage survivor "a request whose owed run has no report never settles".
+  it.each([
+    ['throws', new Error('no probe')],
+    ['is going at dispose', undefined],
+  ])('undefined, not a wait without end, when the run owed %s', async (_what, error) => {
+    const { scheduler, end } = setUp();
+    const asked = [scheduler.now(), scheduler.now(), scheduler.now()].map(watch);
+    await end();
+    if (error === undefined) scheduler.dispose();
+    await end(error);
+    expect(asked.map(({ at }) => at)).toEqual([1, undefined, undefined]);
+  });
+
+  it('the finished report, whatever onReport throws', async () => {
+    const { scheduler, end, errors } = setUp({
+      onReport: () => {
+        throw new Error('no status bar');
+      },
+    });
+    const asked = watch(scheduler.now());
+    await end();
+    expect([asked.at, errors.length]).toEqual([1, 1]);
+  });
+
+  it.each([undefined, new Error('late')])(
+    'undefined after dispose: for the run going (error: %s), for the one owed, and for a new request',
+    async (error) => {
+      const { scheduler, end, starts } = setUp();
+      const before = watch(scheduler.now());
+      await end();
+      const asked = [scheduler.now(), scheduler.now()].map(watch);
+      scheduler.dispose();
+      const late = watch(scheduler.now());
+      await end(error);
+      const after = [...asked, late].map(({ at }) => at);
+      expect([before.at, ...after]).toEqual([1, undefined, undefined, undefined]);
+      expect(starts).toEqual([0, 0]);
+    },
+  );
 });
 
 describe('dispose', () => {
@@ -175,7 +296,7 @@ describe('dispose', () => {
     scheduler.dispose();
     expect(clock.pending).toBe(0);
     scheduler.changed();
-    scheduler.now();
+    void scheduler.now();
     scheduler.dispose();
     clock.advance(10_000);
     expect(starts).toEqual([]);
@@ -196,8 +317,8 @@ describe('dispose', () => {
     'a run that ends after it (error: %s) reports nothing, and the one owed never starts',
     async (error) => {
       const { scheduler, end, starts, reports, errors } = setUp();
-      scheduler.now();
-      scheduler.now();
+      void scheduler.now();
+      void scheduler.now();
       scheduler.dispose();
       await end(error);
       expect(starts).toEqual([0]);

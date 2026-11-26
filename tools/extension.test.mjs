@@ -437,6 +437,25 @@ describe('verify in the editor', () => {
     expect([status.text, seen.diagnostics.size]).toEqual(['$(question) CPG', 0]);
   });
 
+  // Controller decision 40: the one thing a host test reads.
+  it('cpg.verify resolves with the finished report, or undefined with nothing to judge', async () => {
+    const { seen, run } = await opened();
+    writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
+    const report = await run('cpg.verify');
+    expect(report.checks.map(({ id, state }) => `${id} ${state}`)).toEqual([
+      'filesystem-reconciliation pass',
+      'identity-invariants unavailable',
+      'id-uniqueness pass',
+      'render-reconciliation pass',
+      'revision-reconciliation fail',
+      'resolution-health unavailable',
+    ]);
+    // The editor already shows it.
+    expect([...seen.diagnostics.keys()]).toEqual([join(root, 'a.ts')]);
+    const nothing = activate(null);
+    expect(await nothing.run('cpg.verify')).toBeUndefined();
+  });
+
   it('walks what the walker walks: the same files, through vscode.workspace.fs', async () => {
     // Round two (review a1): a file over the cap is only left out by the editor's own stat.
     writeFileSync(

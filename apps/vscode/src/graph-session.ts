@@ -107,12 +107,13 @@ export class GraphSession {
 
   /**
    * `cpg.verify`: judges the graph held now, without indexing. With no graph yet it indexes first, opens
-   * no panel, and judges that graph; when that index brings none, nothing is judged. Resolves when
-   * the run has been asked for.
+   * no panel, and judges that graph; when that index brings none, nothing is judged. Resolves with the
+   * finished run's report (VerifyScheduler.now), or undefined when there is nothing to judge, the run threw,
+   * or the extension was deactivated (controller decision 40).
    */
-  async verify(): Promise<void> {
+  async verify(): Promise<VerificationReport | undefined> {
     if (this.judge === undefined) await this.index();
-    this.judge?.scheduler.now();
+    return this.judge?.scheduler.now();
   }
 
   /** The editor's theme changed. */

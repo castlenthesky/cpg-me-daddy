@@ -43,6 +43,8 @@ Then press F5 in VS Code to launch the Extension Development Host, and run **CPG
 | `bun run test`              | vitest (unit, property, type tests)                                                                              |
 | `bun run test:coverage`     | vitest with coverage thresholds                                                                                  |
 | `bun run test:mutation`     | Stryker mutation testing (slow, not in `check`)                                                                  |
+| `bun run test:vscode-host`  | the host tests inside VS Code, headless on Linux (`08-verification.md` §7; not in `check`)                       |
+| `bun run spike:vscode-host` | the panel's render-leg and postMessage spikes inside VS Code (§7; not in `check`)                                |
 | `bun run clean`             | SAFE FULL RESET: out, dist, tsbuildinfo, turbo, coverage, reports, stryker                                       |
 | `bun run compile` / `watch` | `tsc -b`, then the page bundle (F5's build task) / `tsc -b -w`                                                   |
 | `bun run changeset`         | record a semver change for a package                                                                             |
