@@ -13,8 +13,22 @@ export { filesystemTier } from './walker/filesystem-tier';
 export type { FilesystemTier } from './walker/filesystem-tier';
 export { createEngine } from './engine';
 export type { EngineConfig, EngineDeps, EngineSink } from './engine';
-export { renderReconciliation, worstState } from './verify';
-export type { RenderObservation, RenderReconciliationInput } from './verify';
+export {
+  filesystemReconciliation,
+  idUniqueness,
+  renderReconciliation,
+  revisionReconciliation,
+  unavailableCheck,
+  worstState,
+} from './verify';
+export type {
+  AdmittedPath,
+  AdmittedRevision,
+  GraphFile,
+  GraphRevision,
+  RenderObservation,
+  RenderReconciliationInput,
+} from './verify';
 export type * from './port';
 export {
   CONFIG_DEFAULTS,

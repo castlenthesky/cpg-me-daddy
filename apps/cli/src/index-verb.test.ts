@@ -371,7 +371,11 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
       'a file with vscode: true',
       [],
       'version: 1\nconsumers: { vscode: true }\n',
-      ['consumers.vscode true', 'cpg.config.yaml', 'U3'],
+      [
+        'consumers.vscode true',
+        'cpg.config.yaml',
+        'the VS Code extension turns this on itself; nothing in the CLI does',
+      ],
     ],
   ] as const)(
     '%s: exit 2 "not built yet", naming the switch and its source; no engine, no connect',
@@ -389,6 +393,18 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
       expect(f.connects()).toBe(0);
     },
   );
+
+  // Decision 25: the panel is the extension's own, so the refusal says who turns the switch on and
+  // no longer says the panel is unbuilt (exit code 2 and the provenance stay).
+  it('a file with vscode: true: the refusal names the extension, not the panel or a unit', async () => {
+    const root = await workspace('version: 1\nconsumers: { vscode: true }\n');
+    const r = await cli(['index', root], fakeEngine().engine);
+    expect(r.code).toBe(EXIT.USAGE);
+    // Round two (review d): the whole line, so no random temp suffix can match a fragment.
+    expect(r.stderr).toEqual([
+      `cpg: not built yet: consumers.vscode true from file ${join(root, 'cpg.config.yaml')} (the VS Code extension turns this on itself; nothing in the CLI does)`,
+    ]);
+  });
 
   it('every switch that is not built is named, each with its own source', async () => {
     const root = await workspace('version: 1\nconsumers: { vscode: true }\n');

@@ -331,6 +331,48 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     await l.done;
   });
 
+  // Decision 25 (stop-list 72): the CLI compares against the payload it sent. A page that received
+  // less and reports what it received honestly must not pass.
+  it('a page that received a truncated payload and says so fails render-reconciliation', async () => {
+    const l = live(['inspect', await payloadFile(envelope(PAYLOAD))]);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    l.inspector.report(4, { payloadNodeCount: 1, renderedNodeCount: 1, renderedEdgeCount: 0 });
+    await until(() => l.inspector.sent.length >= 3, 'the fail');
+    expect(renderAt(l.inspector, 2)).toMatchObject({
+      state: 'fail',
+      observed: 1,
+      expected: 2,
+      detail: '1 of 2 payload nodes drawn',
+    });
+    expect(l.io.stderr).toContain('cpg: render-reconciliation fail: 1 of 2 payload nodes drawn');
+    l.abort();
+    await l.done;
+  });
+
+  // Round two (review a4): the sent count is payload.nodes.length, not the number of distinct ids.
+  it('a duplicate id: a page reporting the distinct count fails (3 sent, 2 drawn)', async () => {
+    const dup = { ...PAYLOAD, nodes: [...PAYLOAD.nodes, { id: 'f', type: 'FILE' }] };
+    const l = live(['inspect', await payloadFile(envelope(dup))]);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    l.inspector.report(4, { payloadNodeCount: 2, renderedNodeCount: 2, droppedNodeIds: [] });
+    await until(() => l.inspector.sent.length >= 3, 'the fail');
+    expect(renderAt(l.inspector, 2)).toMatchObject({ state: 'fail', observed: 2, expected: 3 });
+    l.abort();
+    await l.done;
+  });
+
+  it('cpg index --inspect uses the indexed payload count: a page reporting another count still fails', async () => {
+    const root = await workspace();
+    const l = live(['index', root, '--inspect']);
+    await until(() => l.inspector.sent.length >= 2, 'the verification');
+    // 3 nodes sent; the page claims the payload had 1 and drew 1
+    l.inspector.report(-1, { payloadNodeCount: 1, renderedNodeCount: 1, renderedEdgeCount: 0 });
+    await until(() => l.inspector.sent.length >= 3, 'the fail');
+    expect(renderAt(l.inspector, 2)).toMatchObject({ state: 'fail', observed: 1, expected: 3 });
+    l.abort();
+    await l.done;
+  });
+
   it('a duplicate id is not refused: it reaches the page and fails render-reconciliation (I-10)', async () => {
     const dup = { ...PAYLOAD, nodes: [...PAYLOAD.nodes, { id: 'f', type: 'FILE' }] };
     const l = live(['inspect', await payloadFile(envelope(dup))]);
