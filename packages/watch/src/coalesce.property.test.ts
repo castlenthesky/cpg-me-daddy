@@ -165,9 +165,22 @@ describe('coalesce + flushBatch against a consumer', () => {
   // KNOWN GAP, outside the spec: C-WATCH orders moved first but not moves among themselves, so a
   // path vacated by one move and refilled by another in the same window can be applied in the wrong
   // order. `mv a.ts c.ts; mv b.ts a.ts` flushes [a.ts<-b.ts, c.ts<-a.ts]: the second move carries the
-  // refilled a.ts away. Drop `.fails` when moves are ordered.
+  // refilled a.ts away. Deferred by ND-11 until a backend reports native moves (BMO-131); drop `.fails`
+  // when moves are ordered.
   it.fails('KNOWN GAP: a path vacated by a move and refilled by another move', () => {
     const events = [ev('moved', 'c.ts', 'a.ts'), ev('moved', 'a.ts', 'b.ts')];
+    expect(consume(new Set(['a.ts', 'b.ts']), events)).toEqual(['a.ts', 'c.ts']);
+  });
+
+  // ND-11 (C-WATCH rename_pairing): renames are paired after coalesce, so with parcel (moveEvents
+  // 'none') the same chain reaches coalesce as deletes and creates, and the consumer ends up right.
+  it('the same chain as deletes and creates, the shape a moveEvents none backend sends, loses no path', () => {
+    const events = [
+      ev('deleted', 'a.ts'),
+      ev('created', 'c.ts'),
+      ev('deleted', 'b.ts'),
+      ev('created', 'a.ts'),
+    ];
     expect(consume(new Set(['a.ts', 'b.ts']), events)).toEqual(['a.ts', 'c.ts']);
   });
 });

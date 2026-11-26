@@ -441,7 +441,7 @@ milestones:
             title: Port the 667 lines of watch tests first, then the code they cover
             epic: E-FRESH
             acceptance:
-              - "debounce/normalize/watch-workspace tests ported to vitest and red; then debounce (drop the dead `now`), normalize (rename pairing by content hash, re-filter with the walker's matcher), parcel-backend (dynamic import), sink, queue (SerialQueue + withRetry, NEW tests) ported and green"
+              - "debounce/normalize/watch-workspace tests ported to vitest and red; then debounce (drop the dead `now`), normalize (rename pairing by content hash AFTER coalesce, on the flushed batch (C-WATCH rename_pairing, ND-11), re-filter with the walker's matcher), parcel-backend (dynamic import), sink, queue (SerialQueue + withRetry, NEW tests) ported and green"
             port_from: ["e45574f:packages/engine/test/unit/watch/*.test.ts", "e45574f:packages/engine/src/watch/*.ts"]
             lessons: [L-30, L-14]
           - id: U4.1.2
@@ -450,7 +450,7 @@ milestones:
             acceptance:
               - "coalesce is a pure exported function implementing the 20-cell table (05-contracts C-WATCH.merge_table) with one test per cell; flushBatch orders moved < deleted < changed < created, children-first deletes, parents-first creates, total under permutation"
               - "WatchSession: trailingMs 100 / ceilingMs 500 defaults, injectable timers (zero real sleeps), seq from 0 no gaps, at most one batch in flight, onDegraded with paths, clock.firstEventAt/settledAt on every batch, revision_id hashed once per created/changed file through the injected FilesystemProbe"
-              - "the discovery ancestor-rescan idea (WorkspaceGraphIndex.applyChange) is used for directory events when directoryEvents is 'none'"
+              - "every directory create triggers a subtree walk whose finds go through coalesce, whatever directoryEvents says (INV-5, OQ-10, ND-11); the discovery ancestor-rescan idea (WorkspaceGraphIndex.applyChange) is used for directory events when directoryEvents is 'none'"
             resolves: [CS-10, CS-4]
             lessons: [L-14, L-15, L-16]
           - id: U4.1.3

@@ -351,6 +351,31 @@ new_decisions:
     statement: U1's identity tests mint and round-trip a synthetic statement-level id using the `:ordinal` slot of the id rule. If the test cannot be written, the CFG tier is genuinely foreclosed and the deferral (VD-23, VD-10) must be re-argued immediately.
     rationale: Reserved names alone are theatre; an executable test is not (motion M3).
 
+  - id: ND-11
+    title: C-WATCH amendments from PR #47, rename pairing after coalesce, INV-6 restated, always walk new directories
+    decided_on: 2026-11-25
+    decided_by: owner
+    statement: >
+      (1) The three AMENDED merge rules in packages/watch/src/coalesce.ts are accepted into C-WATCH: a move
+      whose result is not a move deletes its source; a move out of a created source deletes the source; a
+      move out of a moved source deletes the middle path. (2) Renames are paired by content hash after
+      coalesce, on the flushed batch; no moved enters the pending map from a backend with moveEvents 'none'.
+      Ordering native moves among themselves is deferred (BMO-131). (3) INV-6 is restated: a backend adds no
+      coalescing beyond its declared native window (OQ-9). (4) Every directory create triggers a subtree walk,
+      whatever directoryEvents says (OQ-10, INV-5).
+    rationale: >
+      (1) The consumer property test (a consumer that knew the disk and applies the batch knows the disk
+      again) fails if any one rule is reverted; the written table was never run (BMO-97). (2) Under parcel
+      this closes the vacate-and-refill ordering gap at no cost beyond id churn in chained renames.
+      (3) @parcel/watcher merges per path inside 50 ms and cannot pass INV-6 as first written.
+      (4) inotify missed a file created right after its new parent directory in 3 of 10 trials.
+    consequences:
+      - a batch may delete a path the consumer never had; every consumer treats that as a no-op
+      - a chained or swapped rename in one window arrives as changed/deleted/created, so the moved file's id churns
+    resolves: [BMO-94, OQ-9, OQ-10]
+    reopen_when: "a backend with moveEvents 'native' is added (then BMO-131); or the consumer property is shown to pass with a rule reverted"
+    unit: U4.1.2 (rules 1-2), U4.1.1 (pairing, INV-6), U4.1.2 session (directory walk)
+
 vision_decisions:
   # 2026-09-11 session; status reconciled 2026-09-16 (LA1) and against DQ/F/ND above.
   - { id: VD-01, text: "Cypher is a hard requirement.", status: in-force, note: "Scope was narrowed to the FalkorDB tier; HO-b rank 3 restores its reach at U5." }
