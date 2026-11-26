@@ -148,6 +148,14 @@ describe('list: every entry strictly under dir, recursively', () => {
       probe.isSymlink(wp('real/link.ts')),
       probe.isSymlink(wp('real/a.ts')),
     ]).toEqual([true, true, false]);
+    // Round two (R15): listing the link itself does not follow it.
+    expect(await probe.list(wp('linked-dir'))).toEqual([]);
+
+    // Round two (R16): a later list that finds a real directory there clears isSymlink.
+    await unlink(join(root, 'linked-dir'));
+    await mkdir(join(root, 'linked-dir'));
+    await probe.list(WORKSPACE_ROOT);
+    expect(probe.isSymlink(wp('linked-dir'))).toBe(false);
   });
 
   it('a directory enters refuses is listed but not entered; enters sees every directory found', async () => {
@@ -190,6 +198,9 @@ describe('list: every entry strictly under dir, recursively', () => {
       'file open/b.ts 1',
     ]);
     expect(await probe.list(wp('locked'))).toEqual([]);
+    // Round two (R17): a path that cannot be reached (EACCES, not ENOENT) is not reported either.
+    expect(await probe.stat(wp('locked/secret.ts'))).toBeUndefined();
+    expect(await probe.digest(wp('locked/secret.ts'))).toBeUndefined();
   });
 });
 

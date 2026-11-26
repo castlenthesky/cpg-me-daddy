@@ -172,6 +172,8 @@ function backendFor(onSubscribe?: (backend: Backend) => Promise<void> | void): B
       return {
         capabilities: CAPS,
         close: async () => {
+          // Round two (R4): closing takes real time, so a close that is not awaited shows.
+          await new Promise((resolve) => setTimeout(resolve, 5));
           backend.closes += 1;
           onEvents = undefined;
           onError = undefined;
@@ -229,6 +231,7 @@ function recorder(o: RecorderOptions = {}): Recorder {
         if (o.rejects?.(ops.length) === true) throw new Error(`${id} refused`);
         const receipt = await memory.write(op);
         recorded.landed += 1;
+        o.log?.push(`${id}.landed`);
         return { ...receipt, ...o.receipt };
       },
     },
@@ -249,6 +252,8 @@ interface Run {
   readonly backend: Backend;
   readonly clock: Clock;
   readonly memory: Recorder;
+  /** `backend.closes` when the closed event was emitted (round two, R4). */
+  closesAtClosed(): number | undefined;
   abort(): void;
 }
 interface StartOptions {
@@ -278,17 +283,36 @@ async function start(root: string, o: StartOptions = {}): Promise<Run> {
   const controller = o.controller ?? new AbortController();
   controllers.push(controller);
   const events: WatchEvent[] = [];
+  let closesAtClosed: number | undefined;
   const done = engine.watch(
     { config: { root, ...o.config }, session },
     (event) => {
       events.push(event);
+      if (event.kind === 'closed') closesAtClosed = backend.closes;
       o.onEvent?.(event);
     },
     controller.signal,
   );
   runs.push(done);
-  return { root, events, done, backend, clock, memory, abort: () => controller.abort() };
+  return {
+    root,
+    events,
+    done,
+    backend,
+    clock,
+    memory,
+    closesAtClosed: () => closesAtClosed,
+    abort: () => controller.abort(),
+  };
 }
+const throwing = (): never => {
+  throw new Error('consumer broke');
+};
+/** A clock far from Date.now (round two, R12): an interval mixing the two clocks is off by 1e6. */
+const offsetNow = (): number => Date.now() + 1_000_000;
+const realDelay = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5));
+/** The real-backend case's save, with all its bytes. */
+const full = (c: NormalizedChange): boolean => c.path === 'b.ts' && c.revision_id === sha256('bee');
 
 async function until(cond: () => boolean, what: string, ms = 5000): Promise<void> {
   const deadline = Date.now() + ms;
@@ -361,13 +385,16 @@ describe('start: index, then ready (decision 60)', () => {
   it('seeds the session from the walk, so the initial batch is only what changed since, written before ready', async () => {
     const root = await tree({ 'a.ts': 'one', 'gone.ts': 'x', 'keep/k.ts': 'k', 'README.md': 'r' });
     const log: string[] = [];
+    const clock = fakeClock(5000);
     const backend = backendFor(async () => {
+      clock.tick(11);
       await writeFile(join(root, 'a.ts'), 'two');
       await writeFile(join(root, 'keep', 'new.ts'), 'fresh');
       await rm(join(root, 'gone.ts'));
     });
     const run = await start(root, {
       backend,
+      clock,
       memory: recorder({ log }),
       onEvent: (event) => log.push(`event ${event.kind}`),
     });
@@ -385,8 +412,15 @@ describe('start: index, then ready (decision 60)', () => {
       moves: [],
       removals: ['gone.ts'],
     });
-    expect(log).toEqual(['memory.write', 'memory.write', 'event ready']);
+    expect(log).toEqual([
+      'memory.write',
+      'memory.landed',
+      'memory.write',
+      'memory.landed',
+      'event ready',
+    ]);
     expect(seqs(run.events)).toEqual([0]);
+    expect(run.events[0]?.at).toBe(5011);
   });
 });
 
@@ -405,7 +439,8 @@ describe('live batches (decisions 62, 63)', () => {
         clock.tick(writeTakes);
       },
     });
-    const run = await start(root, { clock, host, memory: recorder({ log }) });
+    const memory = recorder({ log, during: realDelay });
+    const run = await start(root, { clock, host, memory });
     await ready(run);
     writeTakes = 7;
 
@@ -415,13 +450,14 @@ describe('live batches (decisions 62, 63)', () => {
       raw(root, 'created', 'src/new.ts', 5040),
       raw(root, 'created', 'notes.txt', 5030),
     );
-    clock.advance(100);
+    // The window settles at 5100; the clock then stands at 5150 while the probe and the write run.
+    clock.advance(150);
     await until(() => run.events.length === 2, 'a batch');
 
     expect(run.events[1]).toEqual({
       kind: 'batch',
       seq: 1,
-      at: 5107,
+      at: 5157,
       changes: [
         {
           kind: 'created',
@@ -441,7 +477,7 @@ describe('live batches (decisions 62, 63)', () => {
         },
       ],
       write: { nodesWritten: 2, edgesWritten: 2, statementCount: 1 },
-      latencyMs: { t0_t1: null, t1_t2: 70, t2_t3: 7, total: 77 },
+      latencyMs: { t0_t1: null, t1_t2: 70, t2_t3: 57, total: 127 },
     });
     const expectedOp = {
       kind: 'merge-filesystem',
@@ -456,7 +492,8 @@ describe('live batches (decisions 62, 63)', () => {
     };
     expect(sorted(run.memory.ops[1])).toEqual(expectedOp);
     expect(sorted(host.ops[1])).toEqual(expectedOp);
-    expect(log).toEqual(['memory.write', 'host.write', 'memory.write', 'host.write']);
+    const oneWrite = ['memory.write', 'memory.landed', 'host.write', 'host.landed'];
+    expect(log).toEqual([...oneWrite, ...oneWrite]);
     // F-1: seq lives on the envelope, never on a node.
     const { nodes } = await run.memory.store.readAll();
     expect(nodes.filter((n) => n.data !== undefined && 'seq' in n.data)).toEqual([]);
@@ -573,17 +610,19 @@ describe('live batches (decisions 62, 63)', () => {
 
 describe("admission is the walker's (decision 61)", () => {
   it('what the walk excludes never reaches the store: at start or live', async () => {
-    // src/ is a directory far over the 8-byte cap: the cap is for files only.
+    // src/ is a directory far over the 8-byte cap: the cap is for files only. include is files-only
+    // too: src/ is entered although it does not match **/*.ts (round two, R8).
     const root = await tree({
       'a.ts': 'a',
       'src/s.ts': 's',
+      'notes.md': 'n',
       'build/pre.ts': 'p',
       'big-start.ts': '123456789',
       'start.log': 'l',
     });
     // Relative targets: a 4- or 5-byte link is under the size cap, so only the symlink rule refuses it.
     await symlink('a.ts', join(root, 'link-start.ts'));
-    const config = { exclude: ['build/', '**/*.log'], maxFileSizeBytes: 8 };
+    const config = { include: ['**/*.ts'], exclude: ['build/', '**/*.log'], maxFileSizeBytes: 8 };
     const run = await start(root, { config });
     await ready(run);
     expect(run.memory.ops).toHaveLength(1);
@@ -592,9 +631,10 @@ describe("admission is the walker's (decision 61)", () => {
     await writeFile(join(root, 'x.log'), 'x');
     await writeFile(join(root, 'big.ts'), '123456789');
     await writeFile(join(root, 'ok.ts'), '12345678');
+    await writeFile(join(root, 'live.md'), 'm');
     await symlink('ok.ts', join(root, 'link.ts'));
     run.backend.fire(
-      ...['build/out.ts', 'x.log', 'big.ts', 'ok.ts', 'link.ts'].map((p) =>
+      ...['build/out.ts', 'x.log', 'big.ts', 'ok.ts', 'live.md', 'link.ts'].map((p) =>
         raw(root, 'created', p, 5001),
       ),
     );
@@ -618,18 +658,25 @@ describe('failures and warnings (decision 63)', () => {
 
     refusing = true;
     await writeFile(join(root, 'new.ts'), 'n');
-    run.backend.fire(raw(root, 'created', 'new.ts', 5001));
+    await writeFile(join(root, 'other.ts'), 'o');
+    run.backend.fire(raw(root, 'created', 'new.ts', 5001), raw(root, 'created', 'other.ts', 5002));
     run.clock.advance(100);
     await drainRetries(run.clock);
     await until(() => run.events.some((e) => e.kind === 'warning'), 'the warning');
     const warning = run.events[1];
     expect(warning?.kind === 'warning' && warning.message).toContain('new.ts');
+    expect(warning?.kind === 'warning' && warning.message).toContain('other.ts');
+    // ready at 5000, the window settled at 5100, four backoff waits of 3000 ms in all (R11).
+    expect(warning?.at).toBe(8100);
 
     refusing = false;
-    run.backend.fire(raw(root, 'changed', 'new.ts', 9000));
+    run.backend.fire(raw(root, 'changed', 'new.ts', 9000), raw(root, 'changed', 'other.ts', 9001));
     run.clock.advance(100);
     await until(() => batches(run.events).length === 1, 'the batch again');
-    expect(batches(run.events)[0]?.changes).toMatchObject([{ kind: 'created', path: 'new.ts' }]);
+    expect(batches(run.events)[0]?.changes).toMatchObject([
+      { kind: 'created', path: 'new.ts' },
+      { kind: 'created', path: 'other.ts' },
+    ]);
     expect(seqs(run.events)).toEqual([0, 1, 2]);
   });
 
@@ -676,6 +723,7 @@ describe('failures and warnings (decision 63)', () => {
         { kind: 'closed', seq: 2, at: 5000, reason: 'error' },
       ]);
       expect(run.backend.closes).toBe(1);
+      expect(run.closesAtClosed()).toBe(1);
       await writeFile(join(root, 'late.ts'), 'l');
       run.backend.fire(raw(root, 'created', 'late.ts', 6000));
       run.clock.advance(1000);
@@ -685,9 +733,16 @@ describe('failures and warnings (decision 63)', () => {
     },
   );
 
-  it('a fatal error during start is one error, then closed', async () => {
+  it.each([
+    ['reported through onError alone', false],
+    // Round two (R5): parcel-backend.ts reports the WatchError, then rejects subscribe with the cause.
+    ['reported, then subscribe rejects with the raw cause, as parcel does', true],
+  ])('a fatal error during start, %s, is one error, then closed', async (_name, rethrow) => {
     const root = await tree({ 'a.ts': 'a' });
-    const backend = backendFor((b) => b.fail(failure('watch-limit', true)));
+    const backend = backendFor((b) => {
+      b.fail(failure('watch-limit', true));
+      if (rethrow) throw new Error('Bad file descriptor');
+    });
     const run = await start(root, { backend });
     await run.done;
     expect(run.events).toEqual([
@@ -791,18 +846,37 @@ describe('failures and warnings (decision 63)', () => {
   });
 });
 
+// Round two (R13): a throw on ready (inside the initial batch) or on closed is contained too.
+it('an onEvent that throws on every event: ready once, the batch once, closed, and watch() resolves', async () => {
+  const root = await tree({ 'a.ts': 'a' });
+  const run = await start(root, { onEvent: throwing });
+  await ready(run);
+  await writeFile(join(root, 'one.ts'), '1');
+  run.backend.fire(raw(root, 'created', 'one.ts', 5001));
+  run.clock.advance(100);
+  await until(() => batches(run.events).length === 1, 'the batch');
+  run.clock.advance(5000);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  run.abort();
+  await run.done;
+  expect(kinds(run.events)).toEqual(['ready', 'batch', 'closed']);
+  expect(run.memory.ops).toHaveLength(2);
+});
+
 describe('stop (decision 63)', () => {
   it('abort closes the session, then closed { signal } is last, and watch() resolves after it', async () => {
     const root = await tree({ 'a.ts': 'a' });
     const run = await start(root);
     await ready(run);
+    run.clock.tick(42);
     run.abort();
     await run.done;
     expect(run.events).toEqual([
       expect.objectContaining({ kind: 'ready', seq: 0 }),
-      { kind: 'closed', seq: 1, at: 5000, reason: 'signal' },
+      { kind: 'closed', seq: 1, at: 5042, reason: 'signal' },
     ]);
     expect(run.backend.closes).toBe(1);
+    expect(run.closesAtClosed()).toBe(1);
 
     await writeFile(join(root, 'late.ts'), 'l');
     run.backend.fire(raw(root, 'created', 'late.ts', 6000));
@@ -823,6 +897,18 @@ describe('stop (decision 63)', () => {
     expect(run.backend.subscribed).toEqual([]);
   });
 
+  // Round two (R7): the signal fires while index() writes, after its own pre-write check.
+  it('an abort during the index: closed { signal }, and nothing subscribes', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const controller = new AbortController();
+    const host = recorder({ id: 'host', during: () => controller.abort() });
+    const run = await start(root, { controller, host });
+    await run.done;
+    expect(run.events).toEqual([{ kind: 'closed', seq: 0, at: 5000, reason: 'signal' }]);
+    expect(host.ops).toHaveLength(1);
+    expect(run.backend.subscribed).toEqual([]);
+  });
+
   it('an abort during start: no ready; the session is closed once it starts, then closed { signal }', async () => {
     const root = await tree({ 'a.ts': 'a' });
     const controller = new AbortController();
@@ -831,6 +917,7 @@ describe('stop (decision 63)', () => {
     await run.done;
     expect(run.events).toEqual([{ kind: 'closed', seq: 0, at: 5000, reason: 'signal' }]);
     expect(run.backend.closes).toBe(1);
+    expect(run.closesAtClosed()).toBe(1);
   });
 
   it('a write in flight is not awaited, and its batch never follows closed', async () => {
@@ -946,20 +1033,23 @@ describe('toBatchOp (decision 62)', () => {
       moves: [],
       removals: [],
     });
-    const bare: NormalizedChange = {
-      kind: 'created',
-      entry: 'file',
-      path: wp('a.ts'),
-      observedAt: 1,
-    };
-    expect(() => toBatchOp([bare], languageOf)).toThrow(/revision_id/);
+    // Round two (R10): created, changed and moved alike.
+    const bare: NormalizedChange[] = [
+      { kind: 'created', entry: 'file', path: wp('a.ts'), observedAt: 1 },
+      { kind: 'changed', entry: 'file', path: wp('a.ts'), observedAt: 1 },
+      { kind: 'moved', entry: 'file', path: wp('a.ts'), fromPath: wp('b.ts'), observedAt: 1 },
+    ];
+    for (const change of bare) {
+      expect(() => toBatchOp([change], languageOf)).toThrow(/revision_id/);
+    }
   });
 });
 
 describe('the default backend is @parcel/watcher', () => {
   it('a real save on a real disk arrives as a batch, then abort closes', async () => {
     const root = await tree({ 'a.ts': 'a' });
-    const engine = createEngine({ version: '1', consumers: HEADLESS });
+    const startedAt = offsetNow();
+    const engine = createEngine({ version: '1', consumers: HEADLESS }, { now: offsetNow });
     const session = await engine.connect(TARGET, { readOnly: false });
     const controller = new AbortController();
     controllers.push(controller);
@@ -974,18 +1064,21 @@ describe('the default backend is @parcel/watcher', () => {
     expect(events[0]?.kind).toBe('ready');
 
     await writeFile(join(root, 'b.ts'), 'bee');
-    const saved = (): boolean =>
-      batches(events).some((b) => b.changes.some((c) => c.path === 'b.ts'));
+    // Round two (R14): a create and its write may arrive in two windows; wait for the bytes.
+    const saved = (): boolean => batches(events).some((b) => b.changes.some(full));
     await until(saved, 'the save', 15_000);
     controller.abort();
     await done;
 
     expect(events.at(-1)).toMatchObject({ kind: 'closed', reason: 'signal' });
-    const batch = batches(events).find((b) => b.changes.some((c) => c.path === 'b.ts'));
-    expect(batch?.changes).toContainEqual(
-      expect.objectContaining({ path: 'b.ts', revision_id: sha256('bee') }),
-    );
+    const batch = batches(events).find((b) => b.changes.some(full));
     expect(batch?.latencyMs.t0_t1).toBeNull();
+    // One clock end to end (R12): parcel's observedAt is the engine's now, not Date.now.
+    expect(events[0]?.at).toBeGreaterThanOrEqual(startedAt);
+    expect(batch?.latencyMs.t1_t2).toBeGreaterThanOrEqual(0);
+    expect(batch?.latencyMs.t1_t2).toBeLessThan(10_000);
+    expect(batch?.latencyMs.t2_t3).toBeGreaterThanOrEqual(0);
+    expect(batch?.latencyMs.t2_t3).toBeLessThan(10_000);
     expect(batch?.latencyMs.total).toBe(
       (batch?.latencyMs.t1_t2 ?? 0) + (batch?.latencyMs.t2_t3 ?? 0),
     );

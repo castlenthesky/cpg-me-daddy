@@ -32,6 +32,9 @@ describe('check: the verdict for one entry the walk reached', () => {
     ['src/a.ts', 'file', MIB2, 'admitted'],
     ['src/a.ts', 'file', MIB2 + 1, 'too-large'],
     ['src/types.d.ts', 'file', MIB2 + 1, 'excluded'],
+    // Round two (R18): a symlink is a symlink, and an excluded file excluded, whatever its size.
+    ['src/a.ts', 'symlink', MIB2 + 1, 'symlink'],
+    ['node_modules/x.ts', 'file', MIB2 + 1, 'excluded'],
   ])('defaults: %s as %s (%s bytes) is %s', (path, entry, size, verdict) => {
     expect(defaults.check(wp(path), entry, size)).toBe(verdict);
   });
@@ -45,6 +48,8 @@ describe('check: the verdict for one entry the walk reached', () => {
       admission.check(wp('src/debug.log'), 'file'),
       admission.check(wp('src/node_modules/x.ts'), 'file'),
       admission.check(wp('node_modules'), 'directory'),
+      // Round two (R18): include refuses before the size is looked at.
+      admission.check(wp('lib/a.ts'), 'file', MIB2 + 1),
     ];
     expect(verdicts).toEqual([
       'admitted',
@@ -53,6 +58,7 @@ describe('check: the verdict for one entry the walk reached', () => {
       'excluded',
       'admitted',
       'admitted',
+      'excluded',
     ]);
   });
 
@@ -80,6 +86,18 @@ describe('check: the verdict for one entry the walk reached', () => {
 });
 
 describe('admits: check, plus an excluded directory is never entered', () => {
+  // Round two (R19): include reaches admits, for files only.
+  it('applies include to files and never to a directory', () => {
+    const admission = createAdmission({ include: ['src/**'] });
+    const verdicts = [
+      admission.admits(wp('lib/a.ts'), 'file'),
+      admission.admits(wp('lib/src/a.ts'), 'file'),
+      admission.admits(wp('lib'), 'directory'),
+      admission.admits(wp('src/a.ts'), 'file'),
+    ];
+    expect(verdicts).toEqual([false, true, true, true]);
+  });
+
   it.each<[readonly string[], string, AdmissionEntry, number | undefined, boolean]>([
     [['build/'], 'build/out.ts', 'file', undefined, false],
     [['build/'], 'build/deep/out.ts', 'file', 3, false],
