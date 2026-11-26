@@ -155,6 +155,7 @@ contracts:
       export type BatchCause = 'initial' | 'live' | 'rescan';
       export interface ChangeBatch { readonly seq: number /* per session, from 0, no gaps */; readonly cause: BatchCause; readonly changes: readonly NormalizedChange[]; readonly clock: { firstEventAt: number /* T1 */; settledAt: number /* T2 */ }; }
       export interface WatchSink { onBatch(batch: ChangeBatch): Promise<void>; }   // awaited; rejection means NOT delivered
+      export interface TimerApi { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(handle: unknown): void; }   // U4.1.1 (decision 45): the global timers satisfy it; tests pass a fake clock
       export interface WatchSessionOptions { readonly root: string; readonly backend: WatchBackend; readonly sink: WatchSink; readonly trailingMs?: number /* 100 */; readonly ceilingMs?: number /* 500 */; readonly timers?: TimerApi; readonly onDegraded?: (paths: readonly string[], error: WatchError) => void; }
       export function coalesce(pending: ReadonlyMap<string, PendingChange>, incoming: NormalizedChange): readonly CoalesceOp[];   // pure; 20 cells
       export function flushBatch(pending: ReadonlyMap<string, PendingChange>): readonly NormalizedChange[];                      // total order: moved < deleted < changed < created; deletes children-first, creates parents-first

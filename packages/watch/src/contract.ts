@@ -1,6 +1,7 @@
 // C-WATCH layer A plus the seam's outbound vocabulary, types only. Layer B's coalesce/flushBatch are
-// in coalesce.ts; the session and the parcel / fake backends land in U4; the engine's cold-index walk
-// emits `cause: 'initial'` batches in U2a.
+// in coalesce.ts, its debounce, pairing and delivery queue in debounce.ts, normalize.ts and queue.ts;
+// the session and the fake backend land in U4.1.2; the engine's cold-index walk emits
+// `cause: 'initial'` batches in U2a.
 //
 // Types only, enforced by check-deps rule `contract-types-only`: the only import is a statement-level
 // `import type` from @cpg/model, and the emitted JS is empty.
@@ -97,4 +98,13 @@ export interface ChangeBatch {
 /** Awaited; a rejection means the batch was NOT delivered. */
 export interface WatchSink {
   onBatch(batch: ChangeBatch): Promise<void>;
+}
+
+/**
+ * The timers layer B schedules with (C-WATCH WatchSessionOptions.timers). The global
+ * setTimeout/clearTimeout satisfy it; a test passes a fake clock, so no test sleeps.
+ */
+export interface TimerApi {
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
 }

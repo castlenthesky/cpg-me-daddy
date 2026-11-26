@@ -1,6 +1,6 @@
 # packages/watch: agent notes
 
-Status: `src/contract.ts` is C-WATCH layer A plus the outbound `NormalizedChange`/`ChangeBatch`/`WatchSink`, types only. REAL: `src/parcel-backend.ts`, the @parcel/watcher backend, and `src/coalesce.ts`: `coalesce` (the merge table) and `flushBatch` (the batch order); each departure from 05-contracts is marked AMENDED there. SEAT: the WatchSession until U4.1.2 completes; see `docs/outline/07-milestones.yaml`.
+Status: `src/contract.ts` is C-WATCH layer A plus the outbound `NormalizedChange`/`ChangeBatch`/`WatchSink`, types only. REAL: `src/parcel-backend.ts`, the @parcel/watcher backend; `src/coalesce.ts`: `coalesce` (the merge table) and `flushBatch` (the batch order), each departure from 05-contracts marked AMENDED there; `src/debounce.ts` (`ChangeBatcher`, the trailing/ceiling window, generic: it keys and merges nothing), `src/normalize.ts` (`isExcludedPath` over an injected `admit`, `pairFileRenames` on the flushed batch) and `src/queue.ts` (`SerialQueue`, `withRetry`). Timers come in as `TimerApi` (`contract.ts`). SEAT: the WatchSession until U4.1.2 completes; see `docs/outline/07-milestones.yaml`.
 Layout and rules: `docs/outline/03-architecture.md` §2. Root `AGENTS.md` applies.
 
 - No host SDK. The producer watches the disk itself; a host never feeds it events.
