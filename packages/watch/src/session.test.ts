@@ -392,14 +392,19 @@ describe('createWatchSession: the archive cases', () => {
   it('a deleted path never known is dropped: an atomic save leaves only its changed (decision 58)', async () => {
     const h = await start({}, { disk: { 'a.ts': 'v1' } });
     h.disk.write('a.ts', 'v2');
+    h.disk.write('x.ts', 'x');
     h.emit(
       ['created', 'a.ts.tmp'],
       ['deleted', 'a.ts.tmp'],
       ['created', 'a.ts'],
       ['deleted', 'b.ts'],
+      // Round two: dropped before coalesce, so the delete cannot cancel the create before it.
+      ['created', 'x.ts'],
+      ['deleted', 'x.ts'],
     );
     await h.wait();
-    expect(h.sink.delivered).toEqual([live(1, [file('changed', 'a.ts', 'v2')], 0, 100)]);
+    const changes = [file('changed', 'a.ts', 'v2'), file('created', 'x.ts', 'x')];
+    expect(h.sink.delivered).toEqual([live(1, changes, 0, 100)]);
   });
 
   it('a delete and a create with the known revision become one moved', async () => {
@@ -1028,7 +1033,10 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
     'rejects root-missing, fatal, when the root is %s, and never subscribes',
     async (_case, setup) => {
       const h = open({}, setup);
-      await expect(h.ready).rejects.toMatchObject({
+      const error = await h.ready.catch((reason: unknown) => reason);
+      // Round two: an Error that carries the WatchError fields, not a plain object (S21-9).
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
         code: 'root-missing',
         fatal: true,
         rescanRequired: false,
@@ -1115,8 +1123,16 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
 
   it('with a seed, seq 0 is the diff; a vanished directory is one delete; the unchanged is absent (decision 54)', async () => {
     const seed = seedOf(
-      { 'same.ts': 'S', 'edit.ts': 'E1', 'gone.ts': 'G', 'old/x.ts': 'X', 'old/deep/y.ts': 'Y' },
-      ['old', 'old/deep', 'kept'],
+      // Round two: old/deep before old, and old.ts beside it.
+      {
+        'same.ts': 'S',
+        'edit.ts': 'E1',
+        'gone.ts': 'G',
+        'old.ts': 'O',
+        'old/x.ts': 'X',
+        'old/deep/y.ts': 'Y',
+      },
+      ['old/deep', 'old', 'kept'],
     );
     const disk = { 'same.ts': 'S', 'edit.ts': 'E2', 'new.ts': 'N', kept: null, fresh: null };
     const h = await start({ seed }, { disk });
@@ -1124,6 +1140,7 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
       initial([
         gone('file', 'gone.ts'),
         gone('directory', 'old'),
+        gone('file', 'old.ts'),
         file('changed', 'edit.ts', 'E2'),
         dir('created', 'fresh'),
         file('created', 'new.ts', 'N'),
@@ -1131,6 +1148,7 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
     ]);
     // Known state is now the disk, so none of these is news.
     h.emit(
+      ['changed', 'same.ts'],
       ['changed', 'edit.ts'],
       ['changed', 'new.ts'],
       ['deleted', 'gone.ts'],
@@ -1150,12 +1168,15 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
       node_modules: null,
       'node_modules/pkg': null,
       'node_modules/pkg/i.ts': 'x',
+      'node_modules2/a.ts': 'n',
       'big.ts': 'x'.repeat(50),
       'ok.ts': 'ok',
     };
     const h = await start({ admit }, { disk });
-    expect(h.initial).toEqual([initial([file('created', 'ok.ts', 'ok')])]);
-    expect(h.log.filter((call) => call.startsWith('digest'))).toEqual(['digest ok.ts']);
+    const changes = [file('created', 'ok.ts', 'ok'), file('created', 'node_modules2/a.ts', 'n')];
+    expect(h.initial).toEqual([initial(changes)]);
+    const digests = h.log.filter((call) => call.startsWith('digest'));
+    expect(digests.toSorted()).toEqual(['digest node_modules2/a.ts', 'digest ok.ts']);
     const calls = admit.mock.calls.map(([path, entry, size]) => `${path} ${entry} ${size}`);
     expect(calls).toEqual(
       expect.arrayContaining(['node_modules directory 64', 'big.ts file 50', 'ok.ts file 2']),
@@ -1188,20 +1209,96 @@ describe('createWatchSession: the start and the initial batch (decisions 53-55, 
     expect(h.degraded).toEqual([]);
   });
 
-  it('a fatal error before seq 0 is confirmed: the subscription closes, createWatchSession rejects with it (S21-3)', async () => {
+  it('a fatal error during the walk: once the subscription has closed, createWatchSession rejects with it (S21-3)', async () => {
+    const listing = deferred<Listing>();
+    const gate = deferred();
+    const h = open(
+      {},
+      {
+        prepare: ({ disk, backend }) => {
+          disk.probe.list.mockReturnValueOnce(listing.promise);
+          backend.closeGate = gate.promise;
+        },
+      },
+    );
+    let outcome: unknown = 'pending';
+    void h.ready.then(
+      () => {
+        outcome = 'resolved';
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+    await h.wait(0);
+    const fatal = { ...FATAL };
+    h.fail(fatal);
+    await h.wait(0);
+    expect(h.backend.closes).toBe(1);
+    expect(outcome).toBe('pending');
+    // Round two: it waits for the close, not for the walk, which is still pending.
+    gate.resolve();
+    await h.wait(0);
+    expect(outcome).toBe(fatal);
+    listing.resolve([]);
+    await h.wait(0);
+    expect(h.sink.calls).toEqual([]);
+    expect(h.degraded).toEqual([]);
+    expect(h.errors).toEqual([fatal]);
+  });
+
+  // Round two: part a's retry, which returns quietly after close, must not resolve seq 0.
+  it('a fatal error while seq 0 waits to retry: createWatchSession rejects with it (S21-3)', async () => {
+    const h = open();
+    h.sink.plan.push(new Error('sink down'));
+    const outcome = h.ready.catch((error: unknown) => error);
+    await h.wait(0);
+    const fatal = { ...FATAL };
+    h.fail(fatal);
+    await h.wait(200);
+    expect(await outcome).toBe(fatal);
+    expect(h.sink.calls).toHaveLength(1);
+    expect(h.degraded).toEqual([]);
+  });
+
+  // Round two, my own addition: the fatal error comes while subscribe is pending, which then resolves.
+  it('a fatal error before subscribe resolves: the subscription closes when it does; createWatchSession rejects', async () => {
+    const gate = deferred();
+    const h = open(
+      {},
+      {
+        prepare: ({ backend }) => {
+          backend.subscribeGate = gate.promise;
+        },
+      },
+    );
+    await h.wait(0);
+    const fatal = { ...FATAL };
+    h.fail(fatal);
+    gate.resolve();
+    await expect(h.ready).rejects.toBe(fatal);
+    expect(h.backend.closes).toBe(1);
+    expect(h.errors).toEqual([fatal]);
+    expect(h.disk.probe.list).not.toHaveBeenCalled();
+  });
+
+  // Round two: the walk runs inside the queue, so a window that settles during it waits.
+  it('a window that settles during the initial walk is delivered after seq 0, as seq 1 (decision 55)', async () => {
     const listing = deferred<Listing>();
     const h = open(
       {},
       { prepare: ({ disk }) => disk.probe.list.mockReturnValueOnce(listing.promise) },
     );
     await h.wait(0);
-    const fatal = { ...FATAL };
-    h.fail(fatal);
-    listing.resolve([]);
-    await expect(h.ready).rejects.toBe(fatal);
-    expect(h.backend.closes).toBe(1);
+    h.disk.write('a.ts', 'a');
+    h.emit(['created', 'a.ts']);
+    await h.wait(100);
     expect(h.sink.calls).toEqual([]);
-    expect(h.errors).toEqual([fatal]);
+    listing.resolve([]);
+    await h.ready;
+    await h.wait(0);
+    const next = live(1, [file('created', 'a.ts', 'a')], 0, 100);
+    expect(h.sink.delivered).toEqual([initial([], 0, 100), next]);
   });
 });
 
@@ -1212,7 +1309,8 @@ describe('createWatchSession: the subtree walk, the ancestor rule, unknown delet
     h.disk.mkdir('lib/sub');
     h.disk.write('lib/a.ts', 'A');
     h.disk.write('lib/sub/b.ts', 'B');
-    h.emit(['created', 'lib/a.ts', 3], ['created', 'lib', 7]);
+    // Round two: lib comes first, so a walk run inline would let lib/a.ts's own event land last.
+    h.emit(['created', 'lib', 7], ['created', 'lib/a.ts', 3]);
     await h.wait();
     // The listing is the window's last look, after its raw events; its finds carry lib's time (S21-2).
     const changes = [
@@ -1227,6 +1325,18 @@ describe('createWatchSession: the subtree walk, the ancestor rule, unknown delet
     expect(digested.toSorted()).toEqual(['lib/a.ts', 'lib/sub/b.ts']);
   });
 
+  // Round two: the finds go through coalesce and pairing, so a move into a new directory needs no raw create.
+  it('a file the walk finds pairs with a known delete into a moved (decision 56)', async () => {
+    const h = await start({}, { disk: { src: null, 'src/a.ts': 'A' } });
+    h.disk.rm('src/a.ts');
+    h.disk.mkdir('lib');
+    h.disk.write('lib/a.ts', 'A');
+    h.emit(['created', 'lib'], ['deleted', 'src/a.ts']);
+    await h.wait();
+    const changes = [moved('src/a.ts', 'lib/a.ts', 'A'), dir('created', 'lib')];
+    expect(h.sink.delivered).toEqual([live(1, changes, 0, 100)]);
+  });
+
   it('lists with directoryEvents none and on a known directory; the kind rules drop what is known', async () => {
     const disk = { lib: null, 'lib/same.ts': 'S', 'lib/edit.ts': 'E1' };
     const h = await start({}, { caps: { directoryEvents: 'none' }, disk });
@@ -1239,16 +1349,28 @@ describe('createWatchSession: the subtree walk, the ancestor rule, unknown delet
   });
 
   it('a refused directory is not listed; a refused listed directory keeps its contents out (decision 53)', async () => {
-    const h = await start({ admit: (path) => path !== 'vendor' && path !== 'lib/node_modules' });
+    // Round two: admit sees the listed size, and lib/node_modules2 is not under lib/node_modules.
+    const h = await start({
+      admit: (path, entry, sizeBytes) =>
+        path !== 'vendor' &&
+        path !== 'lib/node_modules' &&
+        (entry === 'directory' || (sizeBytes ?? 0) <= 10),
+    });
     for (const path of ['vendor', 'lib', 'lib/node_modules']) h.disk.mkdir(path);
-    for (const path of ['vendor/v.ts', 'lib/node_modules/x.ts', 'lib/a.ts'])
-      h.disk.write(path, 'x');
+    const files = ['vendor/v.ts', 'lib/node_modules/x.ts', 'lib/node_modules2/y.ts', 'lib/a.ts'];
+    for (const path of files) h.disk.write(path, 'x');
+    h.disk.write('lib/big.ts', 'x'.repeat(50));
     h.emit(['created', 'vendor'], ['created', 'lib']);
     await h.wait();
-    const changes = [dir('created', 'lib'), file('created', 'lib/a.ts', 'x')];
+    const changes = [
+      dir('created', 'lib'),
+      file('created', 'lib/a.ts', 'x'),
+      file('created', 'lib/node_modules2/y.ts', 'x'),
+    ];
     expect(h.sink.delivered).toEqual([live(1, changes, 0, 100)]);
     expect(h.disk.probe.list.mock.calls).toEqual([[wp('lib')]]);
-    expect(h.disk.probe.digest.mock.calls).toEqual([[wp('lib/a.ts')]]);
+    const digested = h.disk.probe.digest.mock.calls.map(([path]) => path);
+    expect(digested.toSorted()).toEqual(['lib/a.ts', 'lib/node_modules2/y.ts']);
   });
 
   it('a listing that rejects reaches onDegraded with the window paths (S20-3)', async () => {
@@ -1269,15 +1391,18 @@ describe('createWatchSession: the subtree walk, the ancestor rule, unknown delet
       // The disk lists p/q.ts without p, so p stays unknown; a is known.
       const h = await start({}, { caps: { directoryEvents }, disk: { a: null, 'p/q.ts': 'Q1' } });
       h.disk.write('a/b/c/f.ts', 'F');
+      h.disk.write('a/b/g.ts', 'G');
       h.disk.write('p/q.ts', 'Q2');
-      h.emit(['created', 'a/b/c/f.ts', 4], ['changed', 'p/q.ts', 4]);
+      h.emit(['created', 'a/b/c/f.ts', 9], ['created', 'a/b/g.ts', 9], ['changed', 'p/q.ts', 4]);
       await h.wait();
+      // Round two: each ancestor carries its file's observedAt; a/b, under two files, comes once.
       const changes = [
         file('changed', 'p/q.ts', 'Q2', 4),
         dir('created', 'p', 4),
-        dir('created', 'a/b', 4),
-        dir('created', 'a/b/c', 4),
-        file('created', 'a/b/c/f.ts', 'F', 4),
+        dir('created', 'a/b', 9),
+        dir('created', 'a/b/c', 9),
+        file('created', 'a/b/g.ts', 'G', 9),
+        file('created', 'a/b/c/f.ts', 'F', 9),
       ];
       expect(h.sink.delivered).toEqual([live(1, changes, 4, 100)]);
     },
@@ -1294,15 +1419,21 @@ describe('createWatchSession: the subtree walk, the ancestor rule, unknown delet
   });
 
   it('an unknown ancestor that admit refuses as a directory is not added (S21-6)', async () => {
-    const h = await start(
-      { admit: (path, entry) => !(path === 'gen' && entry === 'directory') },
-      { caps: { directoryEvents: 'none' } },
+    const admit = vi.fn<NonNullable<WatchSessionOptions['admit']>>(
+      (path, entry) => !(path === 'gen' && entry === 'directory'),
     );
+    const h = await start({ admit }, { caps: { directoryEvents: 'none' } });
+    h.disk.mkdir('gen');
+    h.disk.mkdir('gen/sub');
     h.disk.write('gen/sub/x.ts', 'X');
     h.emit(['created', 'gen/sub/x.ts']);
     await h.wait();
     const changes = [dir('created', 'gen/sub'), file('created', 'gen/sub/x.ts', 'X')];
     expect(h.sink.delivered).toEqual([live(1, changes, 0, 100)]);
+    // Round two: an ancestor is not stat-ed, and admit sees it with no size.
+    expect(h.disk.probe.stat.mock.calls).toEqual([[wp('gen/sub/x.ts')]]);
+    const gen = admit.mock.calls.filter(([path]) => path === 'gen');
+    expect(gen.map(([, entry, size]) => `${entry} ${size}`)).toEqual(['directory undefined']);
   });
 
   it('a deleted unknown path stays when a known file or directory is under it, as a file (decisions 48, 58)', async () => {
@@ -1349,6 +1480,7 @@ describe('createWatchSession: backend errors and the rescan (decision 57, INV-25
       file('created', 'c.ts', 'C', 50),
     ];
     expect(h.sink.delivered).toEqual([rescan(1, changes, 50, 70)]);
+    expect(h.errors).toEqual([RESCAN]);
     // Delivered, so known: none of these is news.
     h.emit(['changed', 'a.ts'], ['deleted', 'b.ts'], ['deleted', 'lib/x.ts']);
     await h.wait();
@@ -1387,6 +1519,8 @@ describe('createWatchSession: backend errors and the rescan (decision 57, INV-25
     listing.resolve([]);
     await h.wait(0);
     expect(h.disk.probe.list).toHaveBeenCalledTimes(3);
+    // Round two: collapsed or not, every error reached onError (INV-25: surfaced).
+    expect(h.errors).toHaveLength(5);
   });
 
   it('a rescan that exhausts its retries reaches onDegraded with every path; the seq is reused (INV-22)', async () => {
@@ -1414,6 +1548,45 @@ describe('createWatchSession: backend errors and the rescan (decision 57, INV-25
     await h.wait(0);
     expect(h.degraded).toEqual([{ paths: [WORKSPACE_ROOT], error: failure }]);
     expect(h.sink.calls).toEqual([]);
+    // Round two: the next rescan still runs, under the seq the failed one did not take.
+    h.disk.write('b.ts', 'B');
+    h.fail({ ...RESCAN });
+    await h.wait(0);
+    expect(h.sink.delivered).toEqual([rescan(1, [file('created', 'b.ts', 'B')], 0, 0)]);
+  });
+
+  // Round two: the rescan path is as silent after close as a live window.
+  it.each([
+    ['resolves', (listing: ReturnType<typeof deferred<Listing>>) => listing.resolve([])],
+    [
+      'rejects',
+      (listing: ReturnType<typeof deferred<Listing>>) => listing.reject(new Error('EIO')),
+    ],
+  ])(
+    'a rescan walk that %s after close() calls neither the sink nor onDegraded',
+    async (_case, end) => {
+      const h = await start({}, { disk: { 'a.ts': 'a' } });
+      const listing = deferred<Listing>();
+      h.disk.probe.list.mockReturnValueOnce(listing.promise);
+      h.fail({ ...RESCAN });
+      await h.wait(0);
+      await h.session.close();
+      end(listing);
+      await h.wait(1000);
+      expect(h.sink.calls).toEqual([]);
+      expect(h.degraded).toEqual([]);
+    },
+  );
+
+  // Round two: S21-5 had no case.
+  it('in reconcile, a listed file that digests to undefined counts as gone (S21-5)', async () => {
+    const h = await start({}, { disk: { 'k.ts': 'K' } });
+    h.disk.write('u.ts', 'U');
+    h.disk.raced.add('k.ts');
+    h.disk.raced.add('u.ts');
+    h.fail({ ...RESCAN });
+    await h.wait(0);
+    expect(h.sink.delivered).toEqual([rescan(1, [gone('file', 'k.ts')], 0, 0)]);
   });
 
   it('a fatal error closes the session after onError has it; then nothing is heard (decision 51)', async () => {
@@ -1442,17 +1615,17 @@ describe('createWatchSession: backend errors and the rescan (decision 57, INV-25
   });
 
   it('an onError that throws is contained: the rescan and the fatal close still happen (S21-7)', async () => {
-    const h = await start({
-      onError: () => {
-        throw new Error('consumer bug');
-      },
+    const onError = vi.fn<(error: WatchError) => void>(() => {
+      throw new Error('consumer bug');
     });
+    const h = await start({ onError });
     expect(() => h.fail({ ...RESCAN })).not.toThrow();
     await h.wait(0);
     expect(h.disk.probe.list).toHaveBeenCalledTimes(1);
     expect(() => h.fail({ ...FATAL })).not.toThrow();
     await h.wait(0);
     expect(h.backend.closes).toBe(1);
+    expect(onError).toHaveBeenCalledTimes(2);
   });
 });
 
