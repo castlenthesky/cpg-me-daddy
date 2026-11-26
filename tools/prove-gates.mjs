@@ -326,6 +326,12 @@ const CASES = [
     "import { createMemoryStore } from '@cpg/sink';\nexport const probe = createMemoryStore;\n",
     /__gate_probe\.ts:1 +\[cli-runtime-import\]/,
   ),
+  depsCase(
+    'check:deps rejects a vscode type import outside the four files of apps/vscode/src (vscode-importer)',
+    'apps/vscode/src/__gate_probe.ts',
+    "import type { Uri } from 'vscode';\nexport type Probe = Uri;\n",
+    /__gate_probe\.ts:1 +\[vscode-importer\]/,
+  ),
   {
     // The check-deps rules are proven by fixtures in tools/check-deps.test.mjs. If the vitest
     // include stopped matching tools/, that proof would vanish while `bun run test` stayed green.

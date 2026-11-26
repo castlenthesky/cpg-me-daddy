@@ -51,6 +51,10 @@
 //
 //  9. apps/cli LOADS ONLY BUILTINS, @cpg/engine AND @cpg/model AT RUNTIME (owner decision 5): any
 //     other @cpg/* only through statement-level import type / export type; test files are exempt.
+//
+// 10. apps/vscode/src IMPORTS vscode IN FOUR FILES ONLY (controller decision 27): extension.ts
+//     and the three adapters (webview-transport, source-opener, filesystem-probe). Tests and type
+//     imports are covered; other directories under apps/vscode are left to rule 2.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { builtinModules } from 'node:module';
@@ -76,6 +80,14 @@ const APP_SDKS = {
 
 // Rule 7's allowlist, per package; '*' is the default.
 const CONTRACT_IMPORTS = { '*': ['@cpg/model'] };
+
+// Rule 10's allowlist: the only files in apps/vscode/src/** that may import vscode.
+const VSCODE_IMPORTERS = new Set([
+  'apps/vscode/src/extension.ts',
+  'apps/vscode/src/adapters/webview-transport.ts',
+  'apps/vscode/src/adapters/source-opener.ts',
+  'apps/vscode/src/adapters/filesystem-probe.ts',
+]);
 
 // 'x/' matches any subpath of a scope; 'x' matches x itself and x/anything.
 function matches(spec, entry) {
@@ -157,7 +169,8 @@ function flag(file, line, rule, detail) {
 const files = [...walk(join(ROOT, 'packages'), SKIP), ...walk(join(ROOT, 'apps'), SKIP)];
 
 for (const file of files) {
-  const [tier, pkg] = relative(ROOT, file).split('/');
+  const rel = relative(ROOT, file);
+  const [tier, pkg] = rel.split('/');
   const isApp = tier === 'apps';
   const isTest = /\.test(-d)?\.[cm]?[jt]sx?$/.test(file);
   const source = readFileSync(file, 'utf8');
@@ -269,6 +282,18 @@ for (const file of files) {
           at,
           'cli-runtime-import',
           `apps/cli loads "${spec}" at runtime; only node builtins, @cpg/engine and @cpg/model (owner decision 5)`,
+        );
+      }
+      if (
+        rel.startsWith('apps/vscode/src/') &&
+        matches(spec, 'vscode') &&
+        !VSCODE_IMPORTERS.has(rel)
+      ) {
+        flag(
+          file,
+          at,
+          'vscode-importer',
+          `apps/vscode/src imports "${spec}"; only extension.ts and the three adapters may (controller decision 27)`,
         );
       }
       continue;

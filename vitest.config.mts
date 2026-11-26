@@ -16,7 +16,8 @@ export default defineConfig({
       // Only shipped source; `all` behaviour means an untested new file counts as 0%.
       include: ['packages/*/src/**', 'apps/*/src/**'],
       // apps/cli/src/main.ts is the process wrapper: tools/check-cli-bin.mjs spawns it, vitest cannot.
-      // apps/vscode/src/extension.ts needs the VS Code host to run; it is checked by F5, not vitest.
+      // apps/vscode/src/extension.ts and the three adapters import vscode, which vitest cannot load:
+      // tools/extension.test.mjs drives the built ones on a stand-in.
       // apps/inspector/src/graph-page.ts is the page bundle's entry: it needs a browser and WebGL.
       // apps/inspector/src/main.ts is the inspector's process wrapper: bin.test.ts spawns it.
       exclude: [
@@ -24,6 +25,7 @@ export default defineConfig({
         '**/*.test-d.ts',
         'apps/cli/src/main.ts',
         'apps/vscode/src/extension.ts',
+        'apps/vscode/src/adapters/**',
         'apps/inspector/src/graph-page.ts',
         'apps/inspector/src/main.ts',
       ],

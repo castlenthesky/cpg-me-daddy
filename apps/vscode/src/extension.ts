@@ -1,53 +1,91 @@
+// REAL (U3.1.1 part 4, BMO-52): the VS Code extension's composition root. Glue only: every flow lives
+// in plain-node modules and adapters/. Driven with a vscode stand-in by tools/extension.test.mjs.
+
+import { join } from 'node:path';
+import { createEngine } from '@cpg/engine';
+import type { WorkspacePath } from '@cpg/model';
 import * as vscode from 'vscode';
-import { applyGraphDelta, toWorkspacePath, type GraphPayload } from '@cpg/model';
+import { workspaceFileSystem } from './adapters/filesystem-probe';
+import { createSourceOpener } from './adapters/source-opener';
+import {
+  createGraphPanel,
+  GRAPH_VIEW_TYPE,
+  graphPanelSerializer,
+} from './adapters/webview-transport';
+import { GraphSession } from './graph-session';
+import { pageDirectory } from './panel-page';
+import { panelTheme } from './theme';
+import {
+  statusBarView,
+  verificationDiagnostics,
+  type VerificationDiagnostic,
+} from './verification-view';
 
-// W0 smoke command. It exists to prove one thing that no unit test can: that
-// `@cpg/model` is genuinely consumable *at runtime* from the extension host,
-// across a real package boundary, in the CommonJS context VS Code loads us in.
-// Everything past this point is the debate's to decide; this is the seam.
-export function activate(context: vscode.ExtensionContext) {
-  const disposable = vscode.commands.registerCommand('cpg-me-daddy.helloWorld', () => {
-    const before: GraphPayload = {
-      seq: -1,
-      nodes: [
-        { id: '/workspace', type: 'directory', name: 'workspace' },
-        { id: '/workspace/a.ts', type: 'file', name: 'a.ts' },
-      ],
-      edges: [{ source: '/workspace', target: '/workspace/a.ts', type: 'HAS_ENTRY' }],
-    };
-
-    const result = applyGraphDelta(before, {
-      seq: 0,
-      file: toWorkspacePath('/workspace', '/workspace/b.ts'),
-      revision_id: 'smoke',
-      producer: 'filesystem',
-      addedNodes: [{ id: '/workspace/b.ts', type: 'file', name: 'b.ts' }],
-      addedEdges: [{ source: '/workspace', target: '/workspace/b.ts', type: 'HAS_ENTRY' }],
-      removedNodeIds: ['/workspace/a.ts'],
-    });
-
-    switch (result.outcome) {
-      case 'applied':
-      case 'already-applied':
-        vscode.window.showInformationMessage(
-          `@cpg/model live: ${before.nodes.length} nodes + delta -> ${result.payload.nodes.length} nodes, ` +
-            `${result.payload.edges.length} edges (the edge into the removed node was dropped without being listed).`,
-        );
-        break;
-      case 'gap':
-        vscode.window.showWarningMessage(
-          `@cpg/model live: delta seq gap (expected ${result.expected}, got ${result.got}).`,
-        );
-        break;
-      case 'malformed':
-        vscode.window.showWarningMessage(
-          `@cpg/model live: malformed delta (${result.defects.map((d) => `${d.code} ${d.nodeId}`).join(', ')}).`,
-        );
-        break;
-    }
-  });
-
-  context.subscriptions.push(disposable);
+function toDiagnostic({ message, checkId }: VerificationDiagnostic): vscode.Diagnostic {
+  const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message);
+  diagnostic.source = 'cpg';
+  diagnostic.code = checkId;
+  return diagnostic;
 }
 
-export function deactivate() {}
+export function activate(context: vscode.ExtensionContext): void {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const uriOf = (path: WorkspacePath): vscode.Uri => vscode.Uri.file(join(root ?? '', path));
+  const version = String(context.extension.packageJSON.version);
+  const directory = pageDirectory();
+
+  const statusBar = vscode.window.createStatusBarItem('cpg.verify', vscode.StatusBarAlignment.Left);
+  statusBar.command = 'cpg.verify';
+  const diagnostics = vscode.languages.createDiagnosticCollection('cpg');
+
+  const session = new GraphSession({
+    root,
+    version,
+    createEngine,
+    fileSystem: workspaceFileSystem(uriOf),
+    opener: createSourceOpener(uriOf),
+    theme: panelTheme(vscode.window.activeColorTheme.kind),
+    createPanel: () => createGraphPanel(directory),
+    pageDirectory: directory,
+    after: (ms, callback) => {
+      const timer = setTimeout(callback, ms);
+      return () => clearTimeout(timer);
+    },
+    onReport: (report) => {
+      const { text, tooltip } = statusBarView(report);
+      statusBar.text = text;
+      statusBar.tooltip = tooltip;
+      statusBar.show();
+      diagnostics.clear();
+      // VS Code merges the entries of one file.
+      diagnostics.set(
+        verificationDiagnostics(report).map((entry) => [
+          uriOf(entry.filePath),
+          [toDiagnostic(entry)],
+        ]),
+      );
+    },
+    showWarning: (text) => {
+      void vscode.window.showWarningMessage(text);
+    },
+    showError: (text) => {
+      void vscode.window.showErrorMessage(text);
+    },
+  });
+
+  // Never put the panel itself in subscriptions: VS Code restores it after a reload.
+  context.subscriptions.push(
+    statusBar,
+    diagnostics,
+    session,
+    vscode.commands.registerCommand('cpg.openGraph', () => session.openGraph()),
+    vscode.commands.registerCommand('cpg.verify', () => session.verify()),
+    vscode.window.registerWebviewPanelSerializer(
+      GRAPH_VIEW_TYPE,
+      graphPanelSerializer(directory, (surface) => session.restorePanel(surface)),
+    ),
+    vscode.window.onDidChangeActiveColorTheme((theme) => {
+      session.setTheme(panelTheme(theme.kind));
+    }),
+  );
+}

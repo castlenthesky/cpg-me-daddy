@@ -33,7 +33,7 @@ export interface GraphSink {
   onDelta(delta: GraphDelta, meta: DeltaMeta): Promise<void>;
 }
 
-interface Disposable {
+export interface Disposable {
   dispose(): void;
 }
 

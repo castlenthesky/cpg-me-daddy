@@ -82,3 +82,28 @@ export function verificationDiagnostics(
   }
   return diagnostics;
 }
+
+/** The status bar item's text and tooltip. */
+export interface StatusBarView {
+  readonly text: string;
+  readonly tooltip: string;
+}
+
+/**
+ * The report as the status bar shows it. Text: `$(<glyph>) CPG`, then ` <n>` when n > 0 checks fail.
+ * Tooltip: `CPG verify at seq <seq>: <state>`, then a line per check in report order,
+ * `<id>: <state>`, with `: <detail>` when it has one.
+ */
+export function statusBarView(report: VerificationReport): StatusBarView {
+  const { glyph, failing } = verificationStatus(report);
+  const text = failing > 0 ? `$(${glyph}) CPG ${String(failing)}` : `$(${glyph}) CPG`;
+  const lines = [
+    `CPG verify at seq ${String(report.seq)}: ${report.state}`,
+    ...report.checks.map((check) =>
+      check.detail === undefined
+        ? `${check.id}: ${check.state}`
+        : `${check.id}: ${check.state}: ${check.detail}`,
+    ),
+  ];
+  return { text, tooltip: lines.join('\n') };
+}
