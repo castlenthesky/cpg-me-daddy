@@ -67,7 +67,7 @@ function fakeClock() {
     }
     now = target;
   }
-  return { timers, now: () => now, advance };
+  return { timers, now: () => now, advance, armedCount: () => armed.size };
 }
 
 /** An in-memory disk behind a WatchProbe. Directories report 64 bytes; `raced` digests to undefined. */
@@ -315,17 +315,27 @@ describe('createWatchSession: the archive cases', () => {
 
   it('a deleted known directory is one deleted directory, and its whole subtree is forgotten', async () => {
     const h = await start();
-    await h.seed({ lib: null, 'lib/x.ts': 'x', 'libx.ts': 'L' });
+    await h.seed({ lib: null, 'lib/sub': null, 'lib/x.ts': 'x', 'libx.ts': 'L' });
     h.disk.rm('lib');
     h.emit(['deleted', 'lib']);
     await h.wait();
     expect(h.sink.delivered[1]).toEqual(live(1, [gone('directory', 'lib', 100)], 100, 200));
     // Unknown again, so neither is dropped as known; libx.ts is not under lib/ and stays known.
     h.disk.mkdir('lib');
+    h.disk.mkdir('lib/sub');
     h.disk.write('lib/x.ts', 'x');
-    h.emit(['created', 'lib'], ['created', 'lib/x.ts'], ['created', 'libx.ts']);
+    h.emit(
+      ['created', 'lib'],
+      ['created', 'lib/sub'],
+      ['created', 'lib/x.ts'],
+      ['created', 'libx.ts'],
+    );
     await h.wait();
-    const changes = [dir('created', 'lib', 200), file('created', 'lib/x.ts', 'x', 200)];
+    const changes = [
+      dir('created', 'lib', 200),
+      dir('created', 'lib/sub', 200),
+      file('created', 'lib/x.ts', 'x', 200),
+    ];
     expect(h.sink.delivered[2]).toEqual(live(2, changes, 200, 300));
   });
 
@@ -504,6 +514,10 @@ describe('createWatchSession: the window, the clock and the order', () => {
       ['created', '/ws2/x.ts'],
       ['created', '/elsewhere/a.ts'],
       ['created', '/ws/a.ts'],
+      ['deleted', '/ws/'],
+      ['deleted', '/ws/../etc/x.ts'],
+      ['deleted', '/ws/b//c.ts'],
+      ['deleted', '/ws2/y.ts'],
     );
     await h.wait();
     expect(h.sink.delivered).toEqual([live(0, [file('created', 'a.ts', 'a')], 0, 100)]);
@@ -511,8 +525,9 @@ describe('createWatchSession: the window, the clock and the order', () => {
 
   it('a raw moved is a deleted source plus a created path, and pairing restores a known move (S20-2)', async () => {
     const h = await start();
-    await h.seed({ 'a.ts': 'A' });
+    await h.seed({ 'a.ts': 'A', 'z.ts': 'Z' });
     h.disk.rm('a.ts');
+    h.disk.rm('z.ts');
     for (const [path, content] of [
       ['b.ts', 'A'],
       ['c.ts', 'C'],
@@ -520,11 +535,17 @@ describe('createWatchSession: the window, the clock and the order', () => {
     ] as const) {
       h.disk.write(path, content);
     }
-    h.backend.onEvents([move('b.ts', 'a.ts'), move('c.ts', '/outside/c.ts'), move('y.ts', 'x.ts')]);
+    h.backend.onEvents([
+      move('b.ts', 'a.ts'),
+      move('c.ts', '/outside/c.ts'),
+      move('y.ts', 'x.ts'),
+      move('/outside/z.ts', 'z.ts'),
+    ]);
     await h.wait();
     const changes = [
       moved('a.ts', 'b.ts', 'A', 100),
       gone('file', 'x.ts', 100),
+      gone('file', 'z.ts', 100),
       file('created', 'c.ts', 'C', 100),
       file('created', 'y.ts', 'Y', 100),
     ];
@@ -541,6 +562,28 @@ describe('createWatchSession: the per-event and kind rules (decisions 48, 49)', 
     h.emit(['created', 'gone.ts'], ['changed', 'raced.ts'], ['created', 'ok.ts']);
     await h.wait();
     expect(h.sink.delivered).toEqual([live(0, [file('created', 'ok.ts', 'ok')], 0, 100)]);
+  });
+
+  it('each event is classified before coalesce, so a dropped create leaves its delete standing', async () => {
+    const h = await start({ admit: (_path, _entry, sizeBytes) => (sizeBytes ?? 0) <= 10 });
+    await h.seed({ 'a.ts': 'a', 'b.ts': 'b' });
+    h.disk.rm('a.ts');
+    h.disk.write('b.ts', 'x'.repeat(50));
+    // a.ts is gone again at flush; b.ts comes back too big to admit.
+    h.emit(['deleted', 'a.ts'], ['created', 'a.ts'], ['deleted', 'b.ts'], ['created', 'b.ts']);
+    await h.wait();
+    const changes = [gone('file', 'a.ts', 100), gone('file', 'b.ts', 100)];
+    expect(h.sink.delivered[1]).toEqual(live(1, changes, 100, 200));
+  });
+
+  it('events coalesce before pairing: a rename target edited in the same window is still a moved', async () => {
+    const h = await start();
+    await h.seed({ 'old.ts': 'm' });
+    h.disk.rm('old.ts');
+    h.disk.write('new.ts', 'm');
+    h.emit(['deleted', 'old.ts'], ['created', 'new.ts'], ['changed', 'new.ts']);
+    await h.wait();
+    expect(h.sink.delivered[1]).toEqual(live(1, [moved('old.ts', 'new.ts', 'm', 100)], 100, 200));
   });
 
   it('a file is digested once per window, however many events name it (INV-26)', async () => {
@@ -564,6 +607,35 @@ describe('createWatchSession: the per-event and kind rules (decisions 48, 49)', 
     await h.wait();
     const changes = [file('changed', 'a.ts', 'v2', 100), file('created', 'c.ts', 'c', 100)];
     expect(h.sink.delivered[1]).toEqual(live(1, changes, 100, 200));
+    // Both revisions were recorded, so the same bytes again are no-ops.
+    h.emit(['created', 'a.ts'], ['changed', 'c.ts']);
+    await h.wait();
+    expect(h.sink.calls).toHaveLength(2);
+  });
+
+  it('pairing runs before the kind rules: a rename over a known file is a moved', async () => {
+    const h = await start();
+    await h.seed({ 'a.ts': 'A', 'b.ts': 'B' });
+    h.disk.rm('a.ts');
+    h.disk.write('b.ts', 'A');
+    h.emit(['deleted', 'a.ts'], ['created', 'b.ts']);
+    await h.wait();
+    expect(h.sink.delivered[1]).toEqual(live(1, [moved('a.ts', 'b.ts', 'A', 100)], 100, 200));
+    h.emit(['changed', 'b.ts']);
+    await h.wait();
+    expect(h.sink.calls).toHaveLength(2);
+  });
+
+  it('a delivered delete forgets the file, so the same bytes again are created (decision 52)', async () => {
+    const h = await start();
+    await h.seed({ 'a.ts': 'a' });
+    h.disk.rm('a.ts');
+    h.emit(['deleted', 'a.ts']);
+    await h.wait();
+    h.disk.write('a.ts', 'a');
+    h.emit(['created', 'a.ts']);
+    await h.wait();
+    expect(h.sink.delivered[2]).toEqual(live(2, [file('created', 'a.ts', 'a', 200)], 200, 300));
   });
 
   it('a byte-identical rewrite delivers nothing and takes no seq (INV-20)', async () => {
@@ -620,6 +692,21 @@ describe('createWatchSession: failures (decisions 50, 52; S20-3)', () => {
     expect(h.sink.delivered).toEqual([live(0, [file('created', 'a.ts', 'a', 100)], 100, 200)]);
   });
 
+  it('an admit that throws reaches onDegraded too, and an outside path in the window is still dropped', async () => {
+    const failure = new Error('matcher bug');
+    const h = await start({
+      admit: () => {
+        throw failure;
+      },
+    });
+    h.disk.write('a.ts', 'a');
+    h.emit(['created', 'a.ts'], ['created', '/outside/x.ts']);
+    await h.wait();
+    expect(h.degraded.map(({ paths }) => paths)).toEqual([['a.ts']]);
+    expect(h.degraded[0]?.error).toBe(failure);
+    expect(h.sink.calls).toEqual([]);
+  });
+
   it('an onDegraded that throws does not stop the session', async () => {
     const h = await start({
       onDegraded: () => {
@@ -664,11 +751,31 @@ describe('createWatchSession: close (decision 51, silence after close)', () => {
     expect(h.backend.closes).toBe(1);
   });
 
-  it('drops the open window and ignores later events: no probe call, no sink call', async () => {
+  it('is silent from the moment close() is called, before the subscription has closed', async () => {
+    const h = await start();
+    const gate = deferred();
+    h.backend.closeGate = gate.promise;
+    h.sink.plan.push(new Error('transient'));
+    h.disk.write('a.ts', 'a');
+    h.disk.write('b.ts', 'b');
+    h.emit(['created', 'a.ts']);
+    await h.wait();
+    h.emit(['created', 'b.ts']);
+    const closing = h.session.close();
+    await backoff(h);
+    expect(h.sink.calls).toHaveLength(1);
+    expect(h.degraded).toEqual([]);
+    expect(h.disk.probe.stat.mock.calls).toEqual([[wp('a.ts')]]);
+    gate.resolve();
+    await closing;
+  });
+
+  it('drops the open window and ignores later events: no timer, no probe call, no sink call', async () => {
     const h = await start();
     h.disk.write('a.ts', 'a');
     h.emit(['created', 'a.ts']);
     await h.session.close();
+    expect(h.clock.armedCount()).toBe(0);
     h.emit(['created', 'a.ts']);
     await h.wait(1000);
     expect(h.disk.probe.stat).not.toHaveBeenCalled();
@@ -699,6 +806,7 @@ describe('createWatchSession: close (decision 51, silence after close)', () => {
     h.emit(['deleted', 'a.ts']);
     await h.wait();
     await h.session.close();
+    await backoff(h);
     await h.wait(10_000);
     expect(h.sink.calls).toHaveLength(1);
     expect(h.degraded).toEqual([]);
@@ -731,15 +839,29 @@ describe('createWatchSession: close (decision 51, silence after close)', () => {
     await h.wait(1000);
     expect(h.sink.calls).toEqual([]);
   });
+
+  it('a probe that rejects after close does not reach onDegraded', async () => {
+    const h = await start();
+    const stat = deferred<Awaited<ReturnType<WatchProbe['stat']>>>();
+    h.disk.probe.stat.mockReturnValueOnce(stat.promise);
+    h.emit(['created', 'a.ts']);
+    await h.wait();
+    await h.session.close();
+    stat.reject(new Error('EIO'));
+    await h.wait(1000);
+    expect(h.degraded).toEqual([]);
+  });
 });
 
 describe('C-WATCH INV-3', () => {
   const SRC = __dirname;
-  const IMPORT = /(?:from\s+|import\s*\(\s*)'([^']+)'/g;
+  const IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;
   const FORBIDDEN = /^(?:node:)?fs(?:\/promises)?$|^vscode$|^@cpg\/(?:parse|store)$/;
 
   it('no runtime file in packages/watch imports node:fs, vscode, the parser or a store', () => {
-    const runtime = readdirSync(SRC).filter((f) => f.endsWith('.ts') && !f.includes('.test'));
+    const runtime = readdirSync(SRC, { recursive: true, encoding: 'utf8' }).filter(
+      (f) => f.endsWith('.ts') && !f.includes('.test'),
+    );
     const imports = runtime.flatMap((f) =>
       [...readFileSync(join(SRC, f), 'utf8').matchAll(IMPORT)].map((m) => `${f} ${m[1] ?? ''}`),
     );
