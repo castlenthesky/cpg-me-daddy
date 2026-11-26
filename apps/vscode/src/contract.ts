@@ -1,6 +1,5 @@
 // C-EXT's host-side types (05-contracts.yaml, C-EXT; U3.1.1 part 1, BMO-52), types only. The message
 // unions, ThemeSnapshot and VerificationReport are @cpg/model's, shared with the browser inspector.
-// SourceOpener arrives with its first caller, reveal (part 2).
 
 import type {
   Epoch,
@@ -8,6 +7,7 @@ import type {
   GraphPayload,
   HostToWebview,
   Seq,
+  SourceRange,
   ThemeSnapshot,
   VerificationReport,
   WorkspacePath,
@@ -45,10 +45,21 @@ export interface WebviewTransport {
   readonly cspSource: string;
 }
 
+/** Opens a node's source in the editor; rejects when it cannot. */
+export interface SourceOpener {
+  open(request: {
+    readonly filePath: WorkspacePath;
+    /** Where the cursor goes; absent: the file opens whole. */
+    readonly selection?: SourceRange;
+    /** The extent to bring into view. */
+    readonly frame?: SourceRange;
+  }): Promise<void>;
+}
+
 /** The workspace's files, as the walker admits them (controller decision 29). */
 export interface FilesystemProbe {
   listFiles(): Promise<WorkspacePath[]>;
-  /** The content digest, or undefined when there is no such file. */
+  /** The content digest, or undefined when there is no such file or it can't be read. */
   digest(filePath: WorkspacePath): Promise<string | undefined>;
 }
 
