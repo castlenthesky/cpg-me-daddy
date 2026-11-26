@@ -1,7 +1,7 @@
 // C-WATCH layer A plus the seam's outbound vocabulary, types only. Layer B's coalesce/flushBatch are
-// in coalesce.ts, its debounce, pairing and delivery queue in debounce.ts, normalize.ts and queue.ts;
-// the session and the fake backend land in U4.1.2; the engine's cold-index walk emits
-// `cause: 'initial'` batches in U2a.
+// in coalesce.ts, its debounce, pairing and delivery queue in debounce.ts, normalize.ts and queue.ts,
+// its session in session.ts (U4.1.2), whose probe and options are typed here; the engine's cold-index
+// walk emits `cause: 'initial'` batches in U2a.
 //
 // Types only, enforced by check-deps rule `contract-types-only`: the only import is a statement-level
 // `import type` from @cpg/model, and the emitted JS is empty.
@@ -107,4 +107,56 @@ export interface WatchSink {
 export interface TimerApi {
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
+}
+
+// ── Layer B's session (U4.1.2) ──
+
+/**
+ * Layer B's one window onto the disk: the injected probe C-WATCH INV-3 names (decision 47). A separate
+ * name, because C-EXT's FilesystemProbe is the host's `{ listFiles, digest }`. packages/watch imports
+ * no node:fs; the composition root passes an implementation, a test an in-memory one.
+ */
+export interface WatchProbe {
+  /**
+   * lstat semantics: a symlink is reported as `'file'` and left to `admit`. `undefined` means the
+   * path is gone.
+   */
+  stat(
+    path: WorkspacePath,
+  ): Promise<{ readonly entry: 'file' | 'directory'; readonly sizeBytes: number } | undefined>;
+  /** sha256 hex of the file's bytes (INV-26). `undefined` means it raced away. */
+  digest(path: WorkspacePath): Promise<string | undefined>;
+}
+
+export interface WatchSessionOptions {
+  /** ABSOLUTE, plain string (DQ-02): what the backend subscribes to; raw paths are under it. */
+  readonly root: string;
+  readonly backend: WatchBackend;
+  readonly sink: WatchSink;
+  readonly probe: WatchProbe;
+  /**
+   * The walker's admission rule, run on every event with its classified entry (`sizeBytes` from
+   * `probe.stat`, absent for a deleted). A refused path never reaches coalesce. Default: admit
+   * everything; the engine passes the walker's admission (U4.2.1).
+   */
+  readonly admit?: (path: WorkspacePath, entry: EntryKind, sizeBytes?: number) => boolean;
+  /** Default 100 (C-WATCH budget_boundary.T1_T2). */
+  readonly trailingMs?: number;
+  /** Default 500 (C-WATCH budget_boundary.T1_T2). */
+  readonly ceilingMs?: number;
+  /** Default: the global setTimeout/clearTimeout, looked up at each call. */
+  readonly timers?: TimerApi;
+  /** The clock for `clock.settledAt` (T2). Default `Date.now`, looked up at each call. */
+  readonly now?: () => number;
+  /**
+   * INV-22: a batch that was not delivered, with every path in it (a moved's `fromPath` included).
+   * `error` is `unknown`, not WatchError: a sink's rejection fits no WatchErrorCode, and it is passed
+   * through unchanged (decision 50).
+   */
+  readonly onDegraded?: (paths: readonly string[], error: unknown) => void;
+}
+
+export interface WatchSession {
+  /** Idempotent; resolves after the backend subscription closes. Silence after close (C-WATCH). */
+  close(): Promise<void>;
 }

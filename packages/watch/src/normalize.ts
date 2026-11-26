@@ -8,8 +8,11 @@ import type { WorkspacePath } from '@cpg/model';
 import { flushBatch, type PendingChange } from './coalesce';
 import type { EntryKind, NormalizedChange } from './contract';
 
-/** The walker's admission rule for one path. The engine passes its matcher in (U4.2.1). */
-export type Admit = (path: WorkspacePath, entry: EntryKind) => boolean;
+/**
+ * The walker's admission rule for one path; `sizeBytes` is absent for a deleted. The engine passes
+ * its matcher in (U4.2.1).
+ */
+export type Admit = (path: WorkspacePath, entry: EntryKind, sizeBytes?: number) => boolean;
 
 /** The revision_id the consumer last confirmed for a file path; undefined when it knows none. */
 export type KnownRevision = (path: WorkspacePath) => string | undefined;
@@ -18,8 +21,13 @@ export type KnownRevision = (path: WorkspacePath) => string | undefined;
  * True when `admit` refuses the path, so the watch and the walk never disagree about what belongs in
  * the graph. The backend's own `ignore` is a coarse pre-filter only (C-WATCH honoursIgnore).
  */
-export function isExcludedPath(path: WorkspacePath, entry: EntryKind, admit: Admit): boolean {
-  return !admit(path, entry);
+export function isExcludedPath(
+  path: WorkspacePath,
+  entry: EntryKind,
+  admit: Admit,
+  sizeBytes?: number,
+): boolean {
+  return !admit(path, entry, sizeBytes);
 }
 
 function toPendingChange(change: NormalizedChange): PendingChange {
