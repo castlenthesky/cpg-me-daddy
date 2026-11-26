@@ -2,7 +2,7 @@
   "name": "@cpg/watch",
   "version": "0.0.1",
   "private": true,
-  "description": "The C-WATCH seam, the @parcel/watcher backend, coalesce/flushBatch, the debounce window, rename pairing, the delivery queue and the session core; the initial walk and errors land in U4.1.2 part b.",
+  "description": "The C-WATCH seam, the @parcel/watcher backend, coalesce/flushBatch, the debounce window, rename pairing, the delivery queue and the session: initial and rescan walks, the subtree walk and backend errors.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
