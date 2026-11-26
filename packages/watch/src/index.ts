@@ -1,7 +1,7 @@
 // @cpg/watch. REAL: the @parcel/watcher backend (layer A), coalesce/flushBatch (layer B's pure core,
-// U4.1.2), and ChangeBatcher, isExcludedPath/pairFileRenames, SerialQueue and withRetry (U4.1.1).
-// SEAT: createWatchSession until U4.1.2 part a lands. contract.ts stays types only (check-deps rule
-// contract-types-only).
+// U4.1.2), ChangeBatcher, isExcludedPath/pairFileRenames, SerialQueue and withRetry (U4.1.1), and
+// createWatchSession's core (U4.1.2 part a; the initial walk, subtree walk and errors are part b).
+// contract.ts stays types only (check-deps rule contract-types-only).
 export type * from './contract';
 export { coalesce, flushBatch, type CoalesceOp, type PendingChange } from './coalesce';
 export { ChangeBatcher, type ChangeBatcherOptions } from './debounce';
