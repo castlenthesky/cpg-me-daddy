@@ -36,13 +36,16 @@ export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 // verbs and SEAT handlers (exit 2; its message tells it apart from the 'unknown command' error),
 // 'schema-check' for `cpg schema --check` failures (exit 1), 'payload' for invalid or unreadable
 // saved payload inputs (exit 2), and 'inspector' for inspector start or unexpected exit failures
-// (exit 1).
+// (exit 1). 'workspace' and 'engine-rejected' are the two a watch's error event carries (C-CLI
+// WatchEvent; decision 66): both exit 1, as C-CLI states no code for 'workspace' (stop-list 25).
 export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
   | { kind: 'config'; key: string; layer: ConfigLayer; message: string }
   | { kind: 'not-built'; verb: string; message: string }
   | { kind: 'payload'; message: string }
+  | { kind: 'workspace'; path: string; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
+  | { kind: 'engine-rejected'; message: string }
   | { kind: 'inspector'; message: string }
   | { kind: 'verification'; failures: readonly CheckResult[] }
   | { kind: 'schema-check'; message: string }
@@ -54,7 +57,9 @@ const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   config: EXIT.USAGE,
   'not-built': EXIT.USAGE,
   payload: EXIT.USAGE,
+  workspace: EXIT.FAILED,
   'engine-unavailable': EXIT.FAILED,
+  'engine-rejected': EXIT.FAILED,
   inspector: EXIT.FAILED,
   verification: EXIT.VERIFY_FAILED,
   'schema-check': EXIT.FAILED,
@@ -135,6 +140,9 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   }
   if (spec.verb === 'verify') {
     return runVerify(spec, opts.createEngine, values, positionals, io, opts);
+  }
+  if (spec.verb === 'watch') {
+    return runWatch(spec, opts.createEngine, values, positionals, io, opts);
   }
   const target = storeTarget(spec, values);
   if (target) {
@@ -631,6 +639,27 @@ async function runIndex(
   }
 
   return EXIT.OK;
+}
+
+/**
+ * `cpg watch` (U4.2.1 part b, decisions 64-66): the same `load()` as index, then
+ * `refuseUnbuiltConsumers`, and `--inspect` with no inspector wired is `not-built`, all before any
+ * engine is built. One write session (`connectStore`) carries the watch and every inspector refresh,
+ * and closes after `streamWatch` resolves. The request's config is `toCpgConfigInput(resolved)` plus
+ * `trailingMs`/`ceilingMs` from the resolved `watch.trailingMs`/`watch.ceilingMs`. The end: `signal`
+ * is `interrupted` (130), `error` its CliError (exit 1), `inspector` an `inspector` CliError (exit
+ * 1), and `eof` exits 0.
+ */
+function runWatch(
+  _spec: CommandSpec,
+  _buildEngine: (config: EngineConfig) => CpgEngine,
+  _values: Values,
+  _positionals: readonly string[],
+  _io: Io,
+  _opts: RunOptions,
+): Promise<ExitCode> {
+  // SEAT: U4.2.1 part b
+  return Promise.reject(new Error('SEAT: cpg watch is not built yet (U4.2.1 part b)'));
 }
 
 type Values = Record<string, string | boolean | undefined>;

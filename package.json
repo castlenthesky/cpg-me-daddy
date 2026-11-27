@@ -61,6 +61,7 @@
     "test:mutation": "stryker run",
     "test:vscode-host": "bun run compile && vscode-test --config tools/vscode-host.config.mjs",
     "spike:vscode-host": "bun run compile && vscode-test --config tools/vscode-spikes.config.mjs && node tools/spike-report.mjs",
+    "bench:watch": "node tools/bench-watch.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version"
   },

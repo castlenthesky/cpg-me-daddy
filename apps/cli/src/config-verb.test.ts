@@ -682,8 +682,9 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
     expect(f.verifies[0]?.include).toEqual(['named/**']);
   });
 
-  // index without --dry-run is built since U2c.2 (index-verb.test.ts), inspect since U2b.1 part 3b.
-  it.each([['watch']])(
+  // index without --dry-run is built since U2c.2 (index-verb.test.ts), inspect since U2b.1 part 3b,
+  // watch since U4.2.1 part b (watch-verb.test.ts): query is the SEAT verb with a store session left.
+  it.each([['query']])(
     'the SEAT verb %s loads no config: built-in store, still "not built yet"',
     async (verb) => {
       const ws = await tree({ '.git/': '', [FILE]: 'version: 1\nincludes: [typo]\n' });

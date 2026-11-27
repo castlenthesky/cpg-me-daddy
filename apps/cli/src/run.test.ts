@@ -107,10 +107,10 @@ describe('exit codes', () => {
   const seats = COMMANDS.map((c) => c.verb).filter((v) => v !== 'config');
   it.each(seats)('%s is a SEAT: exits 2 "not built yet"', async (verb) => {
     // verify (U2a.3, verify-verb.test.ts), schema (U2a.4, schema-verb.test.ts), index (U2c.2,
-    // index-verb.test.ts) and inspect (U2b.1 part 3b, inspect-verb.test.ts) are built: only without
-    // an engine (inspect: an inspector) are they still a SEAT. schema needs a mode flag and inspect a
-    // payload to get that far.
-    const built = verb === 'verify' || verb === 'schema' || verb === 'index' || verb === 'inspect';
+    // index-verb.test.ts), inspect (U2b.1 part 3b, inspect-verb.test.ts) and watch (U4.2.1 part b,
+    // watch-verb.test.ts) are built: only without an engine (inspect: an inspector) are they still a
+    // SEAT. schema needs a mode flag and inspect a payload to get that far.
+    const built = ['verify', 'schema', 'index', 'inspect', 'watch'].includes(verb);
     const argv = verb === 'schema' ? [verb, '--print'] : verb === 'inspect' ? [verb, '-'] : [verb];
     for (const engine of built ? [undefined] : [undefined, fakeEngine().engine]) {
       const r = await cli(argv, engine ? { engine } : {});
