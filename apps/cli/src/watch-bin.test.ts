@@ -56,11 +56,8 @@ async function cpg(args: readonly string[], cwd: string) {
     proc.on('exit', (code, signal) => resolve({ code, signal })),
   );
   const closed = new Promise<void>((resolve) => proc.on('close', () => resolve()));
-  const events = (): Record<string, unknown>[] =>
-    out
-      .split('\n')
-      .filter((line) => line !== '')
-      .map(parse);
+  // Round two (R10): only whole lines; a pipe chunk may end inside one.
+  const events = (): Record<string, unknown>[] => out.split('\n').slice(0, -1).map(parse);
   return { proc, events, stderr: () => err, exited, closed };
 }
 
@@ -107,5 +104,18 @@ describe('cpg watch, the built bin (decisions 79, 80)', () => {
     expect(run.stderr()).toMatch(
       /^cpg: rescan requested\ncpg: rescan batch 1: 1 change\(s\) in \d+ ms; consumers: memory\n/m,
     );
+  }, 30_000);
+
+  // Round two (R9): main.ts listens only while a watch is subscribed, so elsewhere SIGHUP still ends
+  // the process (here `cpg index --inspect`, which stays up until Ctrl-C).
+  it('in a verb that does not watch, SIGHUP keeps its default: the process ends by it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cpg-cli-watch-bin-'));
+    dirs.push(root);
+    await mkdir(join(root, '.git'));
+    await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
+    const run = await cpg(['index', '--inspect', root], root);
+    await until(run, () => run.stderr().includes('cpg: inspector at '), 'the inspector URL');
+    run.proc.kill('SIGHUP');
+    expect(await run.exited).toEqual({ code: null, signal: 'SIGHUP' });
   }, 30_000);
 });

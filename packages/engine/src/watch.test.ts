@@ -1038,6 +1038,8 @@ describe('the drift crawl (decisions 76-80)', () => {
     clock.advance(999);
     expect(clock.armed()).toBe(1);
     clock.advance(1);
+    // Round two (R3): fired, and not armed again until the rescan has ended.
+    expect(clock.armed()).toBe(0);
     await until(() => batches(run.events).length === 1, 'the first rescan');
     writeTakes = 0;
     await until(() => clock.armed() === 1, 'the interval again');
@@ -1045,6 +1047,7 @@ describe('the drift crawl (decisions 76-80)', () => {
     clock.advance(999);
     expect(clock.armed()).toBe(1);
     clock.advance(1);
+    expect(clock.armed()).toBe(0);
     await until(() => clock.armed() === 1, 'the interval after an empty rescan');
     await rm(join(root, 'b.ts'));
     clock.advance(1000);
@@ -1089,6 +1092,25 @@ describe('the drift crawl (decisions 76-80)', () => {
       [[1, 5600, 'rescan', ['created b.ts']]],
     ]);
     expect(run.clock.armed()).toBe(0);
+  });
+
+  // Round two (R4): S25-1 re-arms on every rescan that ended, whatever asked for it: clear, then set.
+  it('a rescan the backend asked for between two ticks restarts the countdown, with one timer armed', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const run = await start(root, { config: { rescanIntervalMs: 1000 } });
+    await ready(run);
+    await until(() => run.clock.armed() === 1, 'the interval');
+    run.clock.advance(600);
+    await writeFile(join(root, 'b.ts'), 'b');
+    run.backend.fail(failure('overflow', false, { rescanRequired: true }));
+    await until(() => batches(run.events).length === 1, 'the rescan');
+    await realDelay();
+    expect(run.clock.armed()).toBe(1);
+    run.clock.advance(999);
+    expect(run.clock.armed()).toBe(1);
+    run.clock.advance(1);
+    expect(run.clock.armed()).toBe(0);
+    expect(batches(run.events).map(crawl)).toEqual([[2, 5600, 'rescan', ['created b.ts']]]);
   });
 
   it.each([

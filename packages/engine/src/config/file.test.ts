@@ -206,6 +206,12 @@ describe('parseConfigFile', () => {
       'version: 1\nwatch: { rescan_interval_ms: -1 }\n',
       'watch.rescan_interval_ms',
     ],
+    // Round two (R7).
+    [
+      'a fractional rescan interval',
+      'version: 1\nwatch: { rescan_interval_ms: 1.5 }\n',
+      'watch.rescan_interval_ms',
+    ],
     ['YAML 1.2: yes is a string', 'version: 1\nlanguages: { python: yes }\n', 'languages.python'],
     ['include not a list', 'version: 1\ninclude: src\n', 'include'],
     [

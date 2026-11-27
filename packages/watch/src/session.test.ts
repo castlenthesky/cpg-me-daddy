@@ -1779,6 +1779,30 @@ describe('rescan(): the drift crawl (decision 76) and onRescanDone (S25-1)', () 
     expect(order).toEqual(['degraded .', 'done', 'degraded a.ts', 'done']);
   });
 
+  // Round two (R5): closed while the batch is with the sink, and while a retry waits.
+  it.each([
+    ['resolves', null],
+    ['rejects, waking its retry,', new Error('store down')],
+  ])(
+    'a rescan whose sink call %s after close() ends with no onRescanDone',
+    async (_case, failure) => {
+      const done = vi.fn<() => void>();
+      const h = await start({ onRescanDone: done });
+      const hung = deferred();
+      h.sink.plan.push(hung);
+      h.disk.write('a.ts', 'a');
+      h.session.rescan();
+      await h.wait(0);
+      expect(h.sink.calls).toHaveLength(1);
+      await h.session.close();
+      if (failure === null) hung.resolve();
+      else hung.reject(failure);
+      await h.wait(0);
+      await backoff(h);
+      expect([done.mock.calls, h.sink.calls.length, h.degraded]).toEqual([[], 1, []]);
+    },
+  );
+
   it.each([
     ['resolves', (listing: ReturnType<typeof deferred<Listing>>) => listing.resolve([])],
     [
