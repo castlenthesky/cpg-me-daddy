@@ -28,6 +28,7 @@ import type { StartInspector } from './inspector-process';
 import type { Io, Manifest } from './io';
 import { parsePayloadDocument, savedPayloadChecks, serveLive, type LiveEnd } from './live';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
+import { streamWatch, type WatchEnd } from './watch';
 
 export const EXIT = { OK: 0, FAILED: 1, USAGE: 2, VERIFY_FAILED: 3, INTERRUPTED: 130 } as const;
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
@@ -36,13 +37,16 @@ export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 // verbs and SEAT handlers (exit 2; its message tells it apart from the 'unknown command' error),
 // 'schema-check' for `cpg schema --check` failures (exit 1), 'payload' for invalid or unreadable
 // saved payload inputs (exit 2), and 'inspector' for inspector start or unexpected exit failures
-// (exit 1).
+// (exit 1). 'workspace' and 'engine-rejected' are the two a watch's error event carries (C-CLI
+// WatchEvent; decision 66): both exit 1, as C-CLI states no code for 'workspace' (stop-list 25).
 export type CliError =
   | { kind: 'usage'; verb?: string; message: string }
   | { kind: 'config'; key: string; layer: ConfigLayer; message: string }
   | { kind: 'not-built'; verb: string; message: string }
   | { kind: 'payload'; message: string }
+  | { kind: 'workspace'; path: string; message: string }
   | { kind: 'engine-unavailable'; endpoint: string; message: string }
+  | { kind: 'engine-rejected'; message: string }
   | { kind: 'inspector'; message: string }
   | { kind: 'verification'; failures: readonly CheckResult[] }
   | { kind: 'schema-check'; message: string }
@@ -54,7 +58,9 @@ const EXIT_FOR: { readonly [K in CliError['kind']]: ExitCode } = {
   config: EXIT.USAGE,
   'not-built': EXIT.USAGE,
   payload: EXIT.USAGE,
+  workspace: EXIT.FAILED,
   'engine-unavailable': EXIT.FAILED,
+  'engine-rejected': EXIT.FAILED,
   inspector: EXIT.FAILED,
   verification: EXIT.VERIFY_FAILED,
   'schema-check': EXIT.FAILED,
@@ -126,7 +132,7 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   if (spec.verb === 'schema') return runSchema(spec, values, io, opts);
   if (spec.verb === 'config') return runConfig(spec, values, positionals, io, opts);
   if (spec.verb === 'inspect') return runInspect(spec, positionals, io, opts);
-  // SEAT: verbs without a handler yet stop here (watch, query, doctor).
+  // SEAT: verbs without a handler yet stop here (query, doctor).
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (opts.createEngine === undefined) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
@@ -135,6 +141,9 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   }
   if (spec.verb === 'verify') {
     return runVerify(spec, opts.createEngine, values, positionals, io, opts);
+  }
+  if (spec.verb === 'watch') {
+    return runWatch(spec, opts.createEngine, values, positionals, io, opts);
   }
   const target = storeTarget(spec, values);
   if (target) {
@@ -633,6 +642,70 @@ async function runIndex(
   return EXIT.OK;
 }
 
+/**
+ * `cpg watch` (U4.2.1 part b, decisions 64-66): the same `load()` as index, then
+ * `refuseUnbuiltConsumers`, and `--inspect` with no inspector wired is `not-built`, all before any
+ * engine is built. One write session (`connectStore`) carries the watch and every inspector refresh,
+ * and closes after `streamWatch` resolves. The request's config is `toCpgConfigInput(resolved)` plus
+ * `trailingMs`/`ceilingMs` from the resolved `watch.trailingMs`/`watch.ceilingMs`. The end: `signal`
+ * is `interrupted` (130), `error` its CliError (exit 1), `inspector` an `inspector` CliError (exit
+ * 1), and `eof` exits 0.
+ */
+async function runWatch(
+  spec: CommandSpec,
+  buildEngine: (config: EngineConfig) => CpgEngine,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
+): Promise<ExitCode> {
+  // REAL
+  const { resolved } = await load(spec, values, positionals, io, opts);
+  refuseUnbuiltConsumers(spec.verb, resolved);
+  const inspect = resolved.consumers.inspect.value;
+  const startInspector = inspect ? opts.startInspector : undefined;
+  if (inspect && startInspector === undefined) {
+    throw new Fail({
+      kind: 'not-built',
+      verb: spec.verb,
+      message: "'watch --inspect' is not built yet",
+    });
+  }
+  const config = toCpgConfigInput(resolved);
+  const engine = buildEngine({ version: opts.manifest.version, consumers: config.consumers });
+  const session = await connectStore(engine, targetOf(resolved), false);
+  let end: WatchEnd;
+  try {
+    end = await streamWatch({
+      engine,
+      request: {
+        config: {
+          ...config,
+          trailingMs: config.watch.trailingMs,
+          ceilingMs: config.watch.ceilingMs,
+        },
+        session,
+      },
+      io,
+      quiet: values['quiet'] === true,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(startInspector !== undefined ? { inspector: { start: startInspector, config } } : {}),
+    });
+  } finally {
+    await session.close();
+  }
+  if (end.kind === 'signal') {
+    throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
+  }
+  if (end.kind === 'error') {
+    throw new Fail(end.error);
+  }
+  if (end.kind === 'inspector') {
+    throw new Fail({ kind: 'inspector', message: end.message });
+  }
+  return EXIT.OK;
+}
+
 type Values = Record<string, string | boolean | undefined>;
 
 function parseFlags(
@@ -673,7 +746,7 @@ function parseFlags(
 
 const isPort = (v: string): boolean => /^\d{1,5}$/.test(v) && Number(v) >= 1 && Number(v) <= 65535;
 
-// SEAT: used only by verbs without a handler yet (watch, query).
+// SEAT: used only by verbs without a handler yet (query).
 function storeTarget(spec: CommandSpec, values: Values): StoreTarget | null {
   if (spec.session === 'none') return null;
   const str = (k: string, d: string) => (typeof values[k] === 'string' ? values[k] : d);

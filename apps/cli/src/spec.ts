@@ -91,7 +91,14 @@ export const COMMANDS: readonly CommandSpec[] = [
     'watch',
     'index, then stream change batches as NDJSON',
     'write',
-    [workspace, format('ndjson'), ...store],
+    [
+      workspace,
+      config,
+      format('ndjson'),
+      ...store,
+      ...consumers,
+      bool('quiet', 'no batch lines on stderr'),
+    ],
     { stdout: 'ndjson' },
   ),
   cmd(
