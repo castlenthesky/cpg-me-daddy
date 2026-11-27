@@ -17,6 +17,7 @@ import {
   isWorkspacePath,
   makeNodeId,
   NODE_LABELS,
+  readNodeLocation,
   type GraphDelta,
   type GraphEdge,
   type GraphNode,
@@ -2181,13 +2182,16 @@ async function ownedUnder(store: MemoryStore, file: string): Promise<string[]> {
     .toSorted(byText);
 }
 
+// U6a.2-3: Pass A gives `a = 1` a MEMBER and its SYMBOL. These cases are about the watch's write and
+// delta plumbing for one MODULE per file, so their python files hold comments only; Pass A on save is the
+// case 'a save writes and replaces what Pass A declares' below.
 describe('the code tier on save (decision 102; BMO-43)', () => {
   it('a created .py: merge-filesystem, then its replace-file; per change, its own delta, then its code delta', async () => {
     const root = await tree({ 'a.ts': 'a' });
     const run = await start(root);
     await ready(run);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'n.py'), 'n = 1\n');
+    await writeFile(join(root, 'n.py'), '# n = 1\n');
     await writeFile(join(root, 't.ts'), 't');
     const batch = await batchAfter(
       run,
@@ -2201,7 +2205,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     const op = opOf(run.memory, 'replace-file n.py');
     if (op?.kind !== 'replace-file') throw new Error('no replace-file');
     // C-WATCH INV-26: the session's revision on the op and on every node the file owns
-    expect(op.revision_id).toBe(sha256('n = 1\n'));
+    expect(op.revision_id).toBe(sha256('# n = 1\n'));
     expect(op.nodes.map((r) => [r.label, r.key])).toEqual([
       ['MODULE', mod('n.py')],
       ['SYMBOL', sym('n.py')],
@@ -2210,7 +2214,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     expect(op.nodes[0]?.properties).toMatchObject({
       name: 'n',
       file: 'n.py',
-      revision_id: sha256('n = 1\n'),
+      revision_id: sha256('# n = 1\n'),
       range: '1:0-2:0',
     });
     // C-EXTRACT Q8: SOURCE_FILE attached after the file's own edges
@@ -2244,18 +2248,18 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   });
 
   it('a changed .py the index extracted: its code delta removes the MODULE the index wrote, never its SYMBOL', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n' });
     const run = await start(root);
     await ready(run);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'a.py'), 'a = 1\nb = 2\n');
+    await writeFile(join(root, 'a.py'), '# a = 1\n# b = 2\n');
     const batch = await batchAfter(run, 1, raw(root, 'changed', 'a.py', 5001));
 
     expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file a.py']);
     const op = opOf(run.memory, 'replace-file a.py');
     // S26-1: a changed file re-sends no link; then the code delta (C-MODEL I-15: no SYMBOL removed)
     expect(batch.deltas).toEqual([
-      added(1, fileNode('a.py', sha256('a = 1\nb = 2\n'), 'python')),
+      added(1, fileNode('a.py', sha256('# a = 1\n# b = 2\n'), 'python')),
       codeDelta(op, 2, [mod('a.py')]),
     ]);
     const store = await run.memory.store.readAll();
@@ -2265,12 +2269,12 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       module?.data?.['revision_id'],
       module?.data?.['range'],
       file?.data?.['version'],
-    ]).toEqual([sha256('a = 1\nb = 2\n'), '1:0-3:0', 2]);
+    ]).toEqual([sha256('# a = 1\n# b = 2\n'), '1:0-3:0', 2]);
     expect(file?.data?.['revision_id']).toBe(module?.data?.['revision_id']);
   });
 
   it('a deleted .py: its delete-file, then merge-filesystem; its code delta removes what it held, and only that', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 2\n' });
+    const root = await tree({ 'a.py': '# a = 1\n', 'b.py': '# b = 2\n' });
     const run = await start(root);
     await ready(run);
     const skip = run.memory.ops.length;
@@ -2291,10 +2295,10 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
 
   it('a deleted package: one delete-file per held file under it, in path order; never a sibling sharing its prefix', async () => {
     const root = await tree({
-      'pkg/sub/m.py': 'm = 1\n',
+      'pkg/sub/m.py': '# m = 1\n',
       'pkg/__init__.py': '',
       'pkg/n.ts': 'n',
-      'pkg2/a.py': 'a = 1\n',
+      'pkg2/a.py': '# a = 1\n',
     });
     const run = await start(root);
     await ready(run);
@@ -2325,7 +2329,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   });
 
   it('a moved .py: delete-file where it was, merge-filesystem, replace-file where it is; deltas in that change order', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n' });
     const run = await start(root);
     await ready(run);
     const skip = run.memory.ops.length;
@@ -2347,7 +2351,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     ]);
     const moved = added(
       1,
-      fileNode('b.py', sha256('a = 1\n'), 'python'),
+      fileNode('b.py', sha256('# a = 1\n'), 'python'),
       hasEntry('.', fileId('b.py')),
     );
     expect(batch.deltas).toEqual([
@@ -2362,7 +2366,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   it('the initial batch writes the code tier before ready, with no delta, and holds it: a later delete removes it', async () => {
     const root = await tree({ 'a.ts': 'a' });
     const backend = backendFor(async () => {
-      await writeFile(join(root, 'late.py'), 'l = 1\n');
+      await writeFile(join(root, 'late.py'), '# l = 1\n');
     });
     const run = await start(root, { backend });
     await ready(run);
@@ -2383,9 +2387,9 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   });
 
   it('a write between the digest and the read: the nodes keep the batch revision, and the next batch heals them (INV-26)', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n' });
-    const v1 = 'a = 1\nb = 2\n';
-    const v2 = 'a = 1\nb = 2\nc = 3\n';
+    const root = await tree({ 'a.py': '# a = 1\n' });
+    const v1 = '# a = 1\n# b = 2\n';
+    const v2 = '# a = 1\n# b = 2\n# c = 3\n';
     let land = false;
     const host = recorder({
       id: 'host',
@@ -2425,7 +2429,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     const run = await start(root, { host });
     await ready(run);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'n.py'), 'n = 1\n');
+    await writeFile(join(root, 'n.py'), '# n = 1\n');
     const first = await batchAfter(run, 1, raw(root, 'created', 'n.py', 5001));
     expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem']);
     expect(first.deltas.map((d) => [d.file, d.producer])).toEqual([['n.py', 'filesystem']]);
@@ -2438,7 +2442,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     ]);
     // after the batch event, never before it
     expect(kinds(run.events)).toEqual(['ready', 'batch', 'warning']);
-    await writeFile(join(root, 'm.py'), 'm = 1\n');
+    await writeFile(join(root, 'm.py'), '# m = 1\n');
     await batchAfter(run, 2, raw(root, 'created', 'm.py', 5200));
     expect(warnings()).toHaveLength(1);
     // n.py held no code, so its delete writes no delete-file
@@ -2448,7 +2452,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   });
 
   it('a failure group the index reported is not said again, a new group is; the FILE tier is written, with no code delta', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n' });
     const empty = await mkdtemp(join(tmpdir(), 'cpg-no-grammar-'));
     roots.push(empty);
     const host = recorder({
@@ -2467,12 +2471,12 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       ),
     ]);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'b.py'), 'b = 1\n');
+    await writeFile(join(root, 'b.py'), '# b = 1\n');
     const batch = await batchAfter(run, 1, raw(root, 'created', 'b.py', 5001));
     expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem']);
     expect(batch.deltas.map((d) => d.producer)).toEqual(['filesystem']);
     expect(kinds(run.events)).toEqual(['ready', 'batch']);
-    await writeFile(join(root, 'c.py'), 'c = 1\n');
+    await writeFile(join(root, 'c.py'), '# c = 1\n');
     await batchAfter(run, 2, raw(root, 'created', 'c.py', 5200));
     expect(run.events.flatMap((e) => (e.kind === 'warning' ? [e.message] : []))).toEqual([
       expect.stringMatching(
@@ -2482,12 +2486,12 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   });
 
   it('a batch whose replace-file is refused is retried whole: deltas from what was held before it, write from the attempt that landed', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n' });
     // index: 1 merge-filesystem, 2 replace-file; the save: 3 merge-filesystem, 4 refused, then 5, 6
     const memory = recorder({ rejects: (n) => n === 4 });
     const run = await start(root, { memory });
     await ready(run);
-    await writeFile(join(root, 'a.py'), 'a = 2\n');
+    await writeFile(join(root, 'a.py'), '# a = 2\n');
     run.backend.fire(raw(root, 'changed', 'a.py', 5001));
     run.clock.advance(100);
     await until(() => run.clock.armed() > 0, 'the backoff');
@@ -2503,14 +2507,14 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       'replace-file a.py',
     ]);
     expect(batch?.deltas).toEqual([
-      added(1, fileNode('a.py', sha256('a = 2\n'), 'python')),
+      added(1, fileNode('a.py', sha256('# a = 2\n'), 'python')),
       codeDelta(memory.ops[5], 2, [mod('a.py')]),
     ]);
     expect(batch?.write).toEqual(sums(memory, 4));
   });
 
   it("two watches, one after the other, on one engine: the second one's code writes apply (decision 98a)", async () => {
-    const root = await tree({ 'a.py': 'a = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n' });
     const clock = fakeClock(5000);
     const backend = backendFor();
     const memory = recorder();
@@ -2538,8 +2542,8 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       await done;
       return batches(events)[0];
     };
-    await saveOnce('a = 2\n');
-    const second = await saveOnce('a = 3\n');
+    await saveOnce('# a = 2\n');
+    const second = await saveOnce('# a = 3\n');
 
     const replaces = memory.ops.flatMap((op, i) =>
       op.kind === 'replace-file'
@@ -2556,7 +2560,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     expect(increasing(codeSeqs(memory.ops))).toBe(true);
     expect(second?.deltas.at(-1)).toEqual(codeDelta(memory.ops.at(-1), 2, [mod('a.py')]));
     const module = (await memory.store.readAll()).nodes.find((n) => n.id === mod('a.py'));
-    expect(module?.data?.['revision_id']).toBe(sha256('a = 3\n'));
+    expect(module?.data?.['revision_id']).toBe(sha256('# a = 3\n'));
   });
 
   // Round two (review 1): what a live batch wrote is held, so later batches remove, move and forget
@@ -2566,7 +2570,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     const reads: string[] = [];
     const run = await start(root, { memory: recorder({ reads }) });
     await ready(run);
-    await writeFile(join(root, 'n.py'), 'n = 1\n');
+    await writeFile(join(root, 'n.py'), '# n = 1\n');
     await batchAfter(run, 1, raw(root, 'created', 'n.py', 5001));
     await rename(join(root, 'n.py'), join(root, 'm.py'));
     const moved = await batchAfter(
@@ -2575,11 +2579,11 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       raw(root, 'deleted', 'n.py', 5100),
       raw(root, 'created', 'm.py', 5101),
     );
-    await writeFile(join(root, 'm.py'), 'm = 2\n');
+    await writeFile(join(root, 'm.py'), '# m = 2\n');
     const changed = await batchAfter(run, 3, raw(root, 'changed', 'm.py', 5200));
     await rm(join(root, 'm.py'));
     const deleted = await batchAfter(run, 4, raw(root, 'deleted', 'm.py', 5300));
-    await writeFile(join(root, 'n.py'), 'n = 3\n');
+    await writeFile(join(root, 'n.py'), '# n = 3\n');
     const again = await batchAfter(run, 5, raw(root, 'created', 'n.py', 5400));
     expect([moved, changed, deleted, again].map(codeRemovals)).toEqual([
       [
@@ -2598,7 +2602,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   // rewrite (revision-unchanged, or its code tier failed), never a SYMBOL, and nothing for a file
   // the index deleted.
   it("the index's held code: the store's for a file not rewritten, never a SYMBOL, none for a removed file", async () => {
-    const root = await tree({ 'a.py': 'a = 1\n', 'f.py': 'f = 1\n', 'd/keep.py': 'k = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n', 'f.py': '# f = 1\n', 'd/keep.py': '# k = 1\n' });
     const memory = recorder();
     const planted = (path: string, revision: string, extra: readonly NodeRow[] = []): WriteOp => ({
       kind: 'replace-file',
@@ -2620,7 +2624,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       kind: 'merge-filesystem',
       directories: [dirRow('.'), dirRow('d')],
       files: [
-        fileRow('a.py', sha256('a = 1\n'), 'python'),
+        fileRow('a.py', sha256('# a = 1\n'), 'python'),
         fileRow('f.py', 'old', 'python'),
         fileRow('d/gone.py', 'g', 'python'),
       ],
@@ -2633,7 +2637,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       key: sym('a.py'),
       properties: { fqn: sym('a.py'), language: 'python', kind: 'module', file: 'a.py' },
     };
-    await memory.store.write(planted('a.py', sha256('a = 1\n'), [symbol]));
+    await memory.store.write(planted('a.py', sha256('# a = 1\n'), [symbol]));
     await memory.store.write(planted('f.py', 'old'));
     await memory.store.write(planted('d/gone.py', 'g'));
     await memory.store.close();
@@ -2654,7 +2658,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     });
     await ready(run);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'a.py'), 'a = 2\n');
+    await writeFile(join(root, 'a.py'), '# a = 2\n');
     await rm(join(root, 'f.py'));
     await rm(join(root, 'd'), { recursive: true });
     const batch = await batchAfter(
@@ -2680,13 +2684,13 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   // Round two (review 3): the held state advances only once every write of the batch landed, so a
   // retry after a delete-file landed deletes and says it again.
   it('a batch refused after its delete-file landed is retried whole: the delete-file and its code delta again', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n', 'b.py': '# b = 1\n' });
     // index: 1 merge-filesystem, 2 and 3 replace-file; the batch: 4 delete-file, 5 refused, then 6-8
     const memory = recorder({ rejects: (n) => n === 5 });
     const run = await start(root, { memory });
     await ready(run);
     await rm(join(root, 'a.py'));
-    await writeFile(join(root, 'b.py'), 'b = 2\n');
+    await writeFile(join(root, 'b.py'), '# b = 2\n');
     run.backend.fire(raw(root, 'deleted', 'a.py', 5001), raw(root, 'changed', 'b.py', 5002));
     run.clock.advance(100);
     await until(() => run.clock.armed() > 0, 'the backoff');
@@ -2710,7 +2714,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   // Round two (review 8): a failing save of a held file keeps what it held, and the batch's other
   // files are still written.
   it('a held file whose save fails keeps its code; the files after it in the batch are written', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n', 'b.py': '# b = 1\n' });
     let failing = false;
     const run = await start(root, {
       codeTier: {
@@ -2729,8 +2733,8 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     await ready(run);
     const skip = run.memory.ops.length;
     failing = true;
-    await writeFile(join(root, 'a.py'), 'a = 2\n');
-    await writeFile(join(root, 'b.py'), 'b = 2\n');
+    await writeFile(join(root, 'a.py'), '# a = 2\n');
+    await writeFile(join(root, 'b.py'), '# b = 2\n');
     const saved = await batchAfter(
       run,
       1,
@@ -2743,7 +2747,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       'code tier: 1 python file at the FILE tier only (no-tree): a.py: planted',
     ]);
     const module = (await run.memory.store.readAll()).nodes.find((n) => n.id === mod('a.py'));
-    expect(module?.data?.['revision_id']).toBe(sha256('a = 1\n'));
+    expect(module?.data?.['revision_id']).toBe(sha256('# a = 1\n'));
     await rm(join(root, 'a.py'));
     const deleted = await batchAfter(run, 2, raw(root, 'deleted', 'a.py', 5100));
     expect(codeRemovals(deleted)).toEqual([['a.py', [mod('a.py')]]]);
@@ -2772,8 +2776,8 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     const run = await start(root, { host, codeTier: { extractor: bare } });
     await ready(run);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'bare.py'), 'x = 1\n');
-    await writeFile(join(root, 'gone.py'), 'g = 1\n');
+    await writeFile(join(root, 'bare.py'), '# x = 1\n');
+    await writeFile(join(root, 'gone.py'), '# g = 1\n');
     const batch = await batchAfter(
       run,
       1,
@@ -2809,7 +2813,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       },
     });
     const backend = backendFor(async () => {
-      await writeFile(join(root, 'late.py'), 'l = 1\n');
+      await writeFile(join(root, 'late.py'), '# l = 1\n');
       armed = true;
     });
     const run = await start(root, { backend, host });
@@ -2833,7 +2837,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
   ] as const)(
     'once a stop has begun (at a %s), the batch writes nothing more and emits nothing',
     async (at, written) => {
-      const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n', 'c.py': 'c = 1\n' });
+      const root = await tree({ 'a.py': '# a = 1\n', 'b.py': '# b = 1\n', 'c.py': '# c = 1\n' });
       const controller = new AbortController();
       let armed = false;
       const host = recorder({
@@ -2846,8 +2850,8 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
       await ready(run);
       const skip = run.memory.ops.length;
       await rm(join(root, 'a.py'));
-      await writeFile(join(root, 'b.py'), 'b = 2\n');
-      await writeFile(join(root, 'c.py'), 'c = 2\n');
+      await writeFile(join(root, 'b.py'), '# b = 2\n');
+      await writeFile(join(root, 'c.py'), '# c = 2\n');
       armed = true;
       run.backend.fire(
         raw(root, 'deleted', 'a.py', 5001),
@@ -2866,7 +2870,7 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
 // delete-files, and a failed read followed by a file that reads.
 describe('the code tier on save: sabotage gaps (decision 102)', () => {
   it('a stop that begins at the first of two delete-files writes the second one no more', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
+    const root = await tree({ 'a.py': '# a = 1\n', 'b.py': '# b = 1\n' });
     const controller = new AbortController();
     let armed = false;
     const host = recorder({
@@ -2899,8 +2903,8 @@ describe('the code tier on save: sabotage gaps (decision 102)', () => {
     const run = await start(root, { host });
     await ready(run);
     const skip = run.memory.ops.length;
-    await writeFile(join(root, 'a.py'), 'a = 1\n');
-    await writeFile(join(root, 'c.py'), 'c = 1\n');
+    await writeFile(join(root, 'a.py'), '# a = 1\n');
+    await writeFile(join(root, 'c.py'), '# c = 1\n');
     const batch = await batchAfter(
       run,
       1,
@@ -2911,5 +2915,74 @@ describe('the code tier on save: sabotage gaps (decision 102)', () => {
     expect(batch.changes.map((c) => c.path)).toEqual(['a.py', 'c.py']);
     expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file c.py']);
     expect(codeRemovals(batch)).toEqual([['c.py', []]]);
+  });
+});
+
+// U6a.2-3 (decisions 102, 108, 113): Pass A's nodes travel the MODULE's path: the replace-file rows, the
+// code delta the page draws, and the held ids a later save removes (walker pre-order). Rows and ranges
+// are written from the source by hand.
+describe('a save writes and replaces what Pass A declares (U6a.2-3)', () => {
+  it('a class and its method: rows with ranges and name_range, a revealable delta, then removal', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const run = await start(root);
+    await ready(run);
+    await writeFile(join(root, 'g.py'), 'class G:\n    def hi(self, who):\n        pass\n');
+    const first = await batchAfter(run, 1, raw(root, 'created', 'g.py', 5001));
+    const op = opOf(run.memory, 'replace-file g.py');
+    if (op?.kind !== 'replace-file') throw new Error('no replace-file');
+    const [G, HI, SELF, WHO] = [
+      'TYPE_DECL:G',
+      'METHOD:G.hi',
+      'PARAM:G.hi.self',
+      'PARAM:G.hi.who',
+    ].map((rest) => `file:g.py:${rest}`);
+    const [GS, HIS] = ['`g.py`/G#', '`g.py`/G#hi().'];
+    expect(
+      op.nodes.map((r) => [r.label, r.key, r.properties['range'], r.properties['name_range']]),
+    ).toEqual([
+      ['MODULE', mod('g.py'), '1:0-4:0', undefined],
+      ['TYPE_DECL', G, '1:0-3:12', undefined],
+      ['METHOD', HI, '2:4-3:12', '2:8-2:10'],
+      ['PARAM', SELF, '2:11-2:15', undefined],
+      ['PARAM', WHO, '2:17-2:20', undefined],
+      ['SYMBOL', sym('g.py'), undefined, undefined],
+      ['SYMBOL', GS, undefined, undefined],
+      ['SYMBOL', HIS, undefined, undefined],
+      ['FILE', 'g.py', undefined, undefined],
+    ]);
+    expect(op.edges.map((e) => `${e.type} ${e.fromKey} -> ${e.toKey}`).toSorted()).toEqual(
+      [
+        `DEFINES ${mod('g.py')} -> ${sym('g.py')}`,
+        `DECLARES ${mod('g.py')} -> ${G}`,
+        `DEFINES ${G} -> ${GS}`,
+        `DECLARES ${G} -> ${HI}`,
+        `DEFINES ${HI} -> ${HIS}`,
+        `HAS_PARAM ${HI} -> ${SELF}`,
+        `HAS_PARAM ${HI} -> ${WHO}`,
+        `SOURCE_FILE ${mod('g.py')} -> g.py`,
+      ].toSorted(),
+    );
+
+    // the code delta carries the rows to the page, and a METHOD reveals at its name (decision 108)
+    const code = first.deltas.find((d) => d.producer === 'code');
+    expect(code?.addedNodes.map((n) => n.id).toSorted()).toEqual(
+      [mod('g.py'), G, HI, SELF, WHO, sym('g.py'), GS, HIS].toSorted(),
+    );
+    const hi = code?.addedNodes.find((n) => n.id === HI);
+    expect(hi === undefined ? undefined : readNodeLocation(hi)).toEqual({
+      state: 'present',
+      value: {
+        filePath: 'g.py',
+        range: { startRow: 1, startColumn: 4, endRow: 2, endColumn: 12 },
+        nameRange: { startRow: 1, startColumn: 8, endRow: 1, endColumn: 10 },
+      },
+    });
+
+    // a save that drops the method removes every id the first save held, in that order, never a SYMBOL
+    await writeFile(join(root, 'g.py'), 'class G:\n    pass\n');
+    const second = await batchAfter(run, 2, raw(root, 'changed', 'g.py', 5002));
+    expect(codeRemovals(second)).toEqual([['g.py', [mod('g.py'), G, HI, SELF, WHO]]]);
+    const store = await run.memory.store.readAll();
+    expect(store.nodes.filter((n) => n.id === HI || n.id === HIS).map((n) => n.id)).toEqual([HIS]);
   });
 });

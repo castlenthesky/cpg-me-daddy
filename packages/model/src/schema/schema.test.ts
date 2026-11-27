@@ -364,3 +364,20 @@ describe('golden corrections (U1.1.2 D4)', () => {
     ).toBe('exclude');
   });
 });
+
+// U6a.2-3 (decisions 108, 113; stop-list 194): every extracted node carries a range (C-EXTRACT's
+// NodeElement.range), and a METHOD its name token's. Both are optional strings in range's format, added
+// under the evolution policy's "add a property" (no version bump: neither is required).
+describe('navigation properties the code tier writes (U6a.2-3)', () => {
+  test.each([
+    ['METHOD', 'name_range'],
+    ['PARAM', 'range'],
+  ] as const)('%s.%s is an optional code-owned string', (label, name) => {
+    expect(nodeSpec(label)?.properties.find((p) => p.name === name)).toMatchObject({
+      type: 'string',
+      cardinality: 'zeroOrOne',
+      golden: 'include',
+      owner: 'code',
+    });
+  });
+});

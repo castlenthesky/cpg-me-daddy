@@ -1363,7 +1363,9 @@ describe('cpg watch over the real engine (I-23, decision 67)', () => {
   });
 
   // U6a.3-3 (decision 102): a .py save is its filesystem delta, then its code delta, both sent as
-  // graph-delta lines. The bytes are not python (a hostile save): the MODULE is extracted anyway.
+  // graph-delta lines. The bytes are not python (a hostile save): the MODULE is extracted anyway, and
+  // (U6a.2-3) tree-sitter recovers `export = '...'` with `const x` as an ERROR inside the assignment,
+  // so Pass A declares the MEMBER `export` and its SYMBOL (no UNKNOWN: the ERROR is no container child).
   it('--inspect: a .py save sends its own delta, then a producer code delta with its MODULE', async () => {
     const root = await workspace(FAST);
     const b = scriptedBackend();
@@ -1379,7 +1381,12 @@ describe('cpg watch over the real engine (I-23, decision 67)', () => {
       f.deltas().map((d) => [d.seq, d.file, d.producer, d.addedNodes.map((n) => n.id)]),
     ).toEqual([
       [1, 'b.py', 'filesystem', fileIds('b.py')],
-      [2, 'b.py', 'code', ['file:b.py:MODULE:$root', '`b.py`/']],
+      [
+        2,
+        'b.py',
+        'code',
+        ['file:b.py:MODULE:$root', 'file:b.py:MEMBER:export', '`b.py`/', '`b.py`/export.'],
+      ],
     ]);
     l.abort();
     expect(await l.done).toBe(EXIT.INTERRUPTED);

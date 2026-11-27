@@ -1,7 +1,8 @@
-// The Python adapter at the MODULE tier and the registry (decision 96). Module names come from the
-// ladder (rungs 01, 06, 07). The coverage rows come from C-EXTRACT I13 and Q8, decisions 91 and 93,
-// and the schema's ownership: what extract emits today, who owns what it never emits, and a tracking
-// id for each label or edge a later unit adds.
+// The Python adapter's module names, coverage table and registry (decision 96). Module names come
+// from the ladder (rungs 01, 06, 07). The coverage rows come from C-EXTRACT I13 and Q8, decisions 91,
+// 93 and 95, and the schema's ownership: what extract emits after Pass A (U6a.2-3) and from which
+// grammar node types, who owns what it never emits, and a tracking id for each label or edge a later
+// unit adds. The declaration table itself is python-decl.test.ts.
 import { isDeepStrictEqual } from 'node:util';
 import { EDGE_TYPES, isWorkspacePath, NODE_LABELS } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
@@ -46,28 +47,39 @@ const emits = (...fromNodeTypes: string[]) => ({ state: 'emits', fromNodeTypes }
 const notMine = (owner: string) => ({ state: 'not-mine', owner });
 const LATER = 'declared-not-emitted';
 
+// What a declaration is classified from, and what mints a SYMBOL (python.ts's table, decision 107).
+const DECLARED_FROM = ['class_definition', 'function_definition', 'expression_statement'];
+const SYMBOL_FROM = ['module', ...DECLARED_FROM, 'decorated_definition'];
+
 // One row per label and edge type: 14 + 15 (I13).
 const NODE_ROWS: Record<string, object | typeof LATER> = {
   DIRECTORY: notMine('filesystem-tier'),
   FILE: notMine('filesystem-tier'),
   MODULE: emits('module'),
-  TYPE_DECL: LATER,
-  METHOD: LATER,
-  PARAM: LATER,
-  MEMBER: LATER,
+  TYPE_DECL: emits('class_definition', 'decorated_definition'),
+  METHOD: emits('function_definition', 'decorated_definition'),
+  PARAM: emits(
+    'identifier',
+    'typed_parameter',
+    'default_parameter',
+    'typed_default_parameter',
+    'list_splat_pattern',
+    'dictionary_splat_pattern',
+  ),
+  MEMBER: emits('expression_statement'),
   CALL: LATER,
   IMPORT: LATER,
-  SYMBOL: emits('module'),
+  SYMBOL: emits(...SYMBOL_FROM),
   COMMUNITY: notMine('analysis-pass'),
   TAG: notMine('meta'),
-  UNKNOWN: LATER,
+  UNKNOWN: emits('ERROR'),
   META_DATA: notMine('meta'),
 };
 const EDGE_ROWS: Record<string, object | typeof LATER> = {
   HAS_ENTRY: notMine('filesystem-tier'),
-  DECLARES: LATER,
-  HAS_PARAM: LATER,
-  DEFINES: emits('module'),
+  DECLARES: emits(...DECLARED_FROM, 'decorated_definition'),
+  HAS_PARAM: emits('function_definition', 'decorated_definition'),
+  DEFINES: emits(...SYMBOL_FROM),
   CALLS: LATER,
   IN_SCOPE: LATER,
   IMPORTS: notMine('resolve-pass'),
@@ -120,7 +132,7 @@ describe('the python CoverageManifest (I13)', () => {
     ]);
   });
 
-  it('says what the MODULE tier emits, who owns the rest, and tracks every later row', () => {
+  it('says what the MODULE tier and Pass A emit, who owns the rest, and tracks every later row', () => {
     expect(mismatches(manifest.nodes, NODE_ROWS)).toEqual([]);
     expect(mismatches(manifest.edges, EDGE_ROWS)).toEqual([]);
   });

@@ -504,8 +504,9 @@ function real(grammarDir?: string) {
 async function moduleRange(tier: CodeTier, path: string, bytes: Uint8Array): Promise<string> {
   const got = await tier.run(walked(path, bytes), bytes);
   if (got.kind !== 'extracted') throw new Error(`not extracted: ${JSON.stringify(got)}`);
-  const [module, ...rest] = got.file.nodes;
-  if (module?.label !== 'MODULE' || rest.length > 0) throw new Error('expected one MODULE');
+  // U6a.2-3: Pass A's declarations follow the MODULE, which is always first
+  const [module] = got.file.nodes;
+  if (module?.label !== 'MODULE') throw new Error('expected the MODULE first');
   return formatRange(module.range);
 }
 

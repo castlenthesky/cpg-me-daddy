@@ -236,14 +236,18 @@ describe('extract never throws (I4)', () => {
     expect(outcome.error.message).toMatch(/^C-EXTRACT I19: /);
   });
 
-  it('fails internal on a declaration: Pass A is SEAT until U6a.2-3 (r2)', () => {
+  // U6a.2-3 rework of r2's SEAT case: Pass A is real, and one name declared three times is three
+  // nodes, not a duplicate id (I7) and not internal.
+  it('extracts a declaration from every top-level child, one name three times (I4, I7)', () => {
     const declaring: LanguageAdapter = { ...pythonAdapter, classify: () => DECLARATION };
-    const outcome = extractFile(request({ root: THREE }), declaring);
-    if (outcome.kind !== 'failed') throw new Error(`expected failed, got ${outcome.kind}`);
-    expect([outcome.error.code, outcome.error.message]).toEqual([
-      'internal',
-      'SEAT: Pass A declarations land in U6a.2-3',
+    const file = okFile(extractFile(request({ root: THREE }), declaring));
+    expect(file.nodes.map((n) => [n.id, n.range.startRow])).toEqual([
+      [MOD, 0],
+      ['file:main.py:TYPE_DECL:Greeter', 0],
+      ['file:main.py:TYPE_DECL:Greeter:1', 2],
+      ['file:main.py:TYPE_DECL:Greeter:2', 5],
     ]);
+    expect(file.symbols.map((s) => s.fqn)).toEqual(['`main.py`/', '`main.py`/Greeter#']);
   });
 });
 

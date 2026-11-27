@@ -1,4 +1,4 @@
-// toWriteOp, from C-STORE (DQ-03 fold), controller decision 97 and the schema's property lists.
+// toWriteOp, from C-STORE (DQ-03 fold), controller decisions 97 and 113 and the schema's property lists.
 // Every expected value is written by hand from the spec: ranges 0-based in, 1-based lines out.
 
 import type { EdgeElement, ExtractedFile, NodeElement, SymbolElement } from '@cpg/extract';
@@ -140,6 +140,8 @@ describe('toWriteOp', () => {
           params_count: 0,
           exported: true,
           ...owned(REV, '2:4-3:12'),
+          // U6a.2-3 (decisions 108, 113): a nameRange is written as the schema's name_range
+          name_range: '2:8-2:13',
         }),
         nodeRow('IMPORT', IMPORT_ID, {
           imported_names: ['path', 'sep'],
@@ -239,6 +241,26 @@ describe('toWriteOp', () => {
 
   it('throws on an invalid range: a producer bug', () => {
     const bad: ExtractedFile = { ...FILE, nodes: [{ ...GREET, range: range(2, 0, 1, 0) }] };
+    expect(() => toWriteOp(bad, [], 0)).toThrow(/invalid source range/);
+  });
+
+  // U6a.2-3 (decision 113; stop-list 194): METHOD writes name_range, formatted like range.
+  it('writes name_range from nameRange only, and the element field wins over a property', () => {
+    const named: ExtractedFile = {
+      ...FILE,
+      nodes: [
+        { ...GREET, nameRange: range(0, 4, 0, 9), properties: { name_range: '9:9-9:9' } },
+        { ...MODULE, properties: { name_range: '8:0-8:1' } },
+      ],
+      symbols: [],
+      edges: [],
+    };
+    expect(toWriteOp(named, [], 0).nodes.map((row) => row.properties['name_range'])).toEqual([
+      '1:4-1:9',
+      '8:0-8:1',
+      undefined,
+    ]);
+    const bad: ExtractedFile = { ...FILE, nodes: [{ ...GREET, nameRange: range(1, 9, 1, 8) }] };
     expect(() => toWriteOp(bad, [], 0)).toThrow(/invalid source range/);
   });
 });

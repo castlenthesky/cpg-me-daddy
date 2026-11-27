@@ -32,6 +32,26 @@ const pyFiles = (dir) =>
     .filter((d) => d.isFile() && d.name.endsWith('.py'))
     .map((d) => join(d.parentPath, d.name));
 
+/**
+ * U6a.2-3: the code tier's nodes in the ladder, from its hand-written answer: the [structural] node
+ * lines of python files whose label Pass A emits (CALL and IMPORT are Pass B's, U6a.2-4).
+ */
+const PASS_A = new Set(['MODULE', 'TYPE_DECL', 'METHOD', 'PARAM', 'MEMBER', 'UNKNOWN']);
+function passANodes(ladder) {
+  let count = 0;
+  for (const rung of readdirSync(ladder).filter((name) => /^\d\d-/.test(name))) {
+    let section = '';
+    for (const raw of readFileSync(join(ladder, rung, 'expected.cpg'), 'utf8').split('\n')) {
+      const line = raw.replace(/(^|\s)#.*$/, '').trim();
+      const header = /^\[(\w+)\]$/.exec(line);
+      if (header) section = header[1];
+      const [label = '', id = ''] = line.split(/\s+/);
+      if (!header && section === 'structural' && PASS_A.has(label) && /\.py:/.test(id)) count += 1;
+    }
+  }
+  return count;
+}
+
 /** A corpus on disk, and a cpg.index.report for it whose files carry `nodes`. */
 function corpus(files, nodes) {
   const root = mkdtempSync(join(tmpdir(), 'cpg-sparsity-'));
@@ -56,17 +76,18 @@ const lines = (text) => text.split('\n').filter((line) => line !== '');
 
 describe('check-sparsity on the ladder through the built bin', () => {
   it(
-    'passes: one summary line of the MODULE tier over every python file',
+    'passes: one summary line of the code tier over every python file',
     { timeout: 120_000 },
     () => {
       const files = pyFiles(LADDER);
       const total = files.reduce((sum, f) => sum + loc(readFileSync(f, 'utf8')), 0);
+      const nodes = passANodes(LADDER);
       const r = run([]);
       expect([r.status, r.stderr]).toEqual([0, '']);
       expect(lines(r.stdout)).toEqual([
-        `check-sparsity: ${files.length} nodes / ${total} LOC = ${(files.length / total).toFixed(3)} n/LOC over ${files.length} files (bar 1.5)`,
+        `check-sparsity: ${nodes} nodes / ${total} LOC = ${(nodes / total).toFixed(3)} n/LOC over ${files.length} files (bar 1.5)`,
       ]);
-      expect(files).toHaveLength(12);
+      expect([files.length, nodes]).toEqual([12, 33]);
     },
   );
 

@@ -546,7 +546,8 @@ async function workspace(config?: string): Promise<string> {
   // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
   await mkdir(join(root, '.git'));
   await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
-  await writeFile(join(root, 'b.py'), 'b = 2\n');
+  // U6a.2-3: a comment only, so b.py's code tier stays one MODULE (Pass A would add a MEMBER)
+  await writeFile(join(root, 'b.py'), '# b = 2\n');
   if (config !== undefined) await writeFile(join(root, 'cpg.config.yaml'), config);
   return root;
 }

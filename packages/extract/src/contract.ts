@@ -272,6 +272,8 @@ export interface TypeDeclInfo {
 export interface MethodInfo {
   readonly declares: 'METHOD';
   readonly name: string;
+  /** The name token: the METHOD's nameRange, written as `name_range` (decision 113). */
+  readonly nameNode?: SyntaxNode;
   readonly kind: MethodKind;
   readonly signature: string;
   readonly exported: boolean;

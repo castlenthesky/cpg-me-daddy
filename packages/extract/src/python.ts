@@ -1,7 +1,7 @@
-// The Python adapter, MODULE tier (U6a.2-2). Ported in part from archive
-// f18ee71:packages/engine/src/extract/python.ts: the declaration table (Pass A, U6a.2-3) and the
-// expression half (Pass B, U6a.2-4) are not here yet, so `classify` has no rows and every other label
-// is declared-not-emitted in the coverage table, never silent (I13).
+// The Python adapter: the MODULE tier (U6a.2-2) and the declaration half (U6a.2-3), ported from archive
+// f18ee71:packages/engine/src/extract/python.ts (classifyFunction, classifyClass, classifyAssignment,
+// paramInfo, the docstring helpers), plus `decorated_definition` (decision 107). The expression half
+// (Pass B) is U6a.2-4; what it adds is declared-not-emitted in the coverage table, never silent (I13).
 
 import type { WorkspacePath } from '@cpg/model';
 import type {
@@ -10,6 +10,9 @@ import type {
   DeclarationInfo,
   Disposition,
   LanguageAdapter,
+  MemberInfo,
+  MethodInfo,
+  TypeDeclInfo,
   SyntaxNode,
 } from './contract';
 import { EXTRACT_CONTRACT_VERSION } from './version';
@@ -84,9 +87,67 @@ function moduleName(path: WorkspacePath): string {
   return segments.join('.');
 }
 
-/** No declaration rows yet: every node is "no node for this" (sparse by design). */
-function classify(_node: SyntaxNode, _container: ContainerKind): DeclarationInfo | undefined {
-  return undefined;
+/**
+ * A `function_definition` (`name`, `parameters`, `body`, optional `return_type` fields; undefined
+ * without a name or a parameters field):
+ * - params: each named child of `parameters` in order: `identifier` (its text); `typed_parameter`
+ *   (the name of its first named child, an identifier or a splat, with typeText its `type`);
+ *   `default_parameter` and `typed_default_parameter` (`name`, with typeText `type` and defaultText
+ *   `value` when present); `list_splat_pattern` and `dictionary_splat_pattern` (the identifier inside,
+ *   no stars). Anything else (`/`, `*`, a tuple pattern) is no param.
+ * - signature (archive): `<name>(<p>, ...)` with `<p>` = `name` or `name: typeText`, then
+ *   ` -> <return_type text>` when there is one: `greet(name: str, times) -> str`.
+ * - kind: in a TYPE_DECL `constructor` for `__init__`, else `method`; in the MODULE `function`.
+ * - exported: the name has no leading `_`. async: the node's text starts with `async` and whitespace.
+ * - docstringHead (archive; a class's too): the body's first named child is an `expression_statement`
+ *   whose first named child is a `string`; that text without its prefix letters and matching quotes
+ *   (`"""`, `'''`, `"`, `'`), trimmed, then its first line trimmed. None when absent or blank.
+ * - nameNode: the `name` field; body: the `body` field.
+ * SEAT until U6a.2-3's implementation.
+ */
+function classifyFunction(_node: SyntaxNode, _container: ContainerKind): MethodInfo | undefined {
+  throw new Error('SEAT: python function declarations land in U6a.2-3');
+}
+
+/**
+ * A `class_definition`: undefined without a `name`; else `{ declares: 'TYPE_DECL', name, kind:
+ * 'class', exported (no leading `_`), structural: true, docstringHead?, body: the body field }`.
+ * SEAT until U6a.2-3's implementation.
+ */
+function classifyClass(_node: SyntaxNode): TypeDeclInfo | undefined {
+  throw new Error('SEAT: python class declarations land in U6a.2-3');
+}
+
+/**
+ * An `expression_statement` whose first named child is an `assignment` with an `identifier` `left`
+ * (`X = 1`, `X: int = 1`, `X: int`, the first name of `a = b = 1`): a MEMBER named by it, typeText its
+ * `type` field, value its `right` field, each when present. A tuple, attribute or augmented
+ * assignment, or any other statement, is undefined. SEAT until U6a.2-3's implementation.
+ */
+function classifyAssignment(node: SyntaxNode): MemberInfo | undefined {
+  if (node.namedChildren[0]?.type !== 'assignment') return undefined;
+  throw new Error('SEAT: python member declarations land in U6a.2-3');
+}
+
+/**
+ * The declaration table (sparse by design: anything else is undefined): `function_definition`,
+ * `class_definition`, an assignment `expression_statement`, and a `decorated_definition`, which is
+ * whatever its `definition` field (a function or a class) classifies as in the same container, so the
+ * walker gives it the decorated range (decision 107).
+ */
+function classify(node: SyntaxNode, container: ContainerKind): DeclarationInfo | undefined {
+  switch (node.type) {
+    case 'function_definition':
+      return classifyFunction(node, container);
+    case 'class_definition':
+      return classifyClass(node);
+    case 'expression_statement':
+      return classifyAssignment(node);
+    case 'decorated_definition':
+      throw new Error('SEAT: python decorated definitions land in U6a.2-3');
+    default:
+      return undefined;
+  }
 }
 
 /**
