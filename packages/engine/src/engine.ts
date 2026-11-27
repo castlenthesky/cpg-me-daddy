@@ -233,6 +233,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
     extractor,
     createParseService: deps.createParseService ?? createParseService,
     ...(config.grammarDir !== undefined ? { grammarDir: config.grammarDir } : {}),
+    ...(config.runtimeDir !== undefined ? { runtimeDir: config.runtimeDir } : {}),
   });
 
   async function writeAll(op: WriteOp): Promise<WriteReceipt> {

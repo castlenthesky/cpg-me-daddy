@@ -48,18 +48,23 @@ export const DEFAULT_OUTDIR = 'apps/vscode/dist/grammars';
  */
 // REAL
 export async function copyGrammars({ outdir = DEFAULT_OUTDIR } = {}) {
-  const packageJson = createRequire(import.meta.url).resolve(`${GRAMMAR_PACKAGE}/package.json`);
+  const requireFromHere = createRequire(import.meta.url);
+  const packageJson = requireFromHere.resolve(`${GRAMMAR_PACKAGE}/package.json`);
   const sourceDir = join(dirname(packageJson), 'wasm');
+  const parsePackageJson = requireFromHere.resolve('@cpg/parse/package.json');
+  const runtimeSource = createRequire(parsePackageJson).resolve(`${RUNTIME_PACKAGE}/${RUNTIME}`);
   const targetDir = resolve(ROOT, outdir);
   await mkdir(targetDir, { recursive: true });
-  const files = await Promise.all(
+  const grammarFiles = await Promise.all(
     GRAMMARS.map(async (name) => {
       const dest = join(targetDir, name);
       await copyFile(join(sourceDir, name), dest);
       return dest;
     }),
   );
-  return { outdir: targetDir, files };
+  const runtimeDest = join(targetDir, RUNTIME);
+  await copyFile(runtimeSource, runtimeDest);
+  return { outdir: targetDir, files: [...grammarFiles, runtimeDest] };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

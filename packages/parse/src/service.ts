@@ -1,6 +1,6 @@
 // REAL: grammar loading with provenance and the ABI gate, parse, handle lifetime, dispose.
 // SEAT: retain/releaseDocument (the retained-tree cache, I25/I26). No caller exists yet, so both throw.
-// SEAT: webTreeSitterAt, the runtime wasm from ParseServiceOptions.runtimeDir (stop-list 192).
+import { isAbsolute, join } from 'node:path';
 import {
   Language,
   LANGUAGE_VERSION,
@@ -95,6 +95,8 @@ const WEB_TREE_SITTER: ParserRuntime = {
   }),
 };
 
+const RUNTIME_WASM = 'web-tree-sitter.wasm';
+
 /**
  * WEB_TREE_SITTER with its runtime wasm read from `runtimeDir` (ParseServiceOptions.runtimeDir): `init`
  * is `Parser.init({ locateFile })`, mapping each file web-tree-sitter asks for to
@@ -102,8 +104,19 @@ const WEB_TREE_SITTER: ParserRuntime = {
  * `Parser.init`. A rejection's message names `<runtimeDir>/web-tree-sitter.wasm`.
  */
 function webTreeSitterAt(runtimeDir: string): ParserRuntime {
-  // SEAT
-  throw new Error(`SEAT: web-tree-sitter's runtime from ${runtimeDir} (stop-list 192)`);
+  return {
+    async init() {
+      if (!isAbsolute(runtimeDir)) {
+        throw new Error(`runtimeDir must be an absolute path, got '${runtimeDir}'`);
+      }
+      try {
+        await Parser.init({ locateFile: (file: string) => join(runtimeDir, file) });
+      } catch (cause) {
+        throw new Error(`${join(runtimeDir, RUNTIME_WASM)}: ${String(cause)}`, { cause });
+      }
+    },
+    abiBindings: () => WEB_TREE_SITTER.abiBindings(),
+  };
 }
 
 export function createParseService({

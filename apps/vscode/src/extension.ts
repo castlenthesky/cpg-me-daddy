@@ -54,6 +54,7 @@ export function activate(context: vscode.ExtensionContext): void {
     root,
     version,
     grammarDir,
+    runtimeDir: grammarDir,
     createEngine,
     fileSystem: workspaceFileSystem(uriOf),
     opener: createSourceOpener(uriOf),

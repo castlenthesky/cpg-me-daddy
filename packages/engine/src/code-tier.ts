@@ -211,7 +211,7 @@ export interface CodeTier {
 
 export function createCodeTier(options: CodeTierOptions): CodeTier {
   // REAL
-  const { registry, extractor, createParseService, grammarDir } = options;
+  const { registry, extractor, createParseService, grammarDir, runtimeDir } = options;
   const covered = new Set<string>(extractor.grammars);
   let service: ParseService | undefined;
 
@@ -224,7 +224,11 @@ export function createCodeTier(options: CodeTierOptions): CodeTier {
           resolvePackageJson: (p) => require.resolve(`${p}/package.json`),
         }),
       );
-      service = createParseService({ registry, source });
+      service = createParseService({
+        registry,
+        source,
+        ...(runtimeDir !== undefined ? { runtimeDir } : {}),
+      });
     }
     return service;
   }

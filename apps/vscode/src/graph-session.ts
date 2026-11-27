@@ -334,6 +334,7 @@ export class GraphSession {
         version: this.options.version,
         consumers: config.consumers,
         ...(this.options.grammarDir === undefined ? {} : { grammarDir: this.options.grammarDir }),
+        ...(this.options.runtimeDir === undefined ? {} : { runtimeDir: this.options.runtimeDir }),
       });
 
       failed = 'cannot open the graph store';
