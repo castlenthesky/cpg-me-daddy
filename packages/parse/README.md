@@ -1,3 +1,3 @@
 # @cpg/parse
 
-Pipeline stage 2. Turns changed files into syntax trees: the `ParserBackend` seam, the language registry, grammar loading, and tree lifetime.
+Pipeline stage 2. Turns source text into syntax trees: the language registry, grammar loading through the `GrammarSource` seam with the ABI gate, the grammar-dir locator, and tree lifetime.

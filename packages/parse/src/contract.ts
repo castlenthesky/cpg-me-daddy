@@ -1,7 +1,7 @@
 // C-PARSE (docs/outline/05-contracts.yaml): text in, a live syntax tree out. Types only, enforced by
 // check-deps rule `contract-types-only`. REAL: the registry (registry.ts), the ParseService over
-// web-tree-sitter (service.ts). SEAT until U6a.1-close's implementation: the ABI gate (abi.ts), the
-// grammar-dir locator (grammar-dir.ts). SEAT: the retained-tree cache (retain / releaseDocument).
+// web-tree-sitter (service.ts), the ABI gate (abi.ts), the grammar-dir locator (grammar-dir.ts).
+// SEAT: the retained-tree cache (ParseService.retain / releaseDocument).
 //
 // Shapes the contract names but does not spell out (RegisterOutcome, GrammarBytesOutcome,
 // GrammarDirOutcome, ParserStats, the per-code ParseError fields) are decided here.

@@ -1,5 +1,4 @@
-// SEAT: resolveGrammarDir (U6a.1-close implements it).
-// The grammar-dir locator (C-PARSE I10, I11), ported from
+// REAL: the grammar-dir locator (C-PARSE I10, I11), ported from
 // 27361a3:packages/engine/src/parser/wasm-locator.ts.
 //
 // Why the package anchor is `<dir of the package's package.json>/wasm` and not a path from this
@@ -7,7 +6,19 @@
 // node_modules too. Package resolution is the same in all of them; a `__dirname` walk is not.
 // Why the overrides exist: a bundler rewrites `require.resolve`, so a VSIX copies the `.wasm` next
 // to its bundle and names that folder explicitly (C-PARSE Q1).
-import type { GrammarDirResolver } from './contract';
+import { dirname, isAbsolute, join } from 'node:path';
+import type { GrammarDirOutcome, GrammarDirResolver, GrammarDirVia } from './contract';
+
+function requireAbsolute(dir: string, via: GrammarDirVia): GrammarDirOutcome {
+  if (!isAbsolute(dir)) {
+    return {
+      ok: false,
+      via,
+      message: `grammar directory from ${via} must be an absolute path, got '${dir}'`,
+    };
+  }
+  return { ok: true, dir, via };
+}
 
 /**
  * explicit > `env.CPG_GRAMMAR_DIR` > package anchor, named in `via` (I11). Pure: it reads only the
@@ -20,6 +31,29 @@ import type { GrammarDirResolver } from './contract';
  *   becomes `ok: false` via `package-anchor`, with a message naming the package and
  *   CPG_GRAMMAR_DIR. The resolver itself never throws.
  */
-export const resolveGrammarDir: GrammarDirResolver = () => {
-  throw new Error('SEAT: resolveGrammarDir (C-PARSE I10, I11) lands in U6a.1-close');
+export const resolveGrammarDir: GrammarDirResolver = (request) => {
+  if (request.explicit !== undefined && request.explicit !== '') {
+    return requireAbsolute(request.explicit, 'explicit');
+  }
+
+  const fromEnv = request.env?.CPG_GRAMMAR_DIR;
+  if (fromEnv !== undefined && fromEnv !== '') {
+    return requireAbsolute(fromEnv, 'CPG_GRAMMAR_DIR');
+  }
+
+  let packageJson: string;
+  try {
+    packageJson = request.resolvePackageJson(request.packageName);
+  } catch (cause) {
+    return {
+      ok: false,
+      via: 'package-anchor',
+      message:
+        `Cannot locate the '${request.packageName}' package that ships the grammar .wasm files ` +
+        `(${String(cause)}). Install it, or set CPG_GRAMMAR_DIR to a directory holding the ` +
+        'grammar .wasm files.',
+    };
+  }
+
+  return requireAbsolute(join(dirname(packageJson), 'wasm'), 'package-anchor');
 };

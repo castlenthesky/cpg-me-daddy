@@ -1,5 +1,5 @@
-// REAL: AbiNotReadyError. SEAT: createAbiGate, checkGrammarAbi (U6a.1-close implements them).
-// The grammar ABI gate (C-PARSE I13), ported from 27361a3:packages/engine/src/parser/abi.ts.
+// REAL: the ABI gate (AbiNotReadyError, createAbiGate, checkGrammarAbi; C-PARSE I13), ported from
+// 27361a3:packages/engine/src/parser/abi.ts.
 //
 // THE TRAP: in web-tree-sitter 0.27, LANGUAGE_VERSION and MIN_COMPATIBLE_VERSION are module-level
 // `export let` bindings that stay `undefined` until `Parser.init()` resolves. Read them a line too
@@ -37,7 +37,7 @@ export interface ParserRuntime {
   };
 }
 
-export type AbiRangeOutcome =
+type AbiRangeOutcome =
   | { readonly ok: true; readonly range: AbiRange }
   | { readonly ok: false; readonly message: string };
 
@@ -55,15 +55,70 @@ export interface AbiGate {
   range(): AbiRangeOutcome;
 }
 
-export function createAbiGate(_runtime: ParserRuntime): AbiGate {
-  throw new Error('SEAT: createAbiGate (C-PARSE I13) lands in U6a.1-close');
+function isAbiVersion(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+export function createAbiGate(runtime: ParserRuntime): AbiGate {
+  let open = false;
+  return {
+    async init() {
+      await runtime.init();
+      open = true;
+    },
+    range() {
+      if (!open) throw new AbiNotReadyError();
+      const { minCompatible, languageVersion } = runtime.abiBindings();
+      if (!isAbiVersion(minCompatible) || !isAbiVersion(languageVersion)) {
+        return {
+          ok: false,
+          message:
+            'Grammar ABI range is unreadable ' +
+            `(MIN_COMPATIBLE_VERSION=${String(minCompatible)}, ` +
+            `LANGUAGE_VERSION=${String(languageVersion)}). ` +
+            'In web-tree-sitter these bindings stay undefined until Parser.init() resolves; ' +
+            'refusing to load a grammar against an unknown ABI range.',
+        };
+      }
+      if (minCompatible > languageVersion) {
+        return {
+          ok: false,
+          message:
+            `Grammar ABI range is inverted (MIN_COMPATIBLE_VERSION=${String(minCompatible)} > ` +
+            `LANGUAGE_VERSION=${String(languageVersion)}). ` +
+            'The parser runtime reported a range it cannot satisfy.',
+        };
+      }
+      return { ok: true, range: { minCompatible, languageVersion } };
+    },
+  };
 }
 
 /**
  * Why a grammar's ABI is outside the range (inclusive at both ends), or undefined when it is
  * inside. A version that is not a positive integer is outside. The reason says "too old" or
  * "too new" and names the range as `<min>..<max>`.
+ *
+ * Loading a grammar outside the runtime's supported ABI range does not fail cleanly — it fails as
+ * an empty `ERROR` node at the root, or worse, as a tree that is subtly wrong. Checking at load
+ * time turns an ABI mismatch into a loud, named failure instead of silently wrong trees.
  */
-export function checkGrammarAbi(_abiVersion: number, _range: AbiRange): string | undefined {
-  throw new Error('SEAT: checkGrammarAbi (C-PARSE I13) lands in U6a.1-close');
+export function checkGrammarAbi(abiVersion: number, range: AbiRange): string | undefined {
+  const span = `${String(range.minCompatible)}..${String(range.languageVersion)}`;
+  if (!isAbiVersion(abiVersion)) {
+    return `has no usable ABI version (got ${String(abiVersion)}; runtime accepts ${span})`;
+  }
+  if (abiVersion < range.minCompatible) {
+    return (
+      `has ABI ${String(abiVersion)}, which is too old for this runtime (accepts ${span}); ` +
+      'regenerate the grammar with a newer tree-sitter-cli'
+    );
+  }
+  if (abiVersion > range.languageVersion) {
+    return (
+      `has ABI ${String(abiVersion)}, which is too new for this runtime (accepts ${span}); ` +
+      'upgrade web-tree-sitter, or regenerate the grammar with an older tree-sitter-cli'
+    );
+  }
+  return undefined;
 }
