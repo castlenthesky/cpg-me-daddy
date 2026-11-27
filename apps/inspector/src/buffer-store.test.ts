@@ -504,15 +504,41 @@ describe('BufferStore.applyDelta additions', () => {
     expect(store.liveTypes()).toEqual(['DIRECTORY', 'DIRECTORY', 'FILE']);
   });
 
-  it('restores in place when one delta removes and re-adds an id', () => {
+  // Reworked for controller decision 111 (sprint 34): an id one delta removes and re-adds keeps its
+  // live point, position and size, draws no random number, and takes the new node and type, so a
+  // save's code points stay where they are; an id the delta removes and does not re-add still goes.
+  it('keeps the live point of an id one delta removes and re-adds; a removed id it does not re-add goes', () => {
     const store = loaded();
+    const again = node('f', 'MODULE', 'f2.ts');
+    store.applyDelta(
+      { addedNodes: [again], removedNodeIds: ['g', 'f'] },
+      new Map([['f', 'd']]),
+      scripted(),
+    );
+    expect(store.length).toBe(3);
+    expect(xy(store, 1)).toEqual([300, 400]);
+    expect(store.sizes[1]).toBe(9);
+    expect(rgba(store, 1)).toEqual(f32(GREY));
+    expect(store.nodeAt(1)).toBe(again);
+    expect(store.liveIndex('f')).toBe(1);
+    expect([xy(store, 2), store.liveIndex('g'), store.node('g')]).toEqual([
+      [NaN, NaN],
+      undefined,
+      undefined,
+    ]);
+    expect(store.liveTypes()).toEqual(['DIRECTORY', 'MODULE']);
+  });
+
+  // Decision 111 is about live points: an id already gone is seeded afresh beside its parent.
+  it('an id removed by an earlier delta, then removed and re-added by one, is seeded beside its parent', () => {
+    const store = loaded();
+    store.applyDelta(remove('f'), new Map(), scripted());
     const again = node('f', 'FILE', 'f2.ts');
     store.applyDelta(
       { addedNodes: [again], removedNodeIds: ['f'] },
       new Map([['f', 'd']]),
       scripted(0.25, 0.75),
     );
-    expect(store.length).toBe(3);
     expect(xy(store, 1)).toEqual([90, 210]);
     expect(store.nodeAt(1)).toBe(again);
   });

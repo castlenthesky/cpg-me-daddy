@@ -16,6 +16,7 @@ import {
   type ParseService,
   type ParseServiceOptions,
 } from '@cpg/parse';
+import type { WorkspacePath } from '@cpg/model';
 import type { EdgeRow, WriteOp } from '@cpg/store';
 import type { WalkedFile } from './walker/walker';
 
@@ -104,6 +105,32 @@ export function attachSourceFile(op: ReplaceFileOp): {
     op: { ...op, edges: [...op.edges, sourceFileEdge] },
     attached: true,
   };
+}
+
+/** One file the code tier could not write (decision 100: the FILE tier only, and a warning). */
+export interface CodeTierFailure {
+  readonly path: WorkspacePath;
+  readonly language: string;
+  /** The CodeTierResult code, or `read-failed` for a live read that rejected (decision 102). */
+  readonly code: string;
+  readonly message: string;
+}
+
+/**
+ * The code tier's failure warnings (decision 100; one text for index() and the watch): one per
+ * (language, code) group of `failures` whose key is not yet in `reported`, in the order each group
+ * first fails, `code tier: <n> <language> file<s> at the FILE tier only (<code>): <first path>:
+ * <first message>` (`file` when n is 1, else `files`; the first path and message are that group's
+ * first failure). Adds each warned group's key to `reported`, so a group is said once per set. The
+ * key is opaque to callers: they keep the set, never build one.
+ */
+export function failureWarnings(
+  failures: readonly CodeTierFailure[],
+  reported: Set<string>,
+): readonly string[] {
+  // SEAT (U6a.3-3)
+  void [failures, reported];
+  throw new Error('SEAT: failureWarnings (U6a.3-3)');
 }
 
 export interface CodeTierOptions {

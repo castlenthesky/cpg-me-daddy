@@ -16,12 +16,14 @@ import {
   applyGraphDelta,
   isWorkspacePath,
   makeNodeId,
+  NODE_LABELS,
   type GraphDelta,
   type GraphEdge,
   type GraphNode,
   type GraphPayload,
   type WorkspacePath,
 } from '@cpg/model';
+import { createParseService, type ParseService } from '@cpg/parse';
 import { createMemoryStore, type MemoryStore } from '@cpg/sink';
 import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
 import type {
@@ -43,7 +45,16 @@ import type {
   WatchEvent,
   WatchRequest,
 } from './port';
-import { HeldPaths, toBatchDeltas, toBatchOp } from './watch';
+import type { ReplaceFileOp } from './code-tier';
+import {
+  HeldCode,
+  HeldPaths,
+  planCodeWrites,
+  toBatchDeltas,
+  toBatchOp,
+  toCodeDelta,
+  type DeleteFileOp,
+} from './watch';
 
 const roots: string[] = [];
 const controllers: AbortController[] = [];
@@ -174,6 +185,93 @@ const aChange = (
 ): NormalizedChange => ({ kind, entry, path: wp(path), observedAt: 1, ...extra });
 const edgeKey = (e: GraphEdge): string => `${e.source} ${String(e.type)} ${e.target}`;
 const nodesById = (p: GraphPayload): GraphNode[] => p.nodes.toSorted((a, b) => byText(a.id, b.id));
+// ── U6a.3-3: the code tier (decision 102) ──
+const mod = (path: string): string => `file:${path}:MODULE:$root`;
+const sym = (path: string): string => `\`${path}\`/`;
+/** FILE's code-owned properties, from the schema (DQ-01). */
+const CODE_HALF: readonly string[] = (NODE_LABELS.find((l) => l.label === 'FILE')?.properties ?? [])
+  .filter((p) => p.owner === 'code')
+  .map((p) => p.name);
+/** A node without FILE's code-owned half (S34-1). */
+const fsHalf = (n: GraphNode): GraphNode =>
+  n.type !== 'FILE'
+    ? n
+    : {
+        ...n,
+        data: Object.fromEntries(
+          Object.entries(n.data ?? {}).filter(([k]) => !CODE_HALF.includes(k)),
+        ),
+      };
+const opKinds = (ops: readonly WriteOp[]): string[] =>
+  ops.map((op) =>
+    op.kind === 'replace-file' || op.kind === 'delete-file' ? `${op.kind} ${op.file}` : op.kind,
+  );
+const prune = (props: Readonly<Record<string, unknown>>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(props).filter(([, v]) => v !== null && v !== undefined));
+const idOfEnd = (label: string, key: string): string =>
+  label === 'FILE' || label === 'DIRECTORY'
+    ? makeNodeId({ form: label === 'FILE' ? 'file' : 'directory', path: wp(key) })
+    : key;
+/** Decision 102's code delta for a written op, by the mapping toCodeDelta documents (the oracle). */
+function codeDelta(
+  op: WriteOp | undefined,
+  seq: number,
+  removedNodeIds: readonly string[],
+): GraphDelta {
+  if (op?.kind === 'delete-file') {
+    return {
+      seq,
+      file: op.file,
+      revision_id: '',
+      producer: 'code',
+      addedNodes: [],
+      addedEdges: [],
+      removedNodeIds,
+    };
+  }
+  if (op?.kind !== 'replace-file') throw new Error(`not a code op: ${String(op?.kind)}`);
+  return {
+    seq,
+    file: op.file,
+    revision_id: op.revision_id,
+    producer: 'code',
+    addedNodes: op.nodes
+      .filter((row) => row.label !== 'FILE')
+      .map((row) => {
+        const data = prune(row.properties);
+        const name = data['name'];
+        return { id: row.key, type: row.label, ...(typeof name === 'string' && { name }), data };
+      }),
+    addedEdges: op.edges.map((e) => {
+      const data = prune(e.properties);
+      return {
+        source: idOfEnd(e.fromLabel, e.fromKey),
+        target: idOfEnd(e.toLabel, e.toKey),
+        type: e.type,
+        ...(Object.keys(data).length > 0 && { data }),
+      };
+    }),
+    removedNodeIds,
+  };
+}
+/** The ops written after the first `skip` (the index's). */
+const after = (r: Recorder, skip: number): WriteOp[] => r.ops.slice(skip);
+const opOf = (r: Recorder, label: string): WriteOp | undefined =>
+  r.ops.findLast((op) => opKinds([op])[0] === label);
+/** The sum decision 102 names: every receipt of the ops from `from` on. */
+function sums(
+  r: Recorder,
+  from: number,
+): { nodesWritten: number; edgesWritten: number; statementCount: number } {
+  const out = { nodesWritten: 0, edgesWritten: 0, statementCount: 0 };
+  for (const receipt of r.receipts.slice(from)) {
+    if (receipt === undefined) continue;
+    out.nodesWritten += receipt.nodesWritten;
+    out.edgesWritten += receipt.edgesWritten;
+    out.statementCount += receipt.statementCount;
+  }
+  return out;
+}
 const held = (files: readonly string[], dirs: readonly string[]): HeldPaths =>
   new HeldPaths(files.map(wp), dirs.map(wp));
 
@@ -283,6 +381,8 @@ const failure = (code: WatchError['code'], fatal: boolean, extra: Partial<WatchE
 interface Recorder {
   readonly store: MemoryStore;
   readonly ops: WriteOp[];
+  /** U6a.3-3: the receipt each op got, at its index in `ops`; a refused op has none. */
+  readonly receipts: (WriteReceipt | undefined)[];
   /** Writes that resolved. */
   landed: number;
 }
@@ -292,8 +392,8 @@ interface RecorderOptions {
   readonly receipt?: Partial<WriteReceipt>;
   /** Rejects write number n (from 1) when true. */
   readonly rejects?: (n: number) => boolean;
-  /** Runs inside each write, before it lands. */
-  readonly during?: () => Promise<void> | void;
+  /** Runs inside each write, before it lands (U6a.3-3: it is handed the op). */
+  readonly during?: (op: WriteOp) => Promise<void> | void;
   /** Gets the store's id on each readAll (sprint 26). */
   readonly reads?: string[];
 }
@@ -301,17 +401,22 @@ function recorder(o: RecorderOptions = {}): Recorder {
   const id = o.id ?? 'memory';
   const memory = createMemoryStore({ id });
   const ops: WriteOp[] = [];
+  const receipts: (WriteReceipt | undefined)[] = [];
   const recorded: Recorder = {
     ops,
+    receipts,
     landed: 0,
     store: {
       ...memory,
       async write(op) {
         ops.push(op);
+        const at = ops.length - 1;
+        receipts[at] = undefined;
         o.log?.push(`${id}.write`);
-        await o.during?.();
+        await o.during?.(op);
         if (o.rejects?.(ops.length) === true) throw new Error(`${id} refused`);
         const receipt = await memory.write(op);
+        receipts[at] = receipt;
         recorded.landed += 1;
         o.log?.push(`${id}.landed`);
         return { ...receipt, ...o.receipt };
@@ -351,15 +456,21 @@ interface StartOptions {
   readonly controller?: AbortController;
   readonly onEvent?: (event: WatchEvent) => void;
   readonly rescan?: RescanTrigger;
-  /** The code tier's seams (U6a.3-2), to prove the watch never uses them (S32-1). */
+  /** The code tier's seams (U6a.3-2). */
   readonly codeTier?: Pick<EngineDeps, 'extractor' | 'createParseService'>;
+  /** EngineConfig.grammarDir (U6a.3-3: an empty directory makes every python file fail). */
+  readonly grammarDir?: string;
 }
 async function start(root: string, o: StartOptions = {}): Promise<Run> {
   const clock = o.clock ?? fakeClock(5000);
   const backend = o.backend ?? backendFor();
   const memory = o.memory ?? recorder();
   const engine = createEngine(
-    { version: '1', consumers: HEADLESS },
+    {
+      version: '1',
+      consumers: HEADLESS,
+      ...(o.grammarDir !== undefined && { grammarDir: o.grammarDir }),
+    },
     {
       memoryStore: memory.store,
       ...(o.host !== undefined && { sinks: [o.host.store] }),
@@ -447,26 +558,17 @@ describe('start: index, then ready (decision 60)', () => {
       () => undefined,
       signal,
     );
-    // S32-1 (U6a.3-2): the watch runs index()'s code with the code tier off until U6a.3-3, whose
-    // batches carry it; so its report is index()'s with the code tier's counts and warnings taken out
+    // U6a.3-3 (decision 110 reversed): the watch runs index() itself, code tier included, so its
+    // report is index()'s: src/b.py's MODULE and its two edges, and index()'s one warning.
     expect(report.files.find((f) => f.path === 'src/b.py')).toMatchObject({ nodes: 1, edges: 2 });
+    expect(report.warnings).toEqual(['no extractor for typescript yet (U6b)']);
     expect(run.events).toEqual([
       {
         kind: 'ready',
         seq: 0,
         at: 5000,
         root,
-        report: {
-          ...report,
-          durationMs: expect.any(Number),
-          files: report.files.map((f) => ({ ...f, nodes: 0, edges: 0 })),
-          // the root and src, a.ts, src/b.py and README.md; four HAS_ENTRY: merge-filesystem alone
-          nodesWritten: 5,
-          edgesWritten: 4,
-          warnings: [
-            'the watch does not run the code tier yet (U6a.3-3): only the filesystem tier is watched',
-          ],
-        },
+        report: { ...report, durationMs: expect.any(Number) },
         graphSeq: 0,
       },
     ]);
@@ -482,37 +584,46 @@ describe('start: index, then ready (decision 60)', () => {
     });
     expect(event.report.files.map((f) => f.path)).toEqual(['a.ts', 'src/b.py']);
     expect(event.report.consumers).toEqual(['memory']);
-    expect(run.memory.ops).toHaveLength(1);
+    expect(opKinds(run.memory.ops)).toEqual(['merge-filesystem', 'replace-file src/b.py']);
     expect(run.backend.subscribed).toEqual([root]);
   });
 
-  // Round two (review 10): with the code tier off the watch never builds a parser or extracts, so a
-  // watch that parses and only drops the writes fails.
-  it('the watch builds no ParseService and calls no extract (S32-1, until U6a.3-3)', async () => {
-    const root = await tree({ 'a.py': 'a = 1\n', 'src/b.py': 'b' });
+  // U6a.3-3 (decision 100): one ParseService per engine, so the watch's batches parse with the one
+  // its index made; each file is parsed once and released before the next is parsed.
+  it("the batches parse with the index's one ParseService, one file at a time", async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
     const calls: string[] = [];
+    const services: ParseService[] = [];
     const run = await start(root, {
       codeTier: {
-        createParseService: () => {
+        createParseService: (options) => {
           calls.push('createParseService');
-          throw new Error('the watch must not parse');
-        },
-        extractor: {
-          contractVersion: 'test',
-          grammars: ['python'],
-          coverage: () => {
-            throw new Error('unused');
-          },
-          extract: () => {
-            calls.push('extract');
-            throw new Error('the watch must not extract');
-          },
+          const service = createParseService(options);
+          services.push(service);
+          return {
+            ...service,
+            parse: (request) => {
+              calls.push(`parse ${request.key}, ${String(service.stats().liveHandles)} live`);
+              return service.parse(request);
+            },
+          };
         },
       },
     });
     await ready(run);
-    expect(calls).toEqual([]);
-    expect(run.memory.ops.map((op) => op.kind)).toEqual(['merge-filesystem']);
+    await writeFile(join(root, 'b.py'), 'b = 2\n');
+    await writeFile(join(root, 'a.py'), 'a = 3\n');
+    run.backend.fire(raw(root, 'created', 'b.py', 5001), raw(root, 'changed', 'a.py', 5002));
+    run.clock.advance(100);
+    await until(() => batches(run.events).length === 1, 'a batch');
+    const [batch] = batches(run.events);
+    expect(batch?.changes.map((c) => c.path).toSorted()).toEqual(['a.py', 'b.py']);
+    expect(calls).toEqual([
+      'createParseService',
+      'parse a.py, 0 live',
+      ...(batch?.changes ?? []).map((c) => `parse ${c.path}, 0 live`),
+    ]);
+    expect(services.map((service) => service.stats().liveHandles)).toEqual([0]);
   });
 
   it('seeds the session from the walk, so the initial batch is only what changed since, written before ready', async () => {
@@ -1703,16 +1814,22 @@ describe('the batch events carry deltas and the graph seq (decisions 81, 82)', (
     await step(() => t.fire(), 'the rescan');
 
     const store = await run.memory.store.readAll();
+    // U6a.3-3 (decision 102): lib/two.py's code write and d/e/y.py's delete-file each bring one code
+    // delta after the change's own.
     expect(batches(run.events).map((b) => [b.cause, b.deltas.length])).toEqual([
-      ['live', 3],
+      ['live', 4],
       ['live', 1],
       ['live', 1],
-      ['live', 1],
+      ['live', 2],
       ['rescan', 2],
     ]);
     expect(outcomes.every((o) => o === 'applied')).toBe(true);
-    expect(outcomes).toHaveLength(8);
-    expect(nodesById(picture)).toEqual(nodesById(store));
+    expect(outcomes).toHaveLength(10);
+    // S34-1: a code delta carries no FILE, so the FILE's code-owned half is the store's alone.
+    expect(nodesById(picture).map(fsHalf)).toEqual(nodesById(store).map(fsHalf));
+    expect(picture.nodes.filter((n) => n.type === 'MODULE').map((n) => n.id)).toEqual([
+      mod('lib/two.py'),
+    ]);
     expect(picture.edges.map(edgeKey).toSorted(byText)).toEqual(
       store.edges.map(edgeKey).toSorted(byText),
     );
@@ -1758,4 +1875,671 @@ describe('the default backend is @parcel/watcher', () => {
       (batch?.latencyMs.t1_t2 ?? 0) + (batch?.latencyMs.t2_t3 ?? 0),
     );
   }, 40_000);
+});
+
+// ── U6a.3-3 (BMO-43 part 3): the code tier on save. Expected values: controller decision 102, C-SINK
+// INV-3/INV-18/INV-19, C-MODEL I-5/I-8/I-10/I-15, C-WATCH INV-26, decisions 90/96/98a/100/104, the
+// store's replace-file and delete-file (C-STORE), and the extractor's U6a coverage (one MODULE and
+// its module SYMBOL per python file, MODULE named by its dotted path). ──
+
+const fileChange = (
+  kind: ChangeKind,
+  path: string,
+  revision?: string,
+  from?: string,
+): NormalizedChange =>
+  aChange(kind, 'file', path, {
+    ...(revision !== undefined && { revision_id: revision }),
+    ...(from !== undefined && { fromPath: wp(from) }),
+  });
+const dirChange = (kind: ChangeKind, path: string, from?: string): NormalizedChange =>
+  aChange(kind, 'directory', path, from !== undefined ? { fromPath: wp(from) } : {});
+const language = (p: string): string | undefined =>
+  p.endsWith('.py') ? 'python' : p.endsWith('.ts') ? 'typescript' : undefined;
+const covers = (l: string | null): boolean => l === 'python';
+const heldOf = (entries: Record<string, readonly string[]>): HeldCode =>
+  new HeldCode(new Map(Object.entries(entries).map(([k, v]) => [wp(k), v])));
+
+describe('HeldCode (decision 102)', () => {
+  it('holds ids per file; filesAt is the path and what lies under it, sorted, never a prefix sibling', () => {
+    const ids = ['m3'];
+    const source = new Map<WorkspacePath, readonly string[]>([
+      [wp('pkg/sub/c.py'), ['m4']],
+      [wp('pkg2/b.py'), ids],
+      [wp('pkg/a.py'), ['m1', 'm2']],
+      [wp('pkg.py'), ['m5']],
+      [wp('z.py'), []],
+    ]);
+    const code = new HeldCode(source);
+    ids.push('late');
+    source.set(wp('new.py'), ['n']);
+    expect(code.filesAt(wp('pkg'))).toEqual(['pkg/a.py', 'pkg/sub/c.py']);
+    expect(code.filesAt(wp('pkg/a.py'))).toEqual(['pkg/a.py']);
+    expect(code.filesAt(wp('pkg/sub'))).toEqual(['pkg/sub/c.py']);
+    expect([
+      code.filesAt(wp('z.py')),
+      code.filesAt(wp('new.py')),
+      code.filesAt(wp('nope')),
+    ]).toEqual([[], [], []]);
+    expect([
+      code.idsOf(wp('pkg/a.py')),
+      code.idsOf(wp('pkg2/b.py')),
+      code.idsOf(wp('z.py')),
+    ]).toEqual([['m1', 'm2'], ['m3'], []]);
+  });
+
+  it('hold replaces and copies; an empty hold and forget drop the file; forgetting an unheld file does nothing', () => {
+    const code = heldOf({ 'a.py': ['a1'], 'b.py': ['b1'] });
+    const ids = ['a2', 'a3'];
+    code.hold(wp('a.py'), ids);
+    ids.push('late');
+    code.hold(wp('c/d.py'), ['d1']);
+    code.hold(wp('b.py'), []);
+    code.forget(wp('nope.py'));
+    expect([code.idsOf(wp('a.py')), code.idsOf(wp('b.py')), code.idsOf(wp('c/d.py'))]).toEqual([
+      ['a2', 'a3'],
+      [],
+      ['d1'],
+    ]);
+    expect(code.filesAt(wp('b.py'))).toEqual([]);
+    code.forget(wp('c/d.py'));
+    expect([code.filesAt(wp('c')), code.idsOf(wp('a.py'))]).toEqual([[], ['a2', 'a3']]);
+  });
+});
+
+describe('planCodeWrites (decision 102)', () => {
+  it('deletes what is held under each deleted path and moved-from path, once; replaces covered file changes', () => {
+    const code = heldOf({
+      'pkg/sub/c.py': ['c'],
+      'pkg/a.py': ['a'],
+      'b.py': ['b'],
+      'olddir/q.py': ['q'],
+      'keep.py': ['k'],
+      'pkg2/x.py': ['x'],
+    });
+    const changes = [
+      dirChange('deleted', 'pkg'),
+      fileChange('moved', 'b2.py', 'rb', 'b.py'),
+      fileChange('created', 'n.py', 'rn'),
+      fileChange('changed', 'c.ts', 'rc'),
+      dirChange('created', 'lib.py'),
+      fileChange('deleted', 'pkg/sub/c.py'),
+      fileChange('changed', 'x.py'),
+      dirChange('moved', 'd', 'olddir'),
+      fileChange('deleted', 'gone.py'),
+      fileChange('changed', 'keep.py', 'rk'),
+      fileChange('created', 'README', 'rr'),
+    ];
+    expect(planCodeWrites(changes, code, language, covers)).toEqual({
+      deletes: [
+        { change: 0, file: 'pkg/a.py' },
+        { change: 0, file: 'pkg/sub/c.py' },
+        { change: 1, file: 'b.py' },
+        { change: 7, file: 'olddir/q.py' },
+      ],
+      replaces: [
+        { change: 1, language: 'python' },
+        { change: 2, language: 'python' },
+        { change: 9, language: 'python' },
+      ],
+    });
+    // pure: what is held is unchanged
+    expect([code.filesAt(wp('pkg')), code.idsOf(wp('b.py'))]).toEqual([
+      ['pkg/a.py', 'pkg/sub/c.py'],
+      ['b'],
+    ]);
+  });
+
+  it('a covered language only: the language is the one languageOf names', () => {
+    const changes = [fileChange('created', 'a.py', 'r1'), fileChange('created', 'b.ts', 'r2')];
+    expect(planCodeWrites(changes, heldOf({}), language, (l) => l === 'typescript')).toEqual({
+      deletes: [],
+      replaces: [{ change: 1, language: 'typescript' }],
+    });
+    expect(planCodeWrites([], heldOf({ 'a.py': ['a'] }), language, covers)).toEqual({
+      deletes: [],
+      replaces: [],
+    });
+  });
+});
+
+describe('toCodeDelta (decision 102)', () => {
+  const M = 'file:pkg/m.py:MODULE:$root';
+  const S = '`pkg/m.py`/';
+  const replace: ReplaceFileOp = {
+    kind: 'replace-file',
+    file: wp('pkg/m.py'),
+    seq: 7,
+    revision_id: 'r1',
+    nodes: [
+      {
+        label: 'MODULE',
+        key: M,
+        properties: {
+          name: 'pkg.m',
+          file: 'pkg/m.py',
+          revision_id: 'r1',
+          range: '1:0-2:0',
+          doc: null,
+        },
+      },
+      { label: 'FILE', key: 'pkg/m.py', properties: { interface_hash: 'h', loc: 2 } },
+      {
+        label: 'SYMBOL',
+        key: S,
+        properties: { fqn: S, language: 'python', kind: 'module', name: 42, note: undefined },
+      },
+    ],
+    edges: [
+      {
+        type: 'DEFINES',
+        fromLabel: 'MODULE',
+        fromKey: M,
+        toLabel: 'SYMBOL',
+        toKey: S,
+        properties: { weight: null },
+      },
+      {
+        type: 'SOURCE_FILE',
+        fromLabel: 'MODULE',
+        fromKey: M,
+        toLabel: 'FILE',
+        toKey: 'pkg/m.py',
+        properties: {},
+      },
+      {
+        type: 'HAS_ENTRY',
+        fromLabel: 'DIRECTORY',
+        fromKey: 'pkg',
+        toLabel: 'MODULE',
+        toKey: M,
+        properties: { a: 1, b: null },
+      },
+    ],
+  };
+
+  it('a replace-file: its rows but FILE as the store holds them, its edges by node id, the held ids removed', () => {
+    const delta = toCodeDelta(replace, ['old1', 'old2'], 3);
+    expect(delta).toStrictEqual({
+      seq: 3,
+      file: 'pkg/m.py',
+      revision_id: 'r1',
+      producer: 'code',
+      addedNodes: [
+        {
+          id: M,
+          type: 'MODULE',
+          name: 'pkg.m',
+          data: { name: 'pkg.m', file: 'pkg/m.py', revision_id: 'r1', range: '1:0-2:0' },
+        },
+        { id: S, type: 'SYMBOL', data: { fqn: S, language: 'python', kind: 'module', name: 42 } },
+      ],
+      addedEdges: [
+        { source: M, target: S, type: 'DEFINES' },
+        { source: M, target: 'file:pkg/m.py', type: 'SOURCE_FILE' },
+        { source: 'dir:pkg', target: M, type: 'HAS_ENTRY', data: { a: 1 } },
+      ],
+      removedNodeIds: ['old1', 'old2'],
+    });
+    expect(delta?.addedNodes[0]?.data).not.toBe(replace.nodes[0]?.properties);
+    expect(replace.nodes[0]?.properties).toHaveProperty('doc', null);
+  });
+
+  it('a delete-file carries removedNodeIds only; an empty op is no delta (C-SINK INV-3)', () => {
+    const del: DeleteFileOp = { kind: 'delete-file', file: wp('a.py'), seq: 9 };
+    expect(toCodeDelta(del, ['file:a.py:MODULE:$root'], 5)).toStrictEqual({
+      seq: 5,
+      file: 'a.py',
+      revision_id: '',
+      producer: 'code',
+      addedNodes: [],
+      addedEdges: [],
+      removedNodeIds: ['file:a.py:MODULE:$root'],
+    });
+    expect(toCodeDelta(del, [], 5)).toBeUndefined();
+    const fileOnly: ReplaceFileOp = {
+      kind: 'replace-file',
+      file: wp('e.py'),
+      seq: 2,
+      revision_id: 'r',
+      nodes: [{ label: 'FILE', key: 'e.py', properties: { loc: 0 } }],
+      edges: [],
+    };
+    expect(toCodeDelta(fileOnly, [], 6)).toBeUndefined();
+    expect(toCodeDelta(fileOnly, ['x'], 6)).toMatchObject({
+      addedNodes: [],
+      removedNodeIds: ['x'],
+      revision_id: 'r',
+    });
+  });
+});
+
+/** Fires `events`, lets the debounce settle, and waits for batch number `n` (from 1). */
+async function batchAfter(run: Run, n: number, ...events: RawWatchEvent[]): Promise<BatchEvent> {
+  run.backend.fire(...events);
+  run.clock.advance(100);
+  await until(() => batches(run.events).length >= n, `batch ${String(n)}`);
+  const batch = batches(run.events)[n - 1];
+  if (batch === undefined) throw new Error(`no batch ${String(n)}`);
+  return batch;
+}
+const codeSeqs = (ops: readonly WriteOp[]): number[] =>
+  ops.flatMap((op) => (op.kind === 'replace-file' || op.kind === 'delete-file' ? [op.seq] : []));
+const increasing = (xs: readonly number[]): boolean =>
+  xs.every((x, i) => i === 0 || x > (xs[i - 1] ?? x));
+/** The store's file-owned nodes (by label) whose data.file is `file`, or lies under `file` + '/'. */
+async function ownedUnder(store: MemoryStore, file: string): Promise<string[]> {
+  const owned = new Set(
+    NODE_LABELS.filter((l) => l.ownership === 'file-owned').map((l) => l.label as string),
+  );
+  return (await store.readAll()).nodes
+    .filter((n) => owned.has(n.type))
+    .filter((n) => {
+      const f = n.data?.['file'];
+      return typeof f === 'string' && (f === file || f.startsWith(`${file}/`));
+    })
+    .map((n) => n.id)
+    .toSorted(byText);
+}
+
+describe('the code tier on save (decision 102; BMO-43)', () => {
+  it('a created .py: merge-filesystem, then its replace-file; per change, its own delta, then its code delta', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const run = await start(root);
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'n.py'), 'n = 1\n');
+    await writeFile(join(root, 't.ts'), 't');
+    const batch = await batchAfter(
+      run,
+      1,
+      raw(root, 'created', 'n.py', 5001),
+      raw(root, 'created', 't.ts', 5002),
+    );
+
+    // decision 96: a .ts has no extractor until U6b, so it writes no code op
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file n.py']);
+    const op = opOf(run.memory, 'replace-file n.py');
+    if (op?.kind !== 'replace-file') throw new Error('no replace-file');
+    // C-WATCH INV-26: the session's revision on the op and on every node the file owns
+    expect(op.revision_id).toBe(sha256('n = 1\n'));
+    expect(op.nodes.map((r) => [r.label, r.key])).toEqual([
+      ['MODULE', mod('n.py')],
+      ['SYMBOL', sym('n.py')],
+      ['FILE', 'n.py'],
+    ]);
+    expect(op.nodes[0]?.properties).toMatchObject({
+      name: 'n',
+      file: 'n.py',
+      revision_id: sha256('n = 1\n'),
+      range: '1:0-2:0',
+    });
+    // C-EXTRACT Q8: SOURCE_FILE attached after the file's own edges
+    expect(op.edges.map((e) => `${e.type} ${e.fromKey} -> ${e.toKey}`)).toEqual([
+      `DEFINES ${mod('n.py')} -> ${sym('n.py')}`,
+      `SOURCE_FILE ${mod('n.py')} -> n.py`,
+    ]);
+    expect(run.memory.receipts.slice(skip).map((r) => r?.applied)).toEqual([true, true]);
+    expect(batch.write).toEqual(sums(run.memory, skip));
+    expect(batch.write.statementCount).toBeGreaterThan(1);
+
+    const expected: GraphDelta[] = [];
+    for (const change of batch.changes) {
+      const node = fileNode(change.path, change.revision_id ?? '', language(change.path) ?? null);
+      expected.push(added(expected.length + 1, node, hasEntry('.', fileId(change.path))));
+      if (change.path === 'n.py') expected.push(codeDelta(op, expected.length + 1, []));
+    }
+    expect(batch.deltas).toEqual(expected);
+    expect([batch.graphSeq, expected.map((d) => d.producer)]).toEqual([
+      3,
+      batch.changes[0]?.path === 'n.py'
+        ? ['filesystem', 'code', 'filesystem']
+        : ['filesystem', 'filesystem', 'code'],
+    ]);
+    // C-SINK INV-18: every edge's ends are in the picture once the batch is applied
+    const ids = new Set([
+      fileId('n.py'),
+      ...batch.deltas.flatMap((d) => d.addedNodes.map((n) => n.id)),
+    ]);
+    expect(batch.deltas.flatMap((d) => d.addedEdges).every((e) => ids.has(e.target))).toBe(true);
+  });
+
+  it('a changed .py the index extracted: its code delta removes the MODULE the index wrote, never its SYMBOL', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const run = await start(root);
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'a.py'), 'a = 1\nb = 2\n');
+    const batch = await batchAfter(run, 1, raw(root, 'changed', 'a.py', 5001));
+
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file a.py']);
+    const op = opOf(run.memory, 'replace-file a.py');
+    // S26-1: a changed file re-sends no link; then the code delta (C-MODEL I-15: no SYMBOL removed)
+    expect(batch.deltas).toEqual([
+      added(1, fileNode('a.py', sha256('a = 1\nb = 2\n'), 'python')),
+      codeDelta(op, 2, [mod('a.py')]),
+    ]);
+    const store = await run.memory.store.readAll();
+    const module = store.nodes.find((n) => n.id === mod('a.py'));
+    const file = store.nodes.find((n) => n.id === fileId('a.py'));
+    expect([
+      module?.data?.['revision_id'],
+      module?.data?.['range'],
+      file?.data?.['version'],
+    ]).toEqual([sha256('a = 1\nb = 2\n'), '1:0-3:0', 2]);
+    expect(file?.data?.['revision_id']).toBe(module?.data?.['revision_id']);
+  });
+
+  it('a deleted .py: its delete-file, then merge-filesystem; its code delta removes what it held, and only that', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 2\n' });
+    const run = await start(root);
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await rm(join(root, 'a.py'));
+    const batch = await batchAfter(run, 1, raw(root, 'deleted', 'a.py', 5001));
+
+    expect(opKinds(after(run.memory, skip))).toEqual(['delete-file a.py', 'merge-filesystem']);
+    expect(batch.deltas).toEqual([
+      removed(1, 'a.py', [fileId('a.py')]),
+      codeDelta(opOf(run.memory, 'delete-file a.py'), 2, [mod('a.py')]),
+    ]);
+    expect(batch.write).toEqual(sums(run.memory, skip));
+    expect(await ownedUnder(run.memory.store, 'a.py')).toEqual([]);
+    expect(await ownedUnder(run.memory.store, 'b.py')).toEqual([mod('b.py')]);
+    // decision 104: the SYMBOL it minted stays
+    expect(await nodeIds(run.memory.store)).toContain(sym('a.py'));
+  });
+
+  it('a deleted package: one delete-file per held file under it, in path order; never a sibling sharing its prefix', async () => {
+    const root = await tree({
+      'pkg/sub/m.py': 'm = 1\n',
+      'pkg/__init__.py': '',
+      'pkg/n.ts': 'n',
+      'pkg2/a.py': 'a = 1\n',
+    });
+    const run = await start(root);
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await rm(join(root, 'pkg'), { recursive: true });
+    const batch = await batchAfter(run, 1, raw(root, 'deleted', 'pkg', 5001));
+
+    expect(opKinds(after(run.memory, skip))).toEqual([
+      'delete-file pkg/__init__.py',
+      'delete-file pkg/sub/m.py',
+      'merge-filesystem',
+    ]);
+    expect(sortedRemovals(batch.deltas)).toEqual([
+      removed(1, 'pkg', [
+        dirId('pkg'),
+        dirId('pkg/sub'),
+        fileId('pkg/__init__.py'),
+        fileId('pkg/n.ts'),
+        fileId('pkg/sub/m.py'),
+      ]),
+      codeDelta(opOf(run.memory, 'delete-file pkg/__init__.py'), 2, [mod('pkg/__init__.py')]),
+      codeDelta(opOf(run.memory, 'delete-file pkg/sub/m.py'), 3, [mod('pkg/sub/m.py')]),
+    ]);
+    expect(await ownedUnder(run.memory.store, 'pkg')).toEqual([]);
+    expect(await ownedUnder(run.memory.store, 'pkg2')).toEqual([mod('pkg2/a.py')]);
+    // decision 98a: every code write's seq is the store's next, so they only grow
+    expect(increasing(codeSeqs(run.memory.ops))).toBe(true);
+  });
+
+  it('a moved .py: delete-file where it was, merge-filesystem, replace-file where it is; deltas in that change order', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const run = await start(root);
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await rename(join(root, 'a.py'), join(root, 'b.py'));
+    const batch = await batchAfter(
+      run,
+      1,
+      raw(root, 'deleted', 'a.py', 5001),
+      raw(root, 'created', 'b.py', 5002),
+    );
+
+    expect(batch.changes.map((c) => [c.kind, c.path, c.fromPath])).toEqual([
+      ['moved', 'b.py', 'a.py'],
+    ]);
+    expect(opKinds(after(run.memory, skip))).toEqual([
+      'delete-file a.py',
+      'merge-filesystem',
+      'replace-file b.py',
+    ]);
+    const moved = added(
+      1,
+      fileNode('b.py', sha256('a = 1\n'), 'python'),
+      hasEntry('.', fileId('b.py')),
+    );
+    expect(batch.deltas).toEqual([
+      { ...moved, removedNodeIds: [fileId('a.py')] },
+      codeDelta(opOf(run.memory, 'delete-file a.py'), 2, [mod('a.py')]),
+      codeDelta(opOf(run.memory, 'replace-file b.py'), 3, []),
+    ]);
+    expect(await ownedUnder(run.memory.store, 'a.py')).toEqual([]);
+    expect(await ownedUnder(run.memory.store, 'b.py')).toEqual([mod('b.py')]);
+  });
+
+  it('the initial batch writes the code tier before ready, with no delta, and holds it: a later delete removes it', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const backend = backendFor(async () => {
+      await writeFile(join(root, 'late.py'), 'l = 1\n');
+    });
+    const run = await start(root, { backend });
+    await ready(run);
+    expect(opKinds(run.memory.ops)).toEqual([
+      'merge-filesystem',
+      'merge-filesystem',
+      'replace-file late.py',
+    ]);
+    expect(kinds(run.events)).toEqual(['ready']);
+    const skip = run.memory.ops.length;
+    await rm(join(root, 'late.py'));
+    const batch = await batchAfter(run, 1, raw(root, 'deleted', 'late.py', 5001));
+    expect(opKinds(after(run.memory, skip))).toEqual(['delete-file late.py', 'merge-filesystem']);
+    expect(batch.deltas).toEqual([
+      removed(1, 'late.py', [fileId('late.py')]),
+      codeDelta(opOf(run.memory, 'delete-file late.py'), 2, [mod('late.py')]),
+    ]);
+  });
+
+  it('a write between the digest and the read: the nodes keep the batch revision, and the next batch heals them (INV-26)', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const v1 = 'a = 1\nb = 2\n';
+    const v2 = 'a = 1\nb = 2\nc = 3\n';
+    let land = false;
+    const host = recorder({
+      id: 'host',
+      during: async (op) => {
+        if (land && op.kind === 'merge-filesystem') {
+          land = false;
+          await writeFile(join(root, 'a.py'), v2);
+        }
+      },
+    });
+    const run = await start(root, { host });
+    await ready(run);
+    await writeFile(join(root, 'a.py'), v1);
+    land = true;
+    await batchAfter(run, 1, raw(root, 'changed', 'a.py', 5001));
+    const moduleOf = async (): Promise<unknown[]> => {
+      const node = (await run.memory.store.readAll()).nodes.find((n) => n.id === mod('a.py'));
+      return [node?.data?.['revision_id'], node?.data?.['range']];
+    };
+    // the bytes read are v2's (four lines), the revision is the session's digest of v1
+    expect(await moduleOf()).toEqual([sha256(v1), '1:0-4:0']);
+    await batchAfter(run, 2, raw(root, 'changed', 'a.py', 5200));
+    expect(await moduleOf()).toEqual([sha256(v2), '1:0-4:0']);
+    const file = (await run.memory.store.readAll()).nodes.find((n) => n.id === fileId('a.py'));
+    expect(file?.data?.['revision_id']).toBe(sha256(v2));
+  });
+
+  it('a file gone before its read: its FILE is written, no replace-file, and one read-failed warning per watch', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const host = recorder({
+      id: 'host',
+      during: async (op) => {
+        if (op.kind !== 'merge-filesystem') return;
+        for (const name of ['n.py', 'm.py']) await rm(join(root, name), { force: true });
+      },
+    });
+    const run = await start(root, { host });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'n.py'), 'n = 1\n');
+    const first = await batchAfter(run, 1, raw(root, 'created', 'n.py', 5001));
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem']);
+    expect(first.deltas.map((d) => [d.file, d.producer])).toEqual([['n.py', 'filesystem']]);
+    const warnings = (): string[] =>
+      run.events.flatMap((e) => (e.kind === 'warning' ? [e.message] : []));
+    expect(warnings()).toEqual([
+      expect.stringMatching(
+        /^code tier: 1 python file at the FILE tier only \(read-failed\): n\.py: .+/,
+      ),
+    ]);
+    // after the batch event, never before it
+    expect(kinds(run.events)).toEqual(['ready', 'batch', 'warning']);
+    await writeFile(join(root, 'm.py'), 'm = 1\n');
+    await batchAfter(run, 2, raw(root, 'created', 'm.py', 5200));
+    expect(warnings()).toHaveLength(1);
+    // n.py held no code, so its delete writes no delete-file
+    const skip2 = run.memory.ops.length;
+    await batchAfter(run, 3, raw(root, 'deleted', 'n.py', 5300));
+    expect(opKinds(after(run.memory, skip2))).toEqual(['merge-filesystem']);
+  });
+
+  it('a failure group the index reported is not said again, a new group is; the FILE tier is written, with no code delta', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const empty = await mkdtemp(join(tmpdir(), 'cpg-no-grammar-'));
+    roots.push(empty);
+    const host = recorder({
+      id: 'host',
+      during: async (op) => {
+        if (op.kind === 'merge-filesystem') await rm(join(root, 'c.py'), { force: true });
+      },
+    });
+    const run = await start(root, { grammarDir: empty, host });
+    await ready(run);
+    const [readyEvent] = run.events;
+    if (readyEvent?.kind !== 'ready') throw new Error('no ready');
+    expect(readyEvent.report.warnings).toEqual([
+      expect.stringMatching(
+        /^code tier: 1 python file at the FILE tier only \(grammar-unavailable\): a\.py: /,
+      ),
+    ]);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'b.py'), 'b = 1\n');
+    const batch = await batchAfter(run, 1, raw(root, 'created', 'b.py', 5001));
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem']);
+    expect(batch.deltas.map((d) => d.producer)).toEqual(['filesystem']);
+    expect(kinds(run.events)).toEqual(['ready', 'batch']);
+    await writeFile(join(root, 'c.py'), 'c = 1\n');
+    await batchAfter(run, 2, raw(root, 'created', 'c.py', 5200));
+    expect(run.events.flatMap((e) => (e.kind === 'warning' ? [e.message] : []))).toEqual([
+      expect.stringMatching(
+        /^code tier: 1 python file at the FILE tier only \(read-failed\): c\.py: /,
+      ),
+    ]);
+  });
+
+  it('a batch whose replace-file is refused is retried whole: deltas from what was held before it, write from the attempt that landed', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    // index: 1 merge-filesystem, 2 replace-file; the save: 3 merge-filesystem, 4 refused, then 5, 6
+    const memory = recorder({ rejects: (n) => n === 4 });
+    const run = await start(root, { memory });
+    await ready(run);
+    await writeFile(join(root, 'a.py'), 'a = 2\n');
+    run.backend.fire(raw(root, 'changed', 'a.py', 5001));
+    run.clock.advance(100);
+    await until(() => run.clock.armed() > 0, 'the backoff');
+    run.clock.advance(200);
+    await until(() => batches(run.events).length === 1, 'the batch');
+    const [batch] = batches(run.events);
+    expect(opKinds(memory.ops)).toEqual([
+      'merge-filesystem',
+      'replace-file a.py',
+      'merge-filesystem',
+      'replace-file a.py',
+      'merge-filesystem',
+      'replace-file a.py',
+    ]);
+    expect(batch?.deltas).toEqual([
+      added(1, fileNode('a.py', sha256('a = 2\n'), 'python')),
+      codeDelta(memory.ops[5], 2, [mod('a.py')]),
+    ]);
+    expect(batch?.write).toEqual(sums(memory, 4));
+  });
+
+  it("two watches, one after the other, on one engine: the second one's code writes apply (decision 98a)", async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const clock = fakeClock(5000);
+    const backend = backendFor();
+    const memory = recorder();
+    const engine = createEngine(
+      { version: '1', consumers: HEADLESS },
+      { memoryStore: memory.store, watchBackend: backend, now: clock.now, timers: clock },
+    );
+    const session = await engine.connect(TARGET, { readOnly: false });
+    const saveOnce = async (text: string): Promise<BatchEvent | undefined> => {
+      const controller = new AbortController();
+      controllers.push(controller);
+      const events: WatchEvent[] = [];
+      const done = engine.watch(
+        { config: { root }, session },
+        (e) => events.push(e),
+        controller.signal,
+      );
+      runs.push(done);
+      await until(() => events.some((e) => e.kind === 'ready'), 'ready');
+      await writeFile(join(root, 'a.py'), text);
+      backend.fire(raw(root, 'changed', 'a.py', clock.now() + 1));
+      clock.advance(100);
+      await until(() => batches(events).length === 1, 'a batch');
+      controller.abort();
+      await done;
+      return batches(events)[0];
+    };
+    await saveOnce('a = 2\n');
+    const second = await saveOnce('a = 3\n');
+
+    const replaces = memory.ops.flatMap((op, i) =>
+      op.kind === 'replace-file'
+        ? [[memory.receipts[i]?.applied, memory.receipts[i]?.notApplied?.reason]]
+        : [],
+    );
+    // index, save 1, the second index (the same bytes: revision-unchanged), save 2
+    expect(replaces).toEqual([
+      [true, undefined],
+      [true, undefined],
+      [false, 'revision-unchanged'],
+      [true, undefined],
+    ]);
+    expect(increasing(codeSeqs(memory.ops))).toBe(true);
+    expect(second?.deltas.at(-1)).toEqual(codeDelta(memory.ops.at(-1), 2, [mod('a.py')]));
+    const module = (await memory.store.readAll()).nodes.find((n) => n.id === mod('a.py'));
+    expect(module?.data?.['revision_id']).toBe(sha256('a = 3\n'));
+  });
+
+  it('once a stop has begun, the batch writes nothing more and emits nothing', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
+    const controller = new AbortController();
+    let armed = false;
+    const host = recorder({
+      id: 'host',
+      during: () => {
+        if (armed) controller.abort();
+      },
+    });
+    const run = await start(root, { host, controller });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await rm(join(root, 'a.py'));
+    await writeFile(join(root, 'b.py'), 'b = 2\n');
+    armed = true;
+    run.backend.fire(raw(root, 'deleted', 'a.py', 5001), raw(root, 'changed', 'b.py', 5002));
+    run.clock.advance(100);
+    await run.done;
+    expect(opKinds(after(run.memory, skip))).toEqual(['delete-file a.py']);
+    expect(kinds(run.events)).toEqual(['ready', 'closed']);
+  });
 });

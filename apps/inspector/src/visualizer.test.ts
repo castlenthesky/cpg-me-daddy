@@ -600,8 +600,10 @@ describe('GraphVisualizer.applyDelta', () => {
   });
 
   // Sprint 33 (BMO-100, controller decisions 85 and 103): by default the code tier is placed by
-  // the parent table, both in the layout and when a save re-adds the file's code nodes.
-  it('places a MODULE by its FILE, and seeds a code delta listed child first beside its parents', () => {
+  // the parent table, both in the layout and when a save re-adds the file's code nodes. Reworked for
+  // controller decision 111 (sprint 34): the MODULE a save removes and re-adds keeps its live
+  // position, and what the save adds beneath it is seeded beside it.
+  it('places a MODULE by its FILE; a save that removes and re-adds it keeps it where it is, children beside it', () => {
     const { viz, surface } = mount();
     const code: GraphPayload = {
       seq: 0,
@@ -625,17 +627,15 @@ describe('GraphVisualizer.applyDelta', () => {
         ],
       }),
     );
-    // m beside f (500, 600), t beside m, c beside t: within 20, 40 and 60 of f on each axis.
+    // m stays at its live (900, 900); t beside m, c beside t: within 20 and 40 of m on each axis.
     expect(surface.positions).toHaveLength(10);
-    expect(surface.positions.slice(0, 4)).toEqual([100, 100, 500, 600]);
-    const far = [4, 6, 8].filter((at) => {
-      const dx = Math.abs((surface.positions[at] ?? NaN) - 500);
-      const dy = Math.abs((surface.positions[at + 1] ?? NaN) - 600);
-      return !(dx <= 60 && dy <= 60);
+    expect(surface.positions.slice(0, 6)).toEqual([100, 100, 500, 600, 900, 900]);
+    const far = [6, 8].filter((at, i) => {
+      const dx = Math.abs((surface.positions[at] ?? NaN) - 900);
+      const dy = Math.abs((surface.positions[at + 1] ?? NaN) - 900);
+      return !(dx <= 20 * (i + 1) && dy <= 20 * (i + 1));
     });
     expect(far).toEqual([]);
-    expect(Math.abs((surface.positions[4] ?? NaN) - 500)).toBeLessThanOrEqual(20);
-    expect(Math.abs((surface.positions[5] ?? NaN) - 600)).toBeLessThanOrEqual(20);
     expect({ framed: surface.framed.length, starts: surface.starts }).toEqual(before);
   });
 

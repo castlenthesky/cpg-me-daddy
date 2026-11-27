@@ -172,6 +172,38 @@ describe('InspectorHost: stdin and ready', () => {
     expect(host.snapshot()).toStrictEqual(expected);
   });
 
+  // U6a.3-3 (decision 102): the watch now sends code deltas; a save removes and re-adds the file's
+  // MODULE in one delta (C-MODEL's home-tier rule), and the host holds one MODULE, in one epoch.
+  it('merges producer code deltas: a MODULE added, then a save that removes and re-adds it', () => {
+    const { host } = makeHost();
+    const t = new FakeTransport();
+    const m = {
+      id: 'file:g.py:MODULE:$root',
+      type: 'MODULE',
+      data: { file: 'g.py', revision_id: 'r1' },
+    };
+    const source = { source: m.id, target: 'g', type: 'SOURCE_FILE' };
+    const added = delta(6, { producer: 'code', addedNodes: [m], addedEdges: [source] });
+    const saved = delta(7, {
+      producer: 'code',
+      revision_id: 'r2',
+      addedNodes: [{ ...m, data: { file: 'g.py', revision_id: 'r2' } }],
+      addedEdges: [source],
+      removedNodeIds: [m.id],
+    });
+    host.input({ type: 'graph', payload: P });
+    for (const next of [delta(5), added, saved]) host.input({ type: 'graph-delta', delta: next });
+    host.attach(t);
+    t.send(READY);
+    const expected = merged(P, delta(5), added, saved);
+    expect(t.posted).toStrictEqual([graphOf(expected)]);
+    expect([host.epoch(), host.snapshot()?.seq]).toEqual([1, 7]);
+    expect(host.snapshot()?.nodes.filter((n) => n.id === m.id)).toEqual([
+      { ...m, data: { file: 'g.py', revision_id: 'r2' } },
+    ]);
+    expect(host.snapshot()?.edges.filter((e) => e.type === 'SOURCE_FILE')).toHaveLength(1);
+  });
+
   it('follows the graph with the latest verification only, stamped with its epoch', () => {
     const { host } = makeHost();
     const t = new FakeTransport();

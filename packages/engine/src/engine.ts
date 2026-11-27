@@ -350,6 +350,9 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
           consumers: [],
         },
         walk: walkResult,
+        // SEAT (U6a.3-3): the held code tier and the reported failure groups (IndexRun).
+        heldCode: new Map(),
+        reportedFailures: new Set(),
       };
     }
 
@@ -450,6 +453,9 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         consumers: req.session === null ? [] : sinks.map((s) => s.id),
       },
       walk: walkResult,
+      // SEAT (U6a.3-3): the held code tier and the reported failure groups (IndexRun).
+      heldCode: new Map(),
+      reportedFailures: new Set(),
     };
   }
 
@@ -508,6 +514,8 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
             runIndex(indexReq, onProgress, indexSignal, false),
           write: writeAll,
           languageOf,
+          codeTier,
+          nextWriteSeq: () => memory.nextWriteSeq(),
           backend,
           now: readNow,
           ...(deps.timers !== undefined ? { timers: deps.timers } : {}),

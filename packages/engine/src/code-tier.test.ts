@@ -22,8 +22,9 @@ import type {
 import { BUILTIN_LANGUAGES, createLanguageRegistry, createParseService } from '@cpg/parse';
 import type { EdgeRow, NodeRow } from '@cpg/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CodeTier, CodeTierOptions, ReplaceFileOp } from './code-tier';
+import type { CodeTier, CodeTierFailure, CodeTierOptions, ReplaceFileOp } from './code-tier';
 import {
+  failureWarnings,
   attachSourceFile,
   createCodeTier,
   createDiskGrammarSource,
@@ -540,5 +541,63 @@ describe('createCodeTier on the real parser (the package anchor when no grammarD
       'grammar-unavailable',
       expect.stringContaining('must be an absolute path'),
     ]);
+  });
+});
+
+// U6a.3-3: one warning text for index() and the watch (decisions 100, 102), said once per group.
+const failed = (
+  path: string,
+  language: string,
+  code: string,
+  message: string,
+): CodeTierFailure => ({
+  path: wp(path),
+  language,
+  code,
+  message,
+});
+
+describe('failureWarnings (decisions 100, 102)', () => {
+  it('one warning per (language, code) group, in first-failure order, naming its first failure', () => {
+    const reported = new Set<string>();
+    expect(
+      failureWarnings(
+        [
+          failed('a.py', 'python', 'grammar-unavailable', 'm1'),
+          failed('b.ts', 'typescript', 'grammar-unavailable', 'm2'),
+          failed('c.py', 'python', 'grammar-unavailable', 'm3'),
+          failed('d.py', 'python', 'truncated', 'm4'),
+          failed('e.py', 'python', 'grammar-unavailable', 'm5'),
+          // a key built by joining the two with a comma would merge these two groups
+          failed('f', 'a,b', 'c', 'm6'),
+          failed('g', 'a', 'b,c', 'm7'),
+        ],
+        reported,
+      ),
+    ).toEqual([
+      'code tier: 3 python files at the FILE tier only (grammar-unavailable): a.py: m1',
+      'code tier: 1 typescript file at the FILE tier only (grammar-unavailable): b.ts: m2',
+      'code tier: 1 python file at the FILE tier only (truncated): d.py: m4',
+      'code tier: 1 a,b file at the FILE tier only (c): f: m6',
+      'code tier: 1 a file at the FILE tier only (b,c): g: m7',
+    ]);
+    expect(reported.size).toBe(5);
+  });
+
+  it('a group already in `reported` is not said again; a new one is, and joins it', () => {
+    const reported = new Set<string>();
+    failureWarnings([failed('a.py', 'python', 'truncated', 'm1')], reported);
+    expect(
+      failureWarnings(
+        [
+          failed('b.py', 'python', 'truncated', 'm2'),
+          failed('c.py', 'python', 'read-failed', 'm3'),
+          failed('d.py', 'python', 'read-failed', 'm4'),
+        ],
+        reported,
+      ),
+    ).toEqual(['code tier: 2 python files at the FILE tier only (read-failed): c.py: m3']);
+    expect(failureWarnings([failed('e.py', 'python', 'read-failed', 'm5')], reported)).toEqual([]);
+    expect([failureWarnings([], reported), reported.size]).toEqual([[], 2]);
   });
 });
