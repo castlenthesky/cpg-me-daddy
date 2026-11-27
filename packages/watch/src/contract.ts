@@ -183,9 +183,22 @@ export interface WatchSessionOptions {
   readonly onDegraded?: (paths: readonly string[], error: unknown) => void;
   /** INV-25: every error the backend reports, unchanged, until close (decision 57). */
   readonly onError?: (error: WatchError) => void;
+  /**
+   * Called once each rescan has ended, whatever asked for it (`rescan()` or a `rescanRequired`
+   * error): its batch confirmed, found empty, or sent to `onDegraded`. Never for the initial batch
+   * or a live window, and never after close (sprint 25, S25-1: decision 78 re-arms its interval
+   * here).
+   */
+  readonly onRescanDone?: () => void;
 }
 
 export interface WatchSession {
   /** Idempotent; resolves after the backend subscription closes. Silence after close (C-WATCH). */
   close(): Promise<void>;
+  /**
+   * The drift crawl (controller decision 76): enqueues one reconcile as `cause: 'rescan'`, under the
+   * rules a `rescanRequired` error follows: requests before it starts collapse into it, one during
+   * it enqueues another, and an empty one is not delivered and takes no seq. A no-op after `close()`.
+   */
+  rescan(): void;
 }

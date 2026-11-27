@@ -45,6 +45,7 @@ const KEYS = [
   'watch.trailingMs',
   'watch.ceilingMs',
   'watch.bulkThresholdFiles',
+  'watch.rescanIntervalMs',
 ];
 const LAYERS = ['flag', 'env', 'file', 'manifest', 'default'];
 const FILE = 'cpg.config.yaml';
@@ -139,7 +140,7 @@ const plainDefaults = (root: string) => ({
   store: { host: '127.0.0.1', port: 6382, graph: 'cpg', mode: 'remote' },
   queryTimeoutMs: 30000,
   resolve: { perFileMs: 500, perSiteMs: 250 },
-  watch: { trailingMs: 100, ceilingMs: 500, bulkThresholdFiles: 50 },
+  watch: { trailingMs: 100, ceilingMs: 500, bulkThresholdFiles: 50, rescanIntervalMs: 300000 },
 });
 
 const REPORT: IndexReport = {
@@ -570,7 +571,12 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
           exclude: ['**/gen/**'],
           maxFileSizeBytes: 4096,
           store: { host: 'fh', port: 7100, graph: 'fg', mode: 'remote' },
-          watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50 },
+          watch: {
+            trailingMs: 7,
+            ceilingMs: 500,
+            bulkThresholdFiles: 50,
+            rescanIntervalMs: 300000,
+          },
         },
         session: null,
         resumeFrom: null,
@@ -593,7 +599,7 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
         exclude: ['**/gen/**'],
         maxFileSizeBytes: 4096,
         store: { ...target, mode: 'remote' },
-        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50 },
+        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50, rescanIntervalMs: 300000 },
       },
     ]);
     expect(f.verifies).toEqual([
@@ -603,7 +609,7 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
         exclude: ['**/gen/**'],
         maxFileSizeBytes: 4096,
         store: { host: 'fh', port: 7100, graph: 'eg', mode: 'remote' },
-        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50 },
+        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50, rescanIntervalMs: 300000 },
         strict: true,
       },
     ]);
@@ -660,7 +666,7 @@ describe('the loader hands the engine one CpgConfigInput (BMO-38)', () => {
         exclude: ['**/gen/**'],
         maxFileSizeBytes: 4096,
         store: { host: 'fh', port: 7100, graph: 'fg', mode: 'remote' },
-        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50 },
+        watch: { trailingMs: 7, ceilingMs: 500, bulkThresholdFiles: 50, rescanIntervalMs: 300000 },
       },
     ]);
     expect(f.requests[0]?.session).not.toBeNull();

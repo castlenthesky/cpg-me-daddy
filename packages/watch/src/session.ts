@@ -186,9 +186,15 @@ function rootMissingError(root: string): Error & WatchError {
  * one reconcile as `cause: 'rescan'`: requests before it starts collapse into it, one during it
  * enqueues another, and an empty one is not delivered and takes no seq.
  *
+ * `rescan()` (decision 76) enqueues that same reconcile under the same rules, and is a no-op after
+ * `close()`. `onRescanDone` (S25-1) is called once each rescan has ended: its batch confirmed, no
+ * change found, or `onDegraded` called (after it). Whatever asked for the rescan; never for the
+ * initial batch or a live window, and never after `close()`.
+ *
  * `close()` is idempotent and resolves after the subscription's own close. From the call on, no
- * `sink.onBatch` call starts (a retry wakes and returns), neither `onError` nor `onDegraded` fires,
- * and the open window and queued jobs are dropped (OQ-3). It does not wait for a sink call in flight.
+ * `sink.onBatch` call starts (a retry wakes and returns), neither `onError`, `onDegraded`, nor
+ * `onRescanDone` fires, and the open window and queued jobs are dropped (OQ-3). It does not wait
+ * for a sink call in flight.
  */
 export async function createWatchSession(options: WatchSessionOptions): Promise<WatchSession> {
   const rootStat = await options.probe.stat(WORKSPACE_ROOT);
@@ -519,16 +525,22 @@ export async function createWatchSession(options: WatchSessionOptions): Promise<
 
   async function runRescan(): Promise<void> {
     rescanPending = false;
-    let result: ReconcileResult;
     try {
-      result = await reconcile();
-    } catch (error) {
-      if (!closed) {
-        options.onDegraded?.([WORKSPACE_ROOT], error);
+      let result: ReconcileResult;
+      try {
+        result = await reconcile();
+      } catch (error) {
+        if (!closed) {
+          options.onDegraded?.([WORKSPACE_ROOT], error);
+        }
+        return;
       }
-      return;
+      await deliverNonInitial('rescan', result.changes, result.clock);
+    } finally {
+      if (!closed) {
+        options.onRescanDone?.();
+      }
     }
-    await deliverNonInitial('rescan', result.changes, result.clock);
   }
 
   async function processLive(events: readonly RawWatchEvent[]): Promise<void> {
@@ -650,5 +662,8 @@ export async function createWatchSession(options: WatchSessionOptions): Promise<
   await initial.promise;
   startup = false;
 
-  return { close };
+  return {
+    close,
+    rescan: enqueueRescan,
+  };
 }

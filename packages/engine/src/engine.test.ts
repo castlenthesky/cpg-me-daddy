@@ -304,6 +304,71 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
   });
 });
 
+// Sprint 25 (stop-list 151): controller decision 77, index removes what the store holds that the walk
+// did not find, read from the store itself; S25-2, by label; C-STORE INV-7 (never the root '.').
+const labelled = (payload: { readonly nodes: readonly { type: string; data?: object }[] }) =>
+  payload.nodes.map((n) => `${n.type} ${String(Reflect.get(n.data ?? {}, 'path'))}`).toSorted();
+const removalsOf = (op: WriteOp | undefined): readonly string[] | undefined =>
+  op?.kind === 'merge-filesystem' ? op.removals.toSorted() : undefined;
+
+describe('index removes what the store holds that the walk did not find (decision 77)', () => {
+  it('a second index drops the nodes of paths gone since; every sink gets the same removals', async () => {
+    const spec = { 'a.ts': 'a', 'b.ts': 'b', 'lib/c.ts': 'c', 'lib/deep/d.ts': 'd', 'k/e.ts': 'e' };
+    const root = await tree(spec);
+    const memory = recording('memory');
+    await index(root, memory.sink);
+    await rm(join(root, 'b.ts'));
+    await rm(join(root, 'lib'), { recursive: true });
+    const host = recording('panel');
+    const { report } = await index(root, memory.sink, { sinks: [host.sink] });
+    const gone = ['b.ts', 'lib', 'lib/c.ts', 'lib/deep', 'lib/deep/d.ts'];
+    expect([removalsOf(memory.ops[1]), host.ops]).toEqual([gone, [memory.ops[1]]]);
+    expect(labelled(await memory.memory.readAll())).toEqual([
+      'DIRECTORY .',
+      'DIRECTORY k',
+      'FILE a.ts',
+      'FILE k/e.ts',
+    ]);
+    expect(report.walk.filesIndexed).toBe(2);
+  });
+
+  it('a path whose type changed loses its old node: a file that became a directory, and back (S25-2)', async () => {
+    const root = await tree({ p: 'a file', 'q/r.ts': 'r' });
+    const memory = createMemoryStore({ id: 'memory' });
+    await index(root, memory);
+    await rm(join(root, 'p'));
+    await rm(join(root, 'q'), { recursive: true });
+    await mkdir(join(root, 'p'));
+    await writeFile(join(root, 'p', 's.ts'), 's');
+    await writeFile(join(root, 'q'), 'a file now');
+    await index(root, memory);
+    expect(labelled(await memory.readAll())).toEqual([
+      'DIRECTORY .',
+      'DIRECTORY p',
+      'FILE p/s.ts',
+      'FILE q',
+    ]);
+  });
+
+  it('reads only FILE and DIRECTORY nodes that carry a path: a planted graph keeps the rest', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const memory = createMemoryStore({ id: 'memory' });
+    const nodes = [
+      { id: 'f', type: 'FILE', name: 'gone.ts', data: { path: 'gone.ts' } },
+      { id: 'm', type: 'MODULE', name: 'm', data: { path: 'mod.ts' } },
+      { id: 'd', type: 'DIRECTORY', name: 'x' },
+      { id: 'a', type: 'FILE', name: 'a.ts', data: { path: 'a.ts' } },
+      // Round two (R6): never the root (C-STORE INV-7), and never a path that is not a WorkspacePath.
+      { id: 'dot', type: 'FILE', name: '.', data: { path: '.' } },
+      { id: 'abs', type: 'FILE', name: 'abs', data: { path: '/abs' } },
+    ];
+    await memory.onSnapshot({ seq: 3, nodes, edges: [] }, { seq: 3, cause: 'initial' });
+    const host = recording('panel');
+    await index(root, memory, { sinks: [host.sink] });
+    expect(removalsOf(host.ops[0])).toEqual(['gone.ts']);
+  });
+});
+
 describe('IndexReport', () => {
   it('files are sorted by path (UTF-16 code units), not in walk order', async () => {
     const root = await tree({ 'b/x.ts': '', 'b.ts': '', 'a.py': '', 'B.py': '' });

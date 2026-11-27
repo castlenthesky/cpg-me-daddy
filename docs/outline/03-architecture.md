@@ -151,6 +151,8 @@ resolve: { per_file_ms: 500, per_site_ms: 250 }
 
 The loader ships with `cpg index` at U2c and produces one `CpgConfigInput` object; the engine never reads the environment itself.
 
+`watch.rescan_interval_ms` (sprint 25, controller decision 78; default 300000, 0 turns it off) is the drift crawl's interval: a watch reconciles the whole tree against what it holds that long after it started and after each crawl ended, and on command (SIGHUP for `cpg watch`, **CPG: Rescan Workspace** in VS Code; decision 79).
+
 ## 10. CLI surface (`apps/cli`)
 
 | verb | milestone | does |
@@ -159,7 +161,7 @@ The loader ships with `cpg index` at U2c and produces one `CpgConfigInput` objec
 | `cpg verify [dir]` | U2a | the six checks, four states, `--strict`, `--format=json` (08-verification.md) |
 | `cpg inspect <input|->` | U2b | serve the picture from a payload, a JSONL delta stream, or `--live <root>` |
 | `cpg schema --print` | U1/U2 | print the registry as data; `schema --check` fails on drift |
-| `cpg watch [dir]` | U4 | live; text lines or `--json` NDJSON per event |
+| `cpg watch [dir]` | U4 | live; text lines or `--json` NDJSON per event; crawls for drift on an interval and on SIGHUP (decisions 78, 79) |
 | `cpg query "<cypher>"` | U5 | RO_QUERY against the store; rows on stdout, timing on stderr |
 | `cpg status` | U10 | engine/consumer/coverage status |
 | `cpg mcp` | U10 | stdio MCP server |

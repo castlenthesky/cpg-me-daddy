@@ -342,16 +342,18 @@ async function opened(folder) {
 }
 
 describe('the manifest', () => {
-  it('names the two commands and the restored panel, and nothing that activates on startup', () => {
+  // Sprint 25 (controller decision 79): cpg.rescan, "CPG: Rescan Workspace".
+  it('names the four commands and the restored panel, and nothing that activates on startup', () => {
     expect(manifest.contributes.commands).toEqual([
       { command: 'cpg.openGraph', title: 'CPG: Open Graph' },
       { command: 'cpg.verify', title: 'CPG: Verify' },
       { command: 'cpg.showLog', title: 'CPG: Show Log' },
+      { command: 'cpg.rescan', title: 'CPG: Rescan Workspace' },
     ]);
     expect(manifest.activationEvents).toEqual(['onWebviewPanel:cpg.graph']);
     const { seen } = activate();
     expect(new Set(seen.commands.keys())).toEqual(
-      new Set(['cpg.openGraph', 'cpg.verify', 'cpg.showLog']),
+      new Set(['cpg.openGraph', 'cpg.verify', 'cpg.showLog', 'cpg.rescan']),
     );
     expect([...seen.serializers.keys()]).toEqual(['cpg.graph']);
     expect(seen.panels).toEqual([]);
@@ -362,6 +364,39 @@ describe('the manifest', () => {
     expect(Object.keys(manifest.dependencies)).toEqual(
       expect.arrayContaining(Object.keys(host.dependencies)),
     );
+  });
+});
+
+/** The FILE paths of a graph message. */
+const filePaths = (graph) =>
+  graph.payload.nodes.filter(({ type }) => type === 'FILE').map(({ data }) => data.path);
+
+describe('cpg.rescan (decision 79)', () => {
+  // Round two (R2): a file grown past the cap is dropped by the live path (decision 48), so only a crawl
+  // takes it out of the graph.
+  it('during a live watch it crawls now: what no event reported reaches the panel, and nothing is said', async () => {
+    writeFileSync(join(root, 'cpg.config.yaml'), 'version: 1\nmax_file_size_bytes: 60\n');
+    const { seen, run, panel } = await opened();
+    // Post-implementation: the first graph brings the index's own U6a warning; the crawl adds none.
+    const said = [...seen.warnings];
+    writeFileSync(join(root, 'b.py'), '#'.repeat(61));
+    await run('cpg.rescan');
+    await until(() => ofType(panel, 'graph').length === 2);
+    expect(ofType(panel, 'graph').map((graph) => filePaths(graph).includes('b.py'))).toEqual([
+      true,
+      false,
+    ]);
+    expect([said.length, seen.warnings, seen.errors]).toEqual([1, said, []]);
+  });
+
+  it('with no graph being watched it only says so', async () => {
+    const { seen, run } = activate();
+    await run('cpg.rescan');
+    expect([seen.warnings, seen.errors, seen.panels]).toEqual([
+      ['CPG: no graph is being watched'],
+      [],
+      [],
+    ]);
   });
 });
 
@@ -648,10 +683,12 @@ describe('deactivation', () => {
     await until(() => seen.diagnostics.size === 1);
     // Round two (review a9): a run is pending, and the editor's own items are released.
     draw(panel);
-    expect(vi.getTimerCount()).toBe(1);
+    // Round two (R1): the verify run, and the watch's rescan interval (decision 78's 300000).
+    await until(() => vi.getTimerCount() === 2);
     const before = panel.posted.length;
     deactivate();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
+    await until(() => vi.getTimerCount() === 0);
     expect(new Set(seen.disposed)).toEqual(new Set(['diagnostics', 'status bar', 'log']));
     expect([seen.commands.size, seen.serializers.size, seen.themeListeners.length]).toEqual([
       0, 0, 0,

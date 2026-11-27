@@ -93,6 +93,7 @@ export function activate(context: vscode.ExtensionContext): void {
     session,
     vscode.commands.registerCommand('cpg.openGraph', () => session.openGraph()),
     vscode.commands.registerCommand('cpg.verify', () => session.verify()),
+    vscode.commands.registerCommand('cpg.rescan', () => session.rescan()),
     vscode.window.registerWebviewPanelSerializer(
       GRAPH_VIEW_TYPE,
       graphPanelSerializer(directory, (surface) => session.restorePanel(surface)),

@@ -74,6 +74,8 @@ export interface ResolvedConfig {
     readonly trailingMs: Provenanced<number>;
     readonly ceilingMs: Provenanced<number>;
     readonly bulkThresholdFiles: Provenanced<number>;
+    /** The drift crawl's interval (controller decision 78): default 300000; 0 turns it off. */
+    readonly rescanIntervalMs: Provenanced<number>;
   };
 }
 
@@ -166,6 +168,14 @@ export interface VerifyConfig extends IndexConfig {
 }
 
 /**
+ * A command to crawl now (controller decision 79), which a front door fires: SIGHUP in the CLI,
+ * `cpg.rescan` in VS Code. `subscribe` returns the call that removes `listener`.
+ */
+export interface RescanTrigger {
+  subscribe(listener: () => void): () => void;
+}
+
+/**
  * CpgEngine.watch's request (controller decision 59): the walk scope plus the debounce window. A
  * session is required: there is no dry-run watch.
  */
@@ -175,8 +185,16 @@ export interface WatchRequest {
     readonly trailingMs?: number;
     /** Default 500 (C-WATCH budget_boundary.T1_T2). */
     readonly ceilingMs?: number;
+    /**
+     * The drift crawl's interval in ms (decision 78): a rescan this long after the watch started
+     * and after each rescan ended. 0 or absent: none (the config default, 300000, is the front
+     * door's to pass).
+     */
+    readonly rescanIntervalMs?: number;
   };
   readonly session: EngineSession;
+  /** Subscribed once the watch has started, unsubscribed when it stops (decision 79). */
+  readonly rescan?: RescanTrigger;
 }
 
 /**
@@ -221,6 +239,8 @@ export type WatchEvent =
       readonly kind: 'batch';
       readonly seq: number;
       readonly at: number;
+      /** The session batch's cause: a settled window, or a rescan (decision 80). */
+      readonly cause: 'live' | 'rescan';
       readonly changes: readonly NormalizedChange[];
       /** The first sink's receipt (the built-in memory store), as IndexReport counts it. */
       readonly write: {
