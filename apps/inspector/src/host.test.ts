@@ -232,11 +232,21 @@ describe('InspectorHost: stdin and ready', () => {
     },
   );
 
-  it.each([4, 2])('a catch-up at seq %i, not ahead of the payload held, changes nothing', (seq) => {
-    const { host, t } = readyHost();
-    host.input({ type: 'graph', payload: { ...P, seq, nodes: [] }, cause: 'catch-up' });
-    expect([host.epoch(), host.snapshot(), t.posted]).toStrictEqual([1, P, [graphOf(P)]]);
-  });
+  // Round two (R10): with no cause too, a later graph is a catch-up.
+  it.each([
+    [4, 'catch-up'],
+    [2, 'catch-up'],
+    [4, undefined],
+    [2, undefined],
+  ] as const)(
+    'a catch-up at seq %i (cause %s), not ahead of the payload held, changes nothing',
+    (seq, cause) => {
+      const { host, t } = readyHost();
+      const behind: GraphPayload = { ...P, seq, nodes: [] };
+      host.input({ type: 'graph', payload: behind, ...(cause !== undefined && { cause }) });
+      expect([host.epoch(), host.snapshot(), t.posted]).toStrictEqual([1, P, [graphOf(P)]]);
+    },
+  );
 
   it("the first graph starts epoch 1 whatever its cause, and a later 'initial' starts the next, even behind", () => {
     const { host, faults } = makeHost();
@@ -362,7 +372,8 @@ describe('InspectorHost: messages from the page', () => {
   it('answers a resync whatever epoch and seq it carries', () => {
     const { host, t } = readyHost();
     const next: GraphPayload = { seq: 9, nodes: [{ id: 'x', type: 'FILE' }], edges: [] };
-    host.input({ type: 'graph', payload: next });
+    // Round two (R2): a new epoch is a graph that says so (decision 84).
+    host.input({ type: 'graph', payload: next, cause: 'initial' });
     t.send({ type: 'resync', epoch: 0, seq: -1, reason: 'stale-epoch' });
     t.send({ type: 'resync', epoch: 7, seq: 99, reason: 'gap' });
     expect(t.posted.slice(2)).toStrictEqual([graphOf(next, 2), graphOf(next, 2)]);

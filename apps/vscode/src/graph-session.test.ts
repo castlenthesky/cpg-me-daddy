@@ -234,6 +234,14 @@ class ScriptedWatch {
     this.onEvent({ ...event, latencyMs: NO_LATENCY, deltas: stamped, graphSeq: this.graphSeq });
   }
 
+  /** Round two (R13): a batch re-sending deltas already sent, at their own seqs (at-least-once). */
+  replay(deltas: readonly GraphDelta[]): void {
+    const seq = this.seq();
+    const write = { nodesWritten: 1, edgesWritten: 1, statementCount: 1 };
+    const event = { kind: 'batch', seq, at: seq, cause: 'live', changes: [], write } as const;
+    this.onEvent({ ...event, latencyMs: NO_LATENCY, deltas, graphSeq: this.graphSeq });
+  }
+
   /** A batch whose first delta is a graph seq past the next, as if one were lost: a gap. */
   gap(deltas: readonly DeltaBody[] = [TOUCH]): void {
     this.graphSeq += 1;
@@ -788,20 +796,59 @@ describe("each batch's deltas reach the panel (decision 83)", () => {
     expect(s.messages).toEqual([`warning: CPG: ${U6A}`]);
   });
 
+  // Round two (R5): the malformed delta is the batch's only one, so no later gap can stand in for it.
   it('a malformed delta (onDelta rejects): the same fallback, and nothing is said', async () => {
     const root = await directory({ 'a.ts': 'a' });
     const s = setUp({ root });
     const watch = await s.opened();
     const clash = delta('a.ts', { addedNodes: [{ id: fileId('a.ts'), type: 'DIRECTORY' }] });
-    watch.batch([clash, TOUCH]);
+    watch.batch([clash]);
     await until(() => s.page().graphs.length === 2);
     await allMicrotasks();
     expect([stamps(s.page()), deltasOf(s.page()), s.inspected.length]).toEqual([
-      ['1/0', '1/2'],
+      ['1/0', '1/1'],
       [],
       2,
     ]);
     expect(s.messages).toEqual([`warning: CPG: ${U6A}`]);
+  });
+
+  // Round two (R13): C-MODEL I-10, a delta at or below the host's seq is already applied: no fallback.
+  it('a delta already applied is dropped, and asks for no snapshot', async () => {
+    const root = await directory({ 'a.ts': 'a', 'b.ts': 'b', 'c.ts': 'c' });
+    const s = setUp({ root });
+    const watch = await s.opened();
+    watch.batch([TOUCH]);
+    watch.batch([TOUCH]);
+    await until(() => deltasOf(s.page()).length === 2);
+    watch.replay([{ ...TOUCH, seq: 1 }]);
+    watch.replay([{ ...TOUCH, seq: 2 }]);
+    await allMicrotasks();
+    await allMicrotasks();
+    expect([stamps(s.page()), deltasOf(s.page()), s.inspected.length]).toEqual([
+      ['1/0'],
+      ['1/1 .', '1/2 .'],
+      1,
+    ]);
+  });
+
+  // Round two (R6): the host still holds the replaced watch's graph, at a seq the new deltas follow.
+  it("a new watch whose ready refresh failed never lays its deltas on the old watch's graph", async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root, inspectFails: (call) => call === 2 });
+    const first = await s.opened();
+    first.fail('gone');
+    await until(() => s.closes.length === 1);
+    const reopening = s.session.openGraph();
+    const second = await s.watching(2);
+    await second.ready();
+    await reopening;
+    await writeFile(join(root, 'b.ts'), 'b');
+    second.batch([created('b.ts', 'b')]);
+    await until(() => s.page().graphs.length === 2);
+    await allMicrotasks();
+    expect([stamps(s.page()), deltasOf(s.page())]).toEqual([['1/0', '2/1'], []]);
+    expect(names(s.page().graphs[1])).toEqual(['.', 'a.ts', 'b.ts']);
   });
 
   it("a batch during ready's refresh waits for it: its deltas land on the initial snapshot", async () => {

@@ -431,6 +431,10 @@ describe('GraphVisualizer.applyDelta', () => {
     ]);
     events.onTransitionEnd(false);
     expect(surface.starts).toEqual([1, 0.1]);
+    // Round two (R12): a later delta arms it again.
+    viz.applyDelta(edgeOnly(IMPORTS));
+    events.onTransitionEnd(false);
+    expect(surface.starts).toEqual([1, 0.1, 0.1]);
   });
 
   it('never restarts after a render or a legend toggle has started the simulation itself', () => {

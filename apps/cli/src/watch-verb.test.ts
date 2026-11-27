@@ -216,6 +216,9 @@ interface ScriptOptions {
   readonly gate?: Promise<void>;
   /** inspect calls (0-based) that reject with `inspect-boom-<i>`. */
   readonly failInspect?: readonly number[];
+  /** Round two (R14): verify calls (0-based) that wait for the gate, and that reject with `verify-boom-<i>`. */
+  readonly verifyGate?: { readonly calls: readonly number[]; readonly promise: Promise<void> };
+  readonly failVerify?: readonly number[];
   /** Default true: an abort emits `closed { signal }` (unless closed was emitted) and resolves. */
   readonly closeOnAbort?: boolean;
   readonly failConnect?: boolean;
@@ -281,16 +284,13 @@ function scripted(o: ScriptOptions = {}) {
         else sig.addEventListener('abort', onAbort, { once: true });
       });
     },
-    verify: (session, config, expected) => {
+    verify: async (session, config, expected) => {
       reads.push({ what: 'verify', session, config, expected });
       const call = verifies;
       verifies += 1;
-      return Promise.resolve({
-        state: 'pass',
-        checks: verifiedAt(call),
-        consumers: ['memory'],
-        durationMs: 1,
-      });
+      if (o.verifyGate?.calls.includes(call) === true) await o.verifyGate.promise;
+      if (o.failVerify?.includes(call) === true) throw new Error(`verify-boom-${String(call)}`);
+      return { state: 'pass', checks: verifiedAt(call), consumers: ['memory'], durationMs: 1 };
     },
     inspect: async (session, config) => {
       const i = inspects;
@@ -316,6 +316,7 @@ function scripted(o: ScriptOptions = {}) {
     end: () => finish?.(),
     signal: () => signal,
     inspects: () => inspects,
+    verifies: () => verifies,
   };
 }
 type Scripted = ReturnType<typeof scripted>;
@@ -914,6 +915,10 @@ describe('cpg watch --inspect (decision 67)', () => {
     f.report(1, { payloadNodeCount: 3, renderedNodeCount: 3 });
     await until(l, () => f.verifications().length >= 5, 'the pass at seq 1');
     expect(renderOf(f, 4)).toEqual(render('pass', 3, 3, { asOfSeq: 1 }));
+    // Round two (R7): a re-judged verification carries the batch's verify (call 1), not the start's.
+    const others = (i: number) =>
+      f.verifications()[i]?.checks.filter((c) => c.id !== 'render-reconciliation');
+    expect(others(4)).toEqual(verifiedAt(1).filter((c) => c.id !== 'render-reconciliation'));
   });
 
   // Reworked in sprint 26: the deltas of batches during a snapshot follow it, then one verify.
@@ -1064,6 +1069,8 @@ describe('cpg watch --inspect (decision 67)', () => {
     gate.open();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
     expect([s.inspects(), f.stops(), s.log.at(-1)]).toEqual([1, 1, 'close']);
+    // Round two (R8): nothing starts once the watch has resolved: no verify after the snapshot's.
+    expect(s.verifies()).toBe(1);
   });
 
   // Round two (review 8): a refresh takes its seq once the inspector is up (design note 5).
@@ -1111,6 +1118,64 @@ describe('cpg watch --inspect (decision 67)', () => {
     f.report(2, { payloadNodeCount: 2, renderedNodeCount: 2 });
     await until(l, () => f.verifications().length >= 3, 'the pass at seq 2');
     expect(renderOf(f, 2)).toEqual(render('pass', 2, 2, { asOfSeq: 2 }));
+  });
+
+  // Round two (R9): C-MODEL I-10 through LivePicture.apply: a re-sent delta is skipped, not a gap.
+  it('a delta already applied is not sent again and asks for no snapshot', async () => {
+    const s = scripted();
+    const { l, f } = await inspecting(s);
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    s.emit(deltaBatch(2, adds(1, 'n3'), adds(2, 'n4')));
+    await until(l, () => s.verifies() >= 2, 'a verify');
+    await tick();
+    expect([f.deltas(), s.inspects()]).toEqual([[adds(1, 'n3'), adds(2, 'n4')], 1]);
+  });
+
+  // Round two (R14 i): one verify in flight, one queued; a snapshot asked for replaces the queued one.
+  it('verifies are latest-wins, and a snapshot asked for replaces a queued verify', async () => {
+    const gate = gated();
+    const s = scripted({ verifyGate: { calls: [1], promise: gate.promise } });
+    const { l, f } = await inspecting(s);
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    await until(l, () => s.verifies() === 2, 'the batch verify in flight');
+    s.emit(deltaBatch(2, adds(2, 'n4')));
+    s.emit(deltaBatch(3, adds(3, 'n5')));
+    s.emit(deltaBatch(4, adds(9, 'n6')));
+    gate.open();
+    await until(l, () => f.graphs().length >= 2, 'the catch-up graph');
+    await tick();
+    await tick();
+    expect([s.verifies(), s.inspects(), f.graphs().map((p) => p.seq)]).toEqual([3, 2, [0, 9]]);
+  });
+
+  // Round two (R14 ii): a verify that throws is said as a refresh is, and the watch goes on.
+  it('a verify that throws is a warning at its graph seq, and the next batch verifies again', async () => {
+    const s = scripted({ failVerify: [1] });
+    const { l, f } = await inspecting(s);
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    const line = 'cpg: warning: inspector refresh at seq 1 failed: verify-boom-1';
+    await until(l, () => l.io.stderr.includes(line), 'the verify warning');
+    s.emit(deltaBatch(2, adds(2, 'n4')));
+    await until(l, () => f.verifications().length >= 2, 'the next verification');
+    expect([f.verifications()[1]?.checks[0]?.observed, s.inspects()]).toEqual([2, 1]);
+  });
+
+  // Round two (R14 iii): a delta that waited behind a snapshot and gaps after it asks for another.
+  it('a waiting delta that does not apply after its snapshot asks for another snapshot', async () => {
+    const gate = gated();
+    const s = scripted({ gate: gate.promise });
+    const f = fakeInspector();
+    const l = await watching(['watch', '/w', '--inspect'], s, f);
+    s.emit(ready());
+    await until(l, () => s.inspects() === 1, 'the first refresh to read');
+    s.emit(deltaBatch(1, adds(5, 'n3')));
+    gate.open();
+    await until(l, () => f.graphs().length >= 2, 'the second graph');
+    expect([f.graphs().map((p) => p.seq), f.causes(), f.deltas()]).toEqual([
+      [0, 5],
+      ['initial', 'catch-up'],
+      [],
+    ]);
   });
 
   it.each([

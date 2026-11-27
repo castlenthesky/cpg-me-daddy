@@ -1469,8 +1469,45 @@ describe('toBatchDeltas (decisions 81, 82)', () => {
       // The move forgot q.ts.
       removed(6, 'q.ts', []),
     ]);
-    const third = toBatchDeltas([aChange('deleted', 'file', 'r.ts')], languageOf, h, 7);
-    expect(third).toEqual([removed(7, 'r.ts', [fileId('r.ts')])]);
+    const third = toBatchDeltas(
+      [
+        aChange('deleted', 'file', 'r.ts'),
+        // Round two (R3): a deleted directory and what was in it are no longer held.
+        aChange('deleted', 'directory', 'w'),
+        aChange('deleted', 'file', 'w/f.ts'),
+      ],
+      languageOf,
+      h,
+      7,
+    );
+    expect(third).toEqual([
+      removed(7, 'r.ts', [fileId('r.ts')]),
+      removed(8, 'w', []),
+      removed(9, 'w/f.ts', []),
+    ]);
+  });
+
+  // Round two (R4): a move removes what the store drops for its old path, as a deletion does.
+  it('a move from a held directory takes its subtree; a move from a path not held removes nothing', () => {
+    const h = held(['dm/z.ts'], ['.', 'dm']);
+    const deltas = toBatchDeltas(
+      [
+        aChange('moved', 'directory', 'dn', { fromPath: wp('dm') }),
+        aChange('moved', 'file', 'b.ts', { fromPath: wp('nowhere.ts'), revision_id: 'b' }),
+        aChange('deleted', 'file', 'dm/z.ts'),
+      ],
+      languageOf,
+      h,
+      1,
+    );
+    expect(sortedRemovals(deltas)).toEqual([
+      {
+        ...added(1, dirNode('dn'), hasEntry('.', dirId('dn'))),
+        removedNodeIds: [dirId('dm'), fileId('dm/z.ts')].toSorted(byText),
+      },
+      added(2, fileNode('b.ts', 'b', 'typescript'), hasEntry('.', fileId('b.ts'))),
+      removed(3, 'dm/z.ts', []),
+    ]);
   });
 
   it('an empty batch is no delta; a file change without revision_id throws (INV-26)', () => {
@@ -1504,29 +1541,36 @@ describe('the batch events carry deltas and the graph seq (decisions 81, 82)', (
       ['warning', 2, '-'],
       ['batch', 3, 3],
     ]);
+    // Round two (R1): C-WATCH INV-16, batch order deleted < changed, so b.ts's delta comes first.
     expect(sortedRemovals(batches(run.events)[1]?.deltas ?? [])).toEqual([
-      added(2, fileNode('a.ts', sha256('A'), 'typescript')),
-      removed(3, 'b.ts', [fileId('b.ts')]),
+      removed(2, 'b.ts', [fileId('b.ts')]),
+      added(3, fileNode('a.ts', sha256('A'), 'typescript')),
     ]);
     // C-EXT may_not: no delta is derived by reading the store; index() read it once (decision 77).
     expect(reads).toEqual(['memory']);
   });
 
-  it('what the initial batch wrote is held: a folder made before ready is removed whole', async () => {
-    const root = await tree({ 'keep/k.ts': 'k', 'gone.ts': 'g' });
+  // Round two (R3): the initial batch also creates a folder and deletes a file inside one.
+  it('what the initial batch wrote is held: folders made or changed before ready are removed whole', async () => {
+    const root = await tree({ 'keep/k.ts': 'k', 'keep/old.ts': 'o', 'gone.ts': 'g' });
     const backend = backendFor(async () => {
       await writeFile(join(root, 'keep', 'new.ts'), 'fresh');
+      await rm(join(root, 'keep', 'old.ts'));
       await rm(join(root, 'gone.ts'));
+      await mkdir(join(root, 'fresh'));
+      await writeFile(join(root, 'fresh', 'f.ts'), 'f');
     });
     const run = await start(root, { backend });
     await ready(run);
     await rm(join(root, 'keep'), { recursive: true });
-    run.backend.fire(raw(root, 'deleted', 'keep', 5001));
+    await rm(join(root, 'fresh'), { recursive: true });
+    run.backend.fire(raw(root, 'deleted', 'keep', 5001), raw(root, 'deleted', 'fresh', 5002));
     run.clock.advance(100);
     await until(() => batches(run.events).length === 1, 'a batch');
 
     expect(sortedRemovals(batches(run.events)[0]?.deltas ?? [])).toEqual([
-      removed(1, 'keep', [dirId('keep'), fileId('keep/k.ts'), fileId('keep/new.ts')]),
+      removed(1, 'fresh', [dirId('fresh'), fileId('fresh/f.ts')]),
+      removed(2, 'keep', [dirId('keep'), fileId('keep/k.ts'), fileId('keep/new.ts')]),
     ]);
   });
 

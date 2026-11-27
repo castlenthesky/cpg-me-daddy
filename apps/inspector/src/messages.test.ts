@@ -343,6 +343,10 @@ describe('parseInspectorInput (stdin, decision 9a)', () => {
     ['a graph line carrying a delta', { type: 'graph', delta: D }],
     ["a graph with cause 'live'", { type: 'graph', payload: P, cause: 'live' }],
     ['a graph with cause 1', { type: 'graph', payload: P, cause: 1 }],
+    // Round two (R11): a falsy cause is not an absent one.
+    ['a graph with cause null', { type: 'graph', payload: P, cause: null }],
+    ["a graph with cause ''", { type: 'graph', payload: P, cause: '' }],
+    ['a graph with cause false', { type: 'graph', payload: P, cause: false }],
     ['a verification with no report', { type: 'verification' }],
     ['a report with no seq', { type: 'verification', report: withField(report, 'seq', undefined) }],
     ["a report at seq '0' (review a10)", { type: 'verification', report: { ...report, seq: '0' } }],
