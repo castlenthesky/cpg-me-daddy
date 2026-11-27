@@ -1,7 +1,9 @@
 // CpgEngine.watch (U4.2.1 part a, BMO-60; controller decisions 59-63): index, then a @cpg/watch
 // session seeded from the walk, each batch written as one merge-filesystem op, and the C-CLI
 // WatchEvent stream. The CLI verb is part b. Sprint 26 (decisions 81, 82): each batch event carries
-// one GraphDelta per change, built from the op, and the watch's one graph seq.
+// one GraphDelta per change, built from the op, and the watch's one graph seq. U6a.3-3 (BMO-43 part
+// 3; controller decisions 102 and the reversal of 110): each batch also writes the code tier
+// (delete-file, merge-filesystem, replace-file) and carries one `producer: 'code'` delta per code write.
 
 import {
   isWorkspacePath,
@@ -12,7 +14,7 @@ import {
   type GraphNode,
   type WorkspacePath,
 } from '@cpg/model';
-import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
+import { toWriteOp, type EdgeRow, type NodeRow, type WriteOp, type WriteReceipt } from '@cpg/store';
 import {
   createWatchSession,
   type EntryKind,
@@ -23,6 +25,13 @@ import {
   type WatchSession,
   type WatchSink,
 } from '@cpg/watch';
+import {
+  attachSourceFile,
+  failureWarnings,
+  type CodeTier,
+  type CodeTierFailure,
+  type ReplaceFileOp,
+} from './code-tier';
 import type {
   IndexProgress,
   IndexReport,
@@ -36,10 +45,22 @@ import { filesystemTier } from './walker/filesystem-tier';
 import type { WalkedDirectory, WalkedFile, WalkResult } from './walker/walker';
 import { createWatchProbe } from './watch-probe';
 
-/** What `index()` computed: its report, and the walk it wrote. */
+/** What `index()` computed: its report, the walk it wrote, and the code tier it left held. */
 export interface IndexRun {
   readonly report: IndexReport;
   readonly walk: WalkResult;
+  /**
+   * The code tier's file-owned node ids per file, as the store holds them after this index
+   * (controller decision 102: the watch's HeldCode starts from it). With a session: from the one
+   * store read index() already makes (decision 77), every node whose label is file-owned and whose
+   * `data.file` is a string, grouped by that file in payload order; then each delete-file this index
+   * wrote forgets its file, and each replace-file whose first receipt is `applied` holds its file's
+   * NodeElement ids (`ExtractedFile.nodes`, in order). A file with no ids is absent. A dry run, or an
+   * index interrupted before it wrote: empty.
+   */
+  readonly heldCode: ReadonlyMap<WorkspacePath, readonly string[]>;
+  /** The `reported` set `failureWarnings` left after this index's code-tier warnings. */
+  readonly reportedFailures: ReadonlySet<string>;
 }
 
 /** What `runWatch` takes from createEngine. */
@@ -59,6 +80,10 @@ export interface WatchDeps {
   readonly now: () => number;
   /** The session's timers (debounce, retry backoff). Default: the global ones. */
   readonly timers?: TimerApi;
+  /** `index()`'s code tier (one ParseService per engine): each batch runs it (decision 102). */
+  readonly codeTier: CodeTier;
+  /** The store's write seq (decision 98a): every replace-file and delete-file takes the next. */
+  readonly nextWriteSeq: () => number;
 }
 
 function parentOf(path: WorkspacePath): WorkspacePath {
@@ -189,14 +214,30 @@ function nodeIdFor(label: NodeRow['label'], key: string): string {
   return makeNodeId({ form: label === 'DIRECTORY' ? 'directory' : 'file', path: key });
 }
 
+function cloneProperty(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneProperty);
+  if (typeof value === 'object' && value !== null) {
+    const copy: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      copy[key] = cloneProperty(entry);
+    }
+    return copy;
+  }
+  return value;
+}
+
 function pruneProperties(properties: NodeRow['properties']): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(properties)) {
     if (value !== null && value !== undefined) {
-      out[key] = value;
+      out[key] = cloneProperty(value);
     }
   }
   return out;
+}
+
+function endpointId(label: NodeRow['label'], key: string): string {
+  return label === 'FILE' || label === 'DIRECTORY' ? nodeIdFor(label, key) : key;
 }
 
 function rowToNode(row: NodeRow): GraphNode {
@@ -347,6 +388,204 @@ export function toBatchDeltas(
   return deltas;
 }
 
+/** The delete-file arm of WriteOp. */
+export type DeleteFileOp = Extract<WriteOp, { readonly kind: 'delete-file' }>;
+
+/**
+ * The code tier's file-owned node ids per file, as the watch's sinks hold them (controller decision
+ * 102): the engine's own record of the replace-files and delete-files it wrote, never a read of the
+ * store (C-EXT may_not). runWatch seeds it with `IndexRun.heldCode`. It holds file-owned ids only
+ * (an ExtractedFile's NodeElements), never a SYMBOL (C-MODEL I-15): exactly what a replace-file or
+ * a delete-file of that file removes from the store.
+ */
+export class HeldCode {
+  private readonly byFile = new Map<WorkspacePath, readonly string[]>();
+
+  /** Copies `entries`; an entry with no ids is not held. */
+  constructor(entries: ReadonlyMap<WorkspacePath, readonly string[]>) {
+    // REAL
+    for (const [file, ids] of entries) {
+      if (ids.length > 0) {
+        this.byFile.set(file, [...ids]);
+      }
+    }
+  }
+
+  /** The ids held for `file`, in the order they were held; `[]` when it holds none. */
+  idsOf(file: WorkspacePath): readonly string[] {
+    // REAL
+    const ids = this.byFile.get(file);
+    return ids === undefined ? [] : [...ids];
+  }
+
+  /**
+   * Every held file that is `path` or lies under it (starts with `path` + `/`), sorted by code-unit
+   * order; never a file that only shares the prefix (`pkg2/a.py` is not under `pkg`).
+   */
+  filesAt(path: WorkspacePath): readonly WorkspacePath[] {
+    // REAL
+    const prefix = `${path}/`;
+    const files: WorkspacePath[] = [];
+    for (const file of this.byFile.keys()) {
+      if (file === path || file.startsWith(prefix)) {
+        files.push(file);
+      }
+    }
+    return files.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  }
+
+  /** Holds `ids` (copied) for `file`, replacing what it held; an empty `ids` forgets the file. */
+  hold(file: WorkspacePath, ids: readonly string[]): void {
+    // REAL
+    if (ids.length === 0) {
+      this.byFile.delete(file);
+      return;
+    }
+    this.byFile.set(file, [...ids]);
+  }
+
+  /** Forgets `file`; a file it does not hold is a no-op. */
+  forget(file: WorkspacePath): void {
+    // REAL
+    this.byFile.delete(file);
+  }
+}
+
+/** One batch's code-tier writes (decision 102), as planCodeWrites lists them. */
+export interface CodeWritePlan {
+  /**
+   * The delete-files: for each deleted change (its `path`) and each moved change (its `fromPath`),
+   * in `changes` order, every file `held.filesAt` that path, in that order. A file is listed once per
+   * batch: the first change that names it takes it. `change` is that change's index in `changes`.
+   */
+  readonly deletes: readonly { readonly change: number; readonly file: WorkspacePath }[];
+  /**
+   * The replace-files, in `changes` order: each created, changed or moved change whose `entry` is
+   * `'file'`, which carries a `revision_id`, and whose `languageOf(path)` is a language `covers`
+   * accepts. `change` is its index in `changes`; `language` is that language.
+   */
+  readonly replaces: readonly { readonly change: number; readonly language: string }[];
+}
+
+/** Lists one batch's code-tier writes (decision 102). Pure: `held` is read, never changed. */
+export function planCodeWrites(
+  changes: readonly NormalizedChange[],
+  held: HeldCode,
+  languageOf: (path: string) => string | undefined,
+  covers: (language: string | null) => boolean,
+): CodeWritePlan {
+  // REAL
+  const deletes: { readonly change: number; readonly file: WorkspacePath }[] = [];
+  const replaces: { readonly change: number; readonly language: string }[] = [];
+  const seenDeletes = new Set<WorkspacePath>();
+
+  for (let i = 0; i < changes.length; i += 1) {
+    const change = changes[i];
+    if (change === undefined) continue;
+    const removePath =
+      change.kind === 'deleted'
+        ? change.path
+        : change.kind === 'moved'
+          ? change.fromPath
+          : undefined;
+    if (removePath !== undefined) {
+      for (const file of held.filesAt(removePath)) {
+        if (seenDeletes.has(file)) continue;
+        seenDeletes.add(file);
+        deletes.push({ change: i, file });
+      }
+    }
+    if (
+      (change.kind === 'created' || change.kind === 'changed' || change.kind === 'moved') &&
+      change.entry === 'file' &&
+      change.revision_id !== undefined
+    ) {
+      const language = languageOf(change.path);
+      if (language !== undefined && covers(language)) {
+        replaces.push({ change: i, language });
+      }
+    }
+  }
+
+  return { deletes, replaces };
+}
+
+/**
+ * The code tier's GraphDelta for one code op the batch wrote (decision 102): `seq`, `file` = the
+ * op's file, `producer: 'code'`, and
+ * - `revision_id`: a replace-file's `revision_id`; `''` for a delete-file;
+ * - `addedNodes` (replace-file only; `[]` for a delete-file): every node row of the op except the
+ *   FILE row, in op order, as the store holds a node it creates: `{ id: the row's key, type: the
+ *   label, name: properties.name when it is a string, data: the properties without the null or
+ *   undefined ones }`. The FILE's code-owned half is not sent (S34-1: its `version` is the store's
+ *   read-modify-write);
+ * - `addedEdges` (replace-file only): every edge row, in op order, as `{ source, target, type, data }`:
+ *   an endpoint is `makeNodeId` of its key for a FILE or DIRECTORY and its key otherwise; `data` is
+ *   the properties without the null or undefined ones, left out when that is empty;
+ * - `removedNodeIds`: `removed` as given (the ids HeldCode held for the file before the op; never a
+ *   SYMBOL, C-MODEL I-15).
+ * Undefined when all three lists are empty (C-SINK INV-3: the all-empty delta is unrepresentable).
+ * Pure: the op is not changed and the delta shares no array with it.
+ */
+export function toCodeDelta(
+  op: ReplaceFileOp | DeleteFileOp,
+  removed: readonly string[],
+  seq: number,
+): GraphDelta | undefined {
+  // REAL
+  const removedNodeIds = [...removed];
+  if (op.kind === 'delete-file') {
+    if (removedNodeIds.length === 0) return undefined;
+    return {
+      seq,
+      file: op.file,
+      revision_id: '',
+      producer: 'code',
+      addedNodes: [],
+      addedEdges: [],
+      removedNodeIds,
+    };
+  }
+
+  const addedNodes: GraphNode[] = [];
+  for (const row of op.nodes) {
+    if (row.label === 'FILE') continue;
+    const data = pruneProperties(row.properties);
+    const name = typeof data['name'] === 'string' ? data['name'] : undefined;
+    addedNodes.push({
+      id: row.key,
+      type: row.label,
+      ...(name !== undefined ? { name } : {}),
+      data,
+    });
+  }
+
+  const addedEdges: GraphEdge[] = [];
+  for (const edge of op.edges) {
+    const data = pruneProperties(edge.properties);
+    addedEdges.push({
+      source: endpointId(edge.fromLabel, edge.fromKey),
+      target: endpointId(edge.toLabel, edge.toKey),
+      type: edge.type,
+      ...(Object.keys(data).length > 0 ? { data } : {}),
+    });
+  }
+
+  if (addedNodes.length === 0 && addedEdges.length === 0 && removedNodeIds.length === 0) {
+    return undefined;
+  }
+
+  return {
+    seq,
+    file: op.file,
+    revision_id: op.revision_id,
+    producer: 'code',
+    addedNodes,
+    addedEdges,
+    removedNodeIds,
+  };
+}
+
 /**
  * CpgEngine.watch. Resolves after `closed`, never rejects, and emits nothing after `closed`.
  *
@@ -362,21 +601,49 @@ export function toBatchDeltas(
  * 3. A rejected `createWatchSession`: `error` (a WatchError-shaped rejection, such as root-missing,
  *    is `workspace`; anything else `engine-rejected`), then `closed { reason: 'error' }`.
  *
- * The sink (decisions 62, 63, 80): each batch with changes is written once through `deps.write`
- * (`toBatchOp`), and the batch is acknowledged only after that resolves, so known state advances
- * only on confirmed writes (C-SINK INV-19); an empty batch is not written. Then, with `at = now()`:
- * - the initial batch emits `ready { root: req.config.root, report }`, the first event (seq 0);
+ * The sink (decisions 62, 63, 80, 102). `heldCode` is a HeldCode of `IndexRun.heldCode`. A batch
+ * with changes is written through `deps.write`, each write awaited before the next:
+ * 1. First, before any write: `plan = planCodeWrites(changes, heldCode, deps.languageOf,
+ *    deps.codeTier.covers)` and the merge-filesystem op `toBatchOp(changes, deps.languageOf)` (so a
+ *    file change with no `revision_id` throws before anything is written).
+ * 2. One `{ kind: 'delete-file', file, seq: deps.nextWriteSeq() }` per `plan.deletes` entry, in order.
+ * 3. The merge-filesystem op.
+ * 4. Per `plan.replaces` entry, in order: the file's bytes, read once now (`probe.read(path)`); then
+ *    `deps.codeTier.run({ path, parent: its parent directory ('.' for a top-level path), language,
+ *    sizeBytes: change.sizeBytes ?? 0, revision_id: change.revision_id }, bytes)`. Nothing re-hashes
+ *    (C-WATCH INV-26): the nodes carry the change's `revision_id` even when the bytes changed after
+ *    the session's digest, and the batch that change brings rewrites them. When it extracted:
+ *    `attachSourceFile(toWriteOp(file, [], deps.nextWriteSeq()))` is written (no MODULE: the warning
+ *    `code tier: <path>: no MODULE, so no SOURCE_FILE edge`, as index() gives). A read that rejects
+ *    is a failure `{ code: 'read-failed', message: the rejection's message }`; a failure writes
+ *    nothing more for that file (its FILE row is written; the code tier it held stays held).
+ * Once a stop has begun, the job writes nothing more and emits nothing. The batch is acknowledged
+ * only after every write resolved (C-SINK INV-19); a rejected write rejects the batch, which the
+ * session retries whole, re-planned from the same `heldCode`. When every write has resolved and no
+ * stop has begun, `heldCode` advances: each delete forgets its file, then each replace-file written
+ * holds its file's NodeElement ids (`ExtractedFile.nodes`). An empty batch writes nothing. Then,
+ * with `at = now()`:
+ * - the initial batch emits `ready { root: req.config.root, report, graphSeq: 0 }`, the first event
+ *   (seq 0), and carries no deltas (what it wrote is in the snapshot a host reads after ready);
  * - every other batch emits `batch { cause: batch.cause, changes, write: { nodesWritten,
- *   edgesWritten, statementCount } of the receipt, latencyMs: { t0_t1: null, t1_t2: settledAt -
- *   firstEventAt, t2_t3: at - settledAt, total: t1_t2 + t2_t3 }, deltas, graphSeq }`.
+ *   edgesWritten, statementCount }, each summed over every receipt the batch's writes returned,
+ *   latencyMs: { t0_t1: null, t1_t2: settledAt - firstEventAt, t2_t3: at - settledAt, total: t1_t2
+ *   + t2_t3 }, deltas, graphSeq }`;
+ * - then the batch's code-tier failures, as `failureWarnings(failures, reported)` in plan order, each
+ *   a `warning` (`reported` starts as a copy of `IndexRun.reportedFailures`, so one group is said
+ *   once per watch), then its no-MODULE warnings.
  * A throw from `onEvent` is contained: it never rejects the batch (that would rewrite it).
  *
- * Deltas (decisions 81, 82): one graph seq counter per watch. `ready` carries `graphSeq: 0`. A
- * batch event's `deltas` are `toBatchDeltas(changes, languageOf, held, graphSeq + 1)`, built once
- * its write has resolved and only when the event is emitted, and its `graphSeq` is then the last
- * delta's. `held` is a HeldPaths of the walk's files and directories; the initial batch advances it
- * with its changes (they are in the snapshot a host reads after ready, so they carry no deltas).
- * A batch whose event is not emitted takes no graph seq.
+ * Deltas (decisions 81, 82, 102): one graph seq counter per watch. `ready` carries `graphSeq: 0`. A
+ * batch event's `deltas` are built once its writes have resolved and only when the event is
+ * emitted, change by change in `changes` order: the change's filesystem delta (`toBatchDeltas` of
+ * that change alone, on `held`), then its code deltas: `toCodeDelta(delete-file op, the ids
+ * heldCode held for its file before the batch)` for each of its `plan.deletes` in order, then
+ * `toCodeDelta(replace-file op, the ids heldCode held for its path before the batch)` when its
+ * replace-file was written. Each delta takes the next graph seq; an undefined one takes none. The
+ * batch's `graphSeq` is then its last delta's. `held` is a HeldPaths of the walk's files and
+ * directories; the initial batch advances it with its changes. A batch whose event is not emitted
+ * takes no graph seq.
  *
  * Drift crawl (decisions 78, 79; S25-1, S25-3): `interval = req.config.rescanIntervalMs ?? 0`.
  * `onRescanDone` re-arms a single countdown timer (`deps.timers ?? globalThis`) for `interval` ms
@@ -519,30 +786,179 @@ export async function runWatch(
           indexRun.walk.files.map((file) => file.path),
           indexRun.walk.directories.map((dir) => dir.path),
         );
+        const heldCode = new HeldCode(indexRun.heldCode);
+        const reported = new Set<string>(indexRun.reportedFailures);
         let graphSeq = 0;
         const { report } = indexRun;
         const sink: WatchSink = {
           async onBatch(batch) {
             if (stop !== undefined) return;
-            let receipt: WriteReceipt | undefined;
+            let nodesWritten = 0;
+            let edgesWritten = 0;
+            let statementCount = 0;
+            const deleteOps = new Map<number, DeleteFileOp[]>();
+            const replaceOps = new Map<
+              number,
+              { readonly op: ReplaceFileOp; readonly ids: readonly string[] }
+            >();
+            const deletedFiles: WorkspacePath[] = [];
+            const failures: CodeTierFailure[] = [];
+            const noModuleWarnings: string[] = [];
+
+            const addReceipt = (receipt: WriteReceipt): void => {
+              nodesWritten += receipt.nodesWritten;
+              edgesWritten += receipt.edgesWritten;
+              statementCount += receipt.statementCount;
+            };
+
             if (batch.changes.length > 0) {
-              receipt = await deps.write(toBatchOp(batch.changes, deps.languageOf));
+              const plan = planCodeWrites(batch.changes, heldCode, deps.languageOf, (language) =>
+                deps.codeTier.covers(language),
+              );
+              const fsOp = toBatchOp(batch.changes, deps.languageOf);
+
+              /* oxlint-disable no-await-in-loop */
+              for (const entry of plan.deletes) {
+                if (stop !== undefined) return;
+                const delOp: DeleteFileOp = {
+                  kind: 'delete-file',
+                  file: entry.file,
+                  seq: deps.nextWriteSeq(),
+                };
+                addReceipt(await deps.write(delOp));
+                deletedFiles.push(entry.file);
+                const list = deleteOps.get(entry.change);
+                if (list !== undefined) list.push(delOp);
+                else deleteOps.set(entry.change, [delOp]);
+              }
+
+              if (stop !== undefined) return;
+              addReceipt(await deps.write(fsOp));
+
+              for (const entry of plan.replaces) {
+                if (stop !== undefined) return;
+                const change = batch.changes[entry.change];
+                if (change === undefined || change.revision_id === undefined) continue;
+                let bytes: Uint8Array;
+                try {
+                  bytes = await probe.read(change.path);
+                } catch (error) {
+                  failures.push({
+                    path: change.path,
+                    language: entry.language,
+                    code: 'read-failed',
+                    message: errorMessage(error),
+                  });
+                  continue;
+                }
+                if (stop !== undefined) return;
+                const result = await deps.codeTier.run(
+                  {
+                    path: change.path,
+                    parent: parentOf(change.path),
+                    language: entry.language,
+                    sizeBytes: change.sizeBytes ?? 0,
+                    revision_id: change.revision_id,
+                  },
+                  bytes,
+                );
+                if (stop !== undefined) return;
+                if (result.kind === 'failed') {
+                  failures.push({
+                    path: change.path,
+                    language: entry.language,
+                    code: result.code,
+                    message: result.message,
+                  });
+                  continue;
+                }
+                const { op: repOp, attached } = attachSourceFile(
+                  toWriteOp(result.file, [], deps.nextWriteSeq()),
+                );
+                if (!attached) {
+                  noModuleWarnings.push(
+                    `code tier: ${change.path}: no MODULE, so no SOURCE_FILE edge`,
+                  );
+                }
+                addReceipt(await deps.write(repOp));
+                replaceOps.set(entry.change, {
+                  op: repOp,
+                  ids: result.file.nodes.map((node) => node.id),
+                });
+              }
+              /* oxlint-enable no-await-in-loop */
             }
+
             const at = deps.now();
             if (stop !== undefined) return;
+
+            const advanceHeldCode = (): void => {
+              for (const file of deletedFiles) {
+                heldCode.forget(file);
+              }
+              for (const { op: repOp, ids } of replaceOps.values()) {
+                heldCode.hold(repOp.file, ids);
+              }
+            };
+
+            const emitCodeWarnings = (): void => {
+              if (stop !== undefined) return;
+              for (const message of failureWarnings(failures, reported)) {
+                emit({ kind: 'warning', message }, at);
+              }
+              for (const message of noModuleWarnings) {
+                emit({ kind: 'warning', message }, at);
+              }
+            };
+
             if (batch.cause === 'initial') {
               for (const change of batch.changes) {
                 held.advance(change);
               }
+              advanceHeldCode();
               emit({ kind: 'ready', root: req.config.root, report, graphSeq: 0 }, at);
               readyEmitted = true;
               flushWarnings();
+              emitCodeWarnings();
               return;
             }
-            if (receipt === undefined) return;
-            const deltas = toBatchDeltas(batch.changes, deps.languageOf, held, graphSeq + 1);
-            const lastDelta = deltas.at(-1);
-            if (lastDelta !== undefined) graphSeq = lastDelta.seq;
+
+            if (batch.changes.length === 0) return;
+
+            const deltas: GraphDelta[] = [];
+            for (let i = 0; i < batch.changes.length; i += 1) {
+              const change = batch.changes[i];
+              if (change === undefined) continue;
+              const fsDeltas = toBatchDeltas([change], deps.languageOf, held, graphSeq + 1);
+              for (const delta of fsDeltas) {
+                deltas.push(delta);
+                graphSeq = delta.seq;
+              }
+              const deletesForChange = deleteOps.get(i);
+              if (deletesForChange !== undefined) {
+                for (const delOp of deletesForChange) {
+                  const codeDelta = toCodeDelta(delOp, heldCode.idsOf(delOp.file), graphSeq + 1);
+                  if (codeDelta !== undefined) {
+                    deltas.push(codeDelta);
+                    graphSeq = codeDelta.seq;
+                  }
+                }
+              }
+              const replaceForChange = replaceOps.get(i);
+              if (replaceForChange !== undefined) {
+                const codeDelta = toCodeDelta(
+                  replaceForChange.op,
+                  heldCode.idsOf(replaceForChange.op.file),
+                  graphSeq + 1,
+                );
+                if (codeDelta !== undefined) {
+                  deltas.push(codeDelta);
+                  graphSeq = codeDelta.seq;
+                }
+              }
+            }
+            advanceHeldCode();
+
             const t1_t2 = batch.clock.settledAt - batch.clock.firstEventAt;
             const t2_t3 = at - batch.clock.settledAt;
             emit(
@@ -550,17 +966,14 @@ export async function runWatch(
                 kind: 'batch',
                 cause: batch.cause,
                 changes: batch.changes,
-                write: {
-                  nodesWritten: receipt.nodesWritten,
-                  edgesWritten: receipt.edgesWritten,
-                  statementCount: receipt.statementCount,
-                },
+                write: { nodesWritten, edgesWritten, statementCount },
                 latencyMs: { t0_t1: null, t1_t2, t2_t3, total: t1_t2 + t2_t3 },
                 deltas,
                 graphSeq,
               },
               at,
             );
+            emitCodeWarnings();
           },
         };
 

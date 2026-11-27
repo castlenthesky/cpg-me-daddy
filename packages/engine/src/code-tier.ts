@@ -16,6 +16,7 @@ import {
   type ParseService,
   type ParseServiceOptions,
 } from '@cpg/parse';
+import type { WorkspacePath } from '@cpg/model';
 import type { EdgeRow, WriteOp } from '@cpg/store';
 import type { WalkedFile } from './walker/walker';
 
@@ -104,6 +105,63 @@ export function attachSourceFile(op: ReplaceFileOp): {
     op: { ...op, edges: [...op.edges, sourceFileEdge] },
     attached: true,
   };
+}
+
+/** One file the code tier could not write (decision 100: the FILE tier only, and a warning). */
+export interface CodeTierFailure {
+  readonly path: WorkspacePath;
+  readonly language: string;
+  /** The CodeTierResult code, or `read-failed` for a live read that rejected (decision 102). */
+  readonly code: string;
+  readonly message: string;
+}
+
+interface FailureGroup {
+  readonly language: string;
+  readonly code: string;
+  readonly firstPath: WorkspacePath;
+  readonly firstMessage: string;
+  count: number;
+}
+
+/**
+ * The code tier's failure warnings (decision 100; one text for index() and the watch): one per
+ * (language, code) group of `failures` whose key is not yet in `reported`, in the order each group
+ * first fails, `code tier: <n> <language> file<s> at the FILE tier only (<code>): <first path>:
+ * <first message>` (`file` when n is 1, else `files`; the first path and message are that group's
+ * first failure). Adds each warned group's key to `reported`, so a group is said once per set. The
+ * key is opaque to callers: they keep the set, never build one.
+ */
+export function failureWarnings(
+  failures: readonly CodeTierFailure[],
+  reported: Set<string>,
+): readonly string[] {
+  // REAL
+  const groups = new Map<string, FailureGroup>();
+  for (const failure of failures) {
+    const key = JSON.stringify([failure.language, failure.code]);
+    if (reported.has(key)) continue;
+    const existing = groups.get(key);
+    if (existing !== undefined) {
+      existing.count += 1;
+    } else {
+      groups.set(key, {
+        language: failure.language,
+        code: failure.code,
+        firstPath: failure.path,
+        firstMessage: failure.message,
+        count: 1,
+      });
+    }
+  }
+  const out: string[] = [];
+  for (const [key, group] of groups) {
+    reported.add(key);
+    out.push(
+      `code tier: ${String(group.count)} ${group.language} file${group.count === 1 ? '' : 's'} at the FILE tier only (${group.code}): ${group.firstPath}: ${group.firstMessage}`,
+    );
+  }
+  return out;
 }
 
 export interface CodeTierOptions {

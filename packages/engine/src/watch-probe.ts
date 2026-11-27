@@ -23,6 +23,12 @@ export interface NodeWatchProbe extends WatchProbe {
    * so the engine's `admit` asks this to apply the walker's symlink policy.
    */
   isSymlink(path: WorkspacePath): boolean;
+  /**
+   * The file's bytes, `readFile(join(root, path))`: the engine's one read of a live change for the
+   * code tier (controller decision 102; 03-architecture §4). Rejects, with the read's error, when the
+   * file cannot be read (gone, a directory, no permission). Never hashes (C-WATCH INV-26).
+   */
+  read(path: WorkspacePath): Promise<Uint8Array>;
 }
 
 /**
@@ -108,6 +114,10 @@ export function createWatchProbe(root: string, options: WatchProbeOptions = {}):
     digest,
     isSymlink(path: WorkspacePath): boolean {
       return symlinks.has(path);
+    },
+    async read(path: WorkspacePath): Promise<Uint8Array> {
+      // REAL
+      return readFile(join(root, path));
     },
   };
 }

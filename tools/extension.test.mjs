@@ -394,16 +394,23 @@ describe('cpg.rescan (decision 79)', () => {
     const said = [...seen.warnings];
     writeFileSync(join(root, 'b.py'), '#'.repeat(61));
     await run('cpg.rescan');
-    // Sprint 26 (decision 83): the crawl's batch reaches the page as its delta, not a second graph.
-    await until(() => ofType(panel, 'graph-delta').length === 1);
+    // Sprint 26 (decision 83): the crawl's batch reaches the page as its deltas, not a second graph.
+    // U6a.3-3 (decision 102): b.py held a MODULE, so its delete-file's code delta follows its own.
+    await until(() => ofType(panel, 'graph-delta').length === 2);
     const [graph] = ofType(panel, 'graph');
-    const [delta] = ofType(panel, 'graph-delta');
+    const [delta, code] = ofType(panel, 'graph-delta');
     expect([filePaths(graph).includes('b.py'), ofType(panel, 'graph').length]).toEqual([true, 1]);
     expect([delta.epoch, delta.seq, delta.delta.file, delta.delta.removedNodeIds]).toEqual([
       graph.epoch,
       graph.seq + 1,
       'b.py',
       ['file:b.py'],
+    ]);
+    expect([code.epoch, code.seq, code.delta.producer, code.delta.removedNodeIds]).toEqual([
+      graph.epoch,
+      graph.seq + 2,
+      'code',
+      ['file:b.py:MODULE:$root'],
     ]);
     expect([said.length, seen.warnings, seen.errors]).toEqual([1, said, []]);
   });
@@ -448,8 +455,18 @@ describe('cpg.openGraph', () => {
     expect(panel.posted.map(({ type }) => type)).toEqual(['theme', 'graph']);
     expect(panel.posted[0].theme.kind).toBe('light');
     const ids = panel.posted[1].payload.nodes.map(({ id }) => id);
+    // U6a.3-3 (decision 110 reversed): the watch's index runs the code tier, so b.py's MODULE and
+    // its module SYMBOL are in the first graph too.
     expect(new Set(ids)).toEqual(
-      new Set(['dir:.', 'dir:sub', 'file:a.ts', 'file:b.py', 'file:sub/c.ts']),
+      new Set([
+        'dir:.',
+        'dir:sub',
+        'file:a.ts',
+        'file:b.py',
+        'file:sub/c.ts',
+        'file:b.py:MODULE:$root',
+        '`b.py`/',
+      ]),
     );
   });
 

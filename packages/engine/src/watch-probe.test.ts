@@ -254,3 +254,22 @@ describe('digest: sha256 of the bytes', () => {
     expect(await createWatchProbe(root).digest(wp('secret.ts'))).toBeUndefined();
   });
 });
+
+// U6a.3-3 (controller decision 102): the engine's one read of a live change, for the code tier.
+describe('read: the bytes, once, for the code tier', () => {
+  it('resolves with the exact bytes, BOM and invalid UTF-8 included, at a nested path', async () => {
+    const root = await tree({ 'src/a.py': 'a = 1\n' });
+    const bytes = Uint8Array.from([0xef, 0xbb, 0xbf, 0x61, 0xff, 0x00, 0x0a]);
+    await writeFile(join(root, 'bin.py'), bytes);
+    const probe = createWatchProbe(root);
+    expect(Buffer.from(await probe.read(wp('src/a.py'))).toString('utf8')).toBe('a = 1\n');
+    expect(Array.from(await probe.read(wp('bin.py')))).toEqual(Array.from(bytes));
+  });
+
+  it('rejects for a path that is gone and for a directory', async () => {
+    const root = await tree({ 'src/a.py': 'a' });
+    const probe = createWatchProbe(root);
+    await expect(probe.read(wp('gone.py'))).rejects.toThrow(/ENOENT/);
+    await expect(probe.read(wp('src'))).rejects.toThrow(/EISDIR/);
+  });
+});

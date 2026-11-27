@@ -92,7 +92,15 @@ export class BufferStore {
     parents: ReadonlyMap<string, string>,
     random: () => number,
   ): void {
+    const addedById = new Map<string, GraphNode>();
+    for (const node of delta.addedNodes) {
+      if (!addedById.has(node.id)) addedById.set(node.id, node);
+    }
+
     for (const id of delta.removedNodeIds) {
+      // Decision 111 (positions only): a live id this delta also re-adds stays, so addNode keeps
+      // its point, position and size.
+      if (addedById.has(id) && this.nodes.has(id)) continue;
       // Delete from `nodes` even when unplaced, fixing the archive skipping before delete.
       this.nodes.delete(id);
       const index = this.indexById.get(id);
@@ -102,10 +110,6 @@ export class BufferStore {
       }
     }
 
-    const addedById = new Map<string, GraphNode>();
-    for (const node of delta.addedNodes) {
-      if (!addedById.has(node.id)) addedById.set(node.id, node);
-    }
     const handled = new Set<GraphNode>();
     const visit = (node: GraphNode): void => {
       if (handled.has(node)) return;

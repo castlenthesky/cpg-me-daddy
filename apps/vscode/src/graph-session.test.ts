@@ -57,8 +57,8 @@ afterEach(async () => {
 
 const CONFIG = 'cpg.config.yaml';
 // The scripted watch's ready carries a real index()'s report (onDisk), so its warning is index()'s:
-// since U6a.3-2 a TypeScript file has no extractor yet (decision 101). The real watch's own warning
-// differs (S32-1); the panel shows whichever it is given.
+// since U6a.3-2 a TypeScript file has no extractor yet (decision 101). Since U6a.3-3 (decision 110
+// reversed) the real watch's ready carries that same report; the panel shows whichever it is given.
 const U6B = 'no extractor for typescript yet (U6b)';
 const THEME: ThemeSnapshot = { kind: 'dark', nodeColors: {}, defaultNodeColor: '#999999' };
 const ALL_PASS = 'pass unavailable pass pass pass unavailable';

@@ -20,10 +20,14 @@ import { webglRenderer } from './webgl';
 
 // fixtures/ladder/07-package/expected.cpg, [filesystem]: three FILEs, and two DIRECTORYs besides.
 const FILES = 3;
-const NODES = 5;
+// U6a.3-3 (decision 110 reversed): the watch runs the code tier. At U6a each python file brings the
+// rung's MODULE line and that MODULE's module SYMBOL (controller decision 90): two nodes per FILE.
+const NODES = 5 + 2 * FILES;
 const STALE = 'shapes/square.py';
 /** A file the tests add: one more FILE node in a directory that is already there. */
 const ADDED = 'shapes/live.py';
+/** What ADDED brings to the graph: its FILE, its MODULE and its module SYMBOL. */
+const ADDED_NODES = 3;
 const REPORT_MS = 20_000;
 /** How long the watch may take to bring a change on disk into the graph (decision 75). */
 const FOLLOW_MS = 10_000;
@@ -256,12 +260,12 @@ suite('the graph in VS Code', () => {
       await writeFile(join(root, ADDED), 'side = 4\n');
       const report = await verdict((candidate) => {
         const render = check(candidate, 'render-reconciliation');
-        return render.state === 'pass' && render.expected === NODES + 1;
+        return render.state === 'pass' && render.expected === NODES + ADDED_NODES;
       }, REPORT_MS);
       const render = check(report, 'render-reconciliation');
       assert.deepEqual(
         [render.state, render.observed, render.expected],
-        ['pass', NODES + 1, NODES + 1],
+        ['pass', NODES + ADDED_NODES, NODES + ADDED_NODES],
       );
     });
   });

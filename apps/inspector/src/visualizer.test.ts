@@ -600,8 +600,10 @@ describe('GraphVisualizer.applyDelta', () => {
   });
 
   // Sprint 33 (BMO-100, controller decisions 85 and 103): by default the code tier is placed by
-  // the parent table, both in the layout and when a save re-adds the file's code nodes.
-  it('places a MODULE by its FILE, and seeds a code delta listed child first beside its parents', () => {
+  // the parent table, both in the layout and when a save re-adds the file's code nodes. Reworked for
+  // controller decision 111 (sprint 34): the MODULE a save removes and re-adds keeps its live
+  // position, and what the save adds beneath it is seeded beside it.
+  it('places a MODULE by its FILE; a save that removes and re-adds it keeps it where it is, children beside it', () => {
     const { viz, surface } = mount();
     const code: GraphPayload = {
       seq: 0,
@@ -625,18 +627,36 @@ describe('GraphVisualizer.applyDelta', () => {
         ],
       }),
     );
-    // m beside f (500, 600), t beside m, c beside t: within 20, 40 and 60 of f on each axis.
+    // m stays at its live (900, 900); t beside m, c beside t: within 20 and 40 of m on each axis.
     expect(surface.positions).toHaveLength(10);
-    expect(surface.positions.slice(0, 4)).toEqual([100, 100, 500, 600]);
-    const far = [4, 6, 8].filter((at) => {
-      const dx = Math.abs((surface.positions[at] ?? NaN) - 500);
-      const dy = Math.abs((surface.positions[at + 1] ?? NaN) - 600);
-      return !(dx <= 60 && dy <= 60);
+    expect(surface.positions.slice(0, 6)).toEqual([100, 100, 500, 600, 900, 900]);
+    const far = [6, 8].filter((at, i) => {
+      const dx = Math.abs((surface.positions[at] ?? NaN) - 900);
+      const dy = Math.abs((surface.positions[at + 1] ?? NaN) - 900);
+      return !(dx <= 20 * (i + 1) && dy <= 20 * (i + 1));
     });
     expect(far).toEqual([]);
-    expect(Math.abs((surface.positions[4] ?? NaN) - 500)).toBeLessThanOrEqual(20);
-    expect(Math.abs((surface.positions[5] ?? NaN) - 600)).toBeLessThanOrEqual(20);
     expect({ framed: surface.framed.length, starts: surface.starts }).toEqual(before);
+  });
+
+  // Round two (review 10, sprint 34): decision 111 is positions only. The save removes m, so every
+  // edge it had goes (C-MODEL I-8), and only the edges it re-adds come back.
+  it('a save that removes and re-adds a MODULE drops the edges it does not re-add', () => {
+    const { viz, surface } = mount();
+    viz.render({
+      seq: 0,
+      nodes: [D, F, node('m', 'MODULE'), node('s', 'SYMBOL')],
+      edges: [entry('d', 'f'), edge('m', 'f', 'SOURCE_FILE'), edge('m', 's', 'DEFINES')],
+    });
+    expect(surface.links).toHaveLength(6);
+    viz.applyDelta(
+      delta({
+        removedNodeIds: ['m'],
+        addedNodes: [node('m', 'MODULE')],
+        addedEdges: [edge('m', 'f', 'SOURCE_FILE')],
+      }),
+    );
+    expect(surface.links).toHaveLength(4);
   });
 
   // round two (review b2)
