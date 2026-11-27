@@ -1169,6 +1169,19 @@ describe('the drift crawl (decisions 76-80)', () => {
     ]);
   });
 
+  // After the implementation (sabotage #21 of the engine group): a stop that began during start leaves
+  // nothing armed and nothing subscribed, since there was no ready (decision 79).
+  it('an abort during start arms nothing and subscribes nothing', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const controller = new AbortController();
+    const backend = backendFor(() => controller.abort());
+    const t = commands();
+    const config = { rescanIntervalMs: 1000 };
+    const run = await start(root, { controller, backend, rescan: t.trigger, config });
+    await run.done;
+    expect([kinds(run.events), t.log, run.clock.armed()]).toEqual([['closed'], [], 0]);
+  });
+
   it('a watch on a store that still holds files deleted since an earlier index starts without them (decision 77, stop-list 151)', async () => {
     const root = await tree({ 'a.ts': 'a', 'gone.ts': 'g', 'old/x.ts': 'x' });
     const memory = recorder();
