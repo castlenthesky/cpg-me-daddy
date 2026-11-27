@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
 import { isWorkspacePath, type WorkspacePath } from '@cpg/model';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +54,7 @@ const runtimeWith = (
 let service: ParseService | undefined;
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   service?.dispose();
 });
 const make = (
@@ -170,6 +172,8 @@ describe('parse', () => {
       readFile: vi.spyOn(fs.promises, 'readFile'),
       writeFile: vi.spyOn(fs.promises, 'writeFile'),
     };
+    // The spies replace properties of the CommonJS module; this carries them to `import { … }`.
+    syncBuiltinESMExports();
     const handle = await ok(s, 'src/main.py', 'x = 1\n');
     const touched = Object.entries(spies).filter(([, spy]) => spy.mock.calls.length > 0);
     expect([touched.map(([name]) => name), handle.root.text]).toEqual([[], 'x = 1\n']);
@@ -290,23 +294,54 @@ describe('grammar loading', () => {
 // Through the ParserRuntime seam (controller decision 99). The pinned grammars report ABI 15
 // (python, javascript) and 14 (typescript, tsx); web-tree-sitter 0.27.0 accepts 13..15.
 describe('the runtime and the ABI gate (I13, I15)', () => {
-  it('an unreadable range is abi-unreadable and reads no grammar bytes (DEFECT-ABI-VACUOUS)', async () => {
-    const reads: string[] = [];
-    const s = make(diskSource(reads), undefined, runtimeWith());
-    expect(await s.ensureReady(['python'])).toMatchObject([
-      { code: 'abi-unreadable', language: 'python' },
-    ]);
-    expect(await s.parse({ key: wp('a.py'), text: '' })).toMatchObject({
-      ok: false,
-      error: { code: 'abi-unreadable', key: 'a.py' },
+  it.each([
+    [undefined, undefined],
+    [15, 13],
+    [0, 15],
+  ])(
+    'a range of %o..%o is abi-unreadable and reads no grammar bytes (DEFECT-ABI-VACUOUS)',
+    async (min, max) => {
+      const reads: string[] = [];
+      const s = make(diskSource(reads), undefined, runtimeWith(min, max));
+      expect(await s.ensureReady(['python'])).toMatchObject([
+        { code: 'abi-unreadable', language: 'python' },
+      ]);
+      expect(await s.parse({ key: wp('a.py'), text: '' })).toMatchObject({
+        ok: false,
+        error: { code: 'abi-unreadable', key: 'a.py' },
+      });
+      expect([reads, s.provenance()]).toEqual([[], []]);
+    },
+  );
+
+  it('reads the range only once init has resolved: bindings that init sets late are seen', async () => {
+    let bindings: ReturnType<ParserRuntime['abiBindings']> = {
+      minCompatible: undefined,
+      languageVersion: undefined,
+    };
+    const late = async (): Promise<void> => {
+      await Parser.init();
+      bindings = { minCompatible: 13, languageVersion: 15 };
+    };
+    const s = make(diskSource(), undefined, { init: late, abiBindings: () => bindings });
+    expect(await s.ensureReady(['python'])).toEqual([]);
+  });
+
+  it('an unreadable range is not memoised: a fixed range loads next time (I15)', async () => {
+    let languageVersion: number | undefined;
+    const s = make(diskSource(), undefined, {
+      init: () => Parser.init(),
+      abiBindings: () => ({ minCompatible: 13, languageVersion }),
     });
-    expect([reads, s.provenance()]).toEqual([[], []]);
+    expect(await s.ensureReady(['python'])).toMatchObject([{ code: 'abi-unreadable' }]);
+    languageVersion = 15;
+    expect(await s.ensureReady(['python'])).toEqual([]);
   });
 
   it('a grammar outside the range is abi-out-of-range at either end', async () => {
     const upTo14 = make(diskSource(), undefined, runtimeWith(13, 14));
     expect(await upTo14.ensureReady(['python', 'typescript'])).toMatchObject([
-      { code: 'abi-out-of-range', language: 'python' },
+      { code: 'abi-out-of-range', language: 'python', message: expect.stringContaining('too new') },
     ]);
     expect(upTo14.provenance()).toMatchObject([
       { language: 'typescript', abiSupported: { minCompatible: 13, languageVersion: 14 } },
@@ -314,7 +349,11 @@ describe('the runtime and the ABI gate (I13, I15)', () => {
     upTo14.dispose();
     const from15 = make(diskSource(), undefined, runtimeWith(15, 15));
     expect(await from15.ensureReady(['python', 'typescript'])).toMatchObject([
-      { code: 'abi-out-of-range', language: 'typescript' },
+      {
+        code: 'abi-out-of-range',
+        language: 'typescript',
+        message: expect.stringContaining('too old'),
+      },
     ]);
   });
 

@@ -15,8 +15,9 @@ const ENV_DIR = '/from/env';
 const env = (value: string) => ({ HOME: '/home/u', CPG_GRAMMAR_DIR: value });
 const found = (dir: string, via: GrammarDirVia): GrammarDirOutcome => ({ ok: true, dir, via });
 const relativeJson = (): string => 'node_modules/grammar-pkg/package.json';
+// The cause does not repeat the package name, so the message must add it.
 const missing = (): string => {
-  throw new Error(`Cannot find module '${PKG}/package.json'`);
+  throw new Error('ENOENT');
 };
 const nodeResolve = (pkg: string): string => require.resolve(`${pkg}/package.json`);
 

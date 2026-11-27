@@ -44,14 +44,17 @@ describe('the gate opens only when init resolves (I13)', () => {
     expect(() => gate.range()).toThrow(AbiNotReadyError);
     await gate.init();
     expect(gate.range()).toEqual({ ok: true, range: RANGE });
+    failures = 1;
+    await expect(gate.init()).rejects.toBe(BOOM);
+    expect(gate.range()).toEqual({ ok: true, range: RANGE });
   });
 
   it('reads the bindings when asked, not when built: init is what sets them', async () => {
     let bindings = UNSET;
     const gate = createAbiGate({
-      init: () => {
+      init: async () => {
+        await Promise.resolve();
         bindings = RANGE;
-        return Promise.resolve();
       },
       abiBindings: () => bindings,
     });
@@ -72,6 +75,7 @@ describe('an unreadable range is an error, never a skipped check (I13)', () => {
     ['NaN', { minCompatible: Number.NaN, languageVersion: 15 }],
     ['fractional', { minCompatible: 13, languageVersion: 14.5 }],
     ['zero', { minCompatible: 0, languageVersion: 15 }],
+    ['negative', { minCompatible: -1, languageVersion: 15 }],
     ['inverted', { minCompatible: 15, languageVersion: 13 }],
   ])('%s is ok:false', async (_name, bindings) => {
     expect(await opened(bindings)).toEqual({ ok: false, message: expect.any(String) });
@@ -96,7 +100,11 @@ describe('checkGrammarAbi', () => {
       true,
       true,
     ]);
-    expect([future?.includes('too new'), future?.includes('16')]).toEqual([true, true]);
+    expect([
+      future?.includes('too new'),
+      future?.includes('16'),
+      future?.includes('13..15'),
+    ]).toEqual([true, true, true]);
   });
 
   // NaN and 14.5 compare false against both bounds: an unguarded check would pass them.
