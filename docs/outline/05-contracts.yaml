@@ -528,7 +528,7 @@ contracts:
   - id: C-STORE
     name: the store thin waist
     package: "@cpg/store"
-    status: specified; 49 tests green on the archive against reference MemoryStore + CypherPlanner
+    status: "types real in packages/store/src/contract.ts (U2a.2c); U6a.3-1 made toWriteOp REAL (packages/store/src/write-op.ts) and MemoryStore's replace-file and delete-file REAL (packages/sink/src/file-writes.ts) with a real per-file FileState.seq (controller decisions 97 and 98: revision-unchanged is keyed on the code tier's last revision, and a revision-unchanged write still advances FileState.seq; the write seq is the engine's own counter from U6a.3-2, beside decision 82's graph seq, which strains F-1); the Cypher planner and FalkorStore are U5; the archive's 49 tests are in no reachable commit, so the suite is written from the invariants as each piece lands (controller decision 87)"
     purpose: >
       One interface, two tiers (MemoryStore always; FalkorStore from U5), both on the hot write path. A
       replace-file is exactly ONE statement. Every destructive write is scoped by a closed union and
