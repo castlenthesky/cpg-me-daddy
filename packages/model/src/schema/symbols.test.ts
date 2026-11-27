@@ -149,6 +149,13 @@ describe('makeSymbolFqn: invalid parts throw (a producer bug)', () => {
       local('m.py', meth('f'), forgeD({ kind: 'parameter', name: 'x' })),
     ],
     ['an unknown form', forge({ form: 'builtin', path: 'm.py', descriptors: [] })],
+    [
+      'a prototype key as a descriptor kind',
+      local('m.py', forgeD({ kind: 'toString', name: 'x' })),
+    ],
+    ['constructor as a descriptor kind', local('m.py', forgeD({ kind: 'constructor', name: 'x' }))],
+    ['a null descriptor', local('m.py', forgeD(null))],
+    ['missing descriptors', forge({ form: 'local', path: 'm.py' })],
   ];
   it.each(bad)('%s', (_name, parts) => {
     expect(() => makeSymbolFqn(parts)).toThrow(/^invalid symbol fqn parts: /);
