@@ -1,0 +1,98 @@
+# Extract's own Pass A fixture (U6a.2-3), not a ladder rung: the declaration hazards the ladder does not
+# hold yet. Written by hand from ws/ in the ladder's format (fixtures/ladder/README.md) and checked by
+# packages/extract/src/ladder.test.ts. It lists Pass A's facts only: decorator CALLs (decision 107's
+# other half) and every other call are Pass B (U6a.2-4), and SOURCE_FILE is the engine's (C-EXTRACT Q8).
+#
+# decl.py: a module MEMBER and its redefinition, a decorated function (its range starts at the
+# decorator), splat and typed parameters, a nested def that is not descended (decision 92), an async
+# def with separators, a decorated class with a tuple assignment (no MEMBER), a constructor, a
+# property's getter and setter (one name twice: the second takes ordinal 1 and DEFINES the same
+# SYMBOL), a nested class, and a private class.
+# broken.py: ERROR regions directly under the module and under a class body (decision 95).
+
+[structural]
+MODULE file:decl.py:MODULE:$root name=decl range=1:0-51:0
+MEMBER file:decl.py:MEMBER:LIMIT name=LIMIT type_text=int range=3:0-3:14
+MEMBER file:decl.py:MEMBER:_private name=_private range=4:0-4:16
+METHOD file:decl.py:METHOD:greet name=greet kind=function params_count=4 exported=true async=false range=7:0-17:15 name_range=8:4-8:9
+PARAM file:decl.py:PARAM:greet.name name=name ordinal=0 type_text=str range=8:10-8:19
+PARAM file:decl.py:PARAM:greet.times name=times ordinal=1 default=1 range=8:21-8:28
+PARAM file:decl.py:PARAM:greet.args name=args ordinal=2 range=8:30-8:35
+PARAM file:decl.py:PARAM:greet.kwargs name=kwargs ordinal=3 range=8:37-8:45
+METHOD file:decl.py:METHOD:fetch name=fetch kind=function params_count=2 exported=true async=true range=20:0-21:8 name_range=20:10-20:15
+PARAM file:decl.py:PARAM:fetch.url name=url ordinal=0 range=20:16-20:19
+PARAM file:decl.py:PARAM:fetch.timeout name=timeout ordinal=1 type_text=float default=1.0 range=20:27-20:47
+TYPE_DECL file:decl.py:TYPE_DECL:Greeter name=Greeter kind=class exported=true structural=true status=ready range=24:0-43:17
+MEMBER file:decl.py:MEMBER:Greeter.greeting name=greeting range=28:4-28:22
+METHOD file:decl.py:METHOD:Greeter.__init__ name=__init__ kind=constructor params_count=2 exported=false range=31:4-32:24 name_range=31:8-31:16
+PARAM file:decl.py:PARAM:Greeter.__init__.self name=self ordinal=0 range=31:17-31:21
+PARAM file:decl.py:PARAM:Greeter.__init__.name name=name ordinal=1 range=31:23-31:27
+METHOD file:decl.py:METHOD:Greeter.label name=label kind=method params_count=1 range=34:4-36:24 name_range=35:8-35:13
+PARAM file:decl.py:PARAM:Greeter.label.self name=self ordinal=0 range=35:14-35:18
+METHOD file:decl.py:METHOD:Greeter.label:1 name=label kind=method params_count=2 range=38:4-40:25 name_range=39:8-39:13
+PARAM file:decl.py:PARAM:Greeter.label.self:1 name=self ordinal=0 range=39:14-39:18
+PARAM file:decl.py:PARAM:Greeter.label.value name=value ordinal=1 range=39:20-39:25
+TYPE_DECL file:decl.py:TYPE_DECL:Greeter.Inner name=Inner kind=class exported=true range=42:4-43:17
+MEMBER file:decl.py:MEMBER:Greeter.Inner.size name=size type_text=int range=43:8-43:17
+TYPE_DECL file:decl.py:TYPE_DECL:_Hidden name=_Hidden kind=class exported=false range=46:0-47:8
+MEMBER file:decl.py:MEMBER:LIMIT:1 name=LIMIT type_text=null range=50:0-50:9
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:MEMBER:LIMIT
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:MEMBER:_private
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:METHOD:greet
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:METHOD:fetch
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:TYPE_DECL:Greeter
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:TYPE_DECL:_Hidden
+DECLARES file:decl.py:MODULE:$root -> file:decl.py:MEMBER:LIMIT:1
+DECLARES file:decl.py:TYPE_DECL:Greeter -> file:decl.py:MEMBER:Greeter.greeting
+DECLARES file:decl.py:TYPE_DECL:Greeter -> file:decl.py:METHOD:Greeter.__init__
+DECLARES file:decl.py:TYPE_DECL:Greeter -> file:decl.py:METHOD:Greeter.label
+DECLARES file:decl.py:TYPE_DECL:Greeter -> file:decl.py:METHOD:Greeter.label:1
+DECLARES file:decl.py:TYPE_DECL:Greeter -> file:decl.py:TYPE_DECL:Greeter.Inner
+DECLARES file:decl.py:TYPE_DECL:Greeter.Inner -> file:decl.py:MEMBER:Greeter.Inner.size
+HAS_PARAM file:decl.py:METHOD:greet -> file:decl.py:PARAM:greet.name
+HAS_PARAM file:decl.py:METHOD:greet -> file:decl.py:PARAM:greet.times
+HAS_PARAM file:decl.py:METHOD:greet -> file:decl.py:PARAM:greet.args
+HAS_PARAM file:decl.py:METHOD:greet -> file:decl.py:PARAM:greet.kwargs
+HAS_PARAM file:decl.py:METHOD:fetch -> file:decl.py:PARAM:fetch.url
+HAS_PARAM file:decl.py:METHOD:fetch -> file:decl.py:PARAM:fetch.timeout
+HAS_PARAM file:decl.py:METHOD:Greeter.__init__ -> file:decl.py:PARAM:Greeter.__init__.self
+HAS_PARAM file:decl.py:METHOD:Greeter.__init__ -> file:decl.py:PARAM:Greeter.__init__.name
+HAS_PARAM file:decl.py:METHOD:Greeter.label -> file:decl.py:PARAM:Greeter.label.self
+HAS_PARAM file:decl.py:METHOD:Greeter.label:1 -> file:decl.py:PARAM:Greeter.label.self:1
+HAS_PARAM file:decl.py:METHOD:Greeter.label:1 -> file:decl.py:PARAM:Greeter.label.value
+
+MODULE file:broken.py:MODULE:$root name=broken range=1:0-9:0
+MEMBER file:broken.py:MEMBER:x name=x range=1:0-1:5
+UNKNOWN file:broken.py:UNKNOWN:$root:0 reason=syntax-error status=ready range=2:0-2:1
+TYPE_DECL file:broken.py:TYPE_DECL:C name=C kind=class range=3:0-7:12
+MEMBER file:broken.py:MEMBER:C.y name=y range=4:4-4:9
+UNKNOWN file:broken.py:UNKNOWN:C:0 reason=syntax-error status=ready range=5:4-5:5
+METHOD file:broken.py:METHOD:C.m name=m kind=method params_count=1 range=6:4-7:12 name_range=6:8-6:9
+PARAM file:broken.py:PARAM:C.m.self name=self ordinal=0 range=6:10-6:14
+UNKNOWN file:broken.py:UNKNOWN:$root:1 reason=syntax-error status=ready range=8:0-8:1
+DECLARES file:broken.py:MODULE:$root -> file:broken.py:MEMBER:x
+DECLARES file:broken.py:MODULE:$root -> file:broken.py:TYPE_DECL:C
+DECLARES file:broken.py:TYPE_DECL:C -> file:broken.py:MEMBER:C.y
+DECLARES file:broken.py:TYPE_DECL:C -> file:broken.py:METHOD:C.m
+HAS_PARAM file:broken.py:METHOD:C.m -> file:broken.py:PARAM:C.m.self
+
+[symbols]
+DEFINES file:decl.py:MODULE:$root -> `decl.py`/
+DEFINES file:decl.py:MEMBER:LIMIT -> `decl.py`/LIMIT.
+DEFINES file:decl.py:MEMBER:_private -> `decl.py`/_private.
+DEFINES file:decl.py:METHOD:greet -> `decl.py`/greet().
+DEFINES file:decl.py:METHOD:fetch -> `decl.py`/fetch().
+DEFINES file:decl.py:TYPE_DECL:Greeter -> `decl.py`/Greeter#
+DEFINES file:decl.py:MEMBER:Greeter.greeting -> `decl.py`/Greeter#greeting.
+DEFINES file:decl.py:METHOD:Greeter.__init__ -> `decl.py`/Greeter#__init__().
+DEFINES file:decl.py:METHOD:Greeter.label -> `decl.py`/Greeter#label().
+DEFINES file:decl.py:METHOD:Greeter.label:1 -> `decl.py`/Greeter#label().
+DEFINES file:decl.py:TYPE_DECL:Greeter.Inner -> `decl.py`/Greeter#Inner#
+DEFINES file:decl.py:MEMBER:Greeter.Inner.size -> `decl.py`/Greeter#Inner#size.
+DEFINES file:decl.py:TYPE_DECL:_Hidden -> `decl.py`/_Hidden#
+DEFINES file:decl.py:MEMBER:LIMIT:1 -> `decl.py`/LIMIT.
+DEFINES file:broken.py:MODULE:$root -> `broken.py`/
+DEFINES file:broken.py:MEMBER:x -> `broken.py`/x.
+DEFINES file:broken.py:TYPE_DECL:C -> `broken.py`/C#
+DEFINES file:broken.py:MEMBER:C.y -> `broken.py`/C#y.
+DEFINES file:broken.py:METHOD:C.m -> `broken.py`/C#m().

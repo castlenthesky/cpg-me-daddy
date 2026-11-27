@@ -62,8 +62,9 @@ try {
   expectRun(['index', '--dry-run'], 0, 'stdout', /^files seen=2 indexed=2 /m, ws);
   // cpg index without --dry-run writes the engine-built memory store (U2c.2): the root DIRECTORY
   // and two FILEs, two HAS_ENTRY; then b.py's replace-file (U6a.3-2): its MODULE, module SYMBOL and
-  // FILE rows, DEFINES and SOURCE_FILE.
-  expectRun(['index', ws], 0, 'stdout', /^written nodes=6 edges=4 dryRun=false$/m);
+  // FILE rows, DEFINES and SOURCE_FILE; and (U6a.2-3) Pass A's MEMBER `b`, its SYMBOL, DECLARES and
+  // DEFINES.
+  expectRun(['index', ws], 0, 'stdout', /^written nodes=8 edges=6 dryRun=false$/m);
   // The code tier at runtime (U6a.3-2, controller decision 100): the built bin finds the python
   // grammar through its own package, and main.ts hands the engine CPG_GRAMMAR_DIR resolved against
   // its cwd; an empty value is unset, and a directory without the grammar is one warning, exit 0.
@@ -118,18 +119,19 @@ try {
     join(wasmDir, 'tree-sitter-python.wasm'),
     join(home, 'grammars', 'tree-sitter-python.wasm'),
   );
-  expectCode('the package anchor', codeTier('the package anchor', {}), 1, 2);
+  // U6a.2-3: b.py's code tier is its MODULE and MEMBER `b`; DEFINES, DECLARES, DEFINES, SOURCE_FILE
+  expectCode('the package anchor', codeTier('the package anchor', {}), 2, 4);
   expectCode(
     'CPG_GRAMMAR_DIR empty',
     codeTier('CPG_GRAMMAR_DIR empty', { CPG_GRAMMAR_DIR: '' }),
-    1,
     2,
+    4,
   );
   expectCode(
     'CPG_GRAMMAR_DIR relative to the cwd',
     codeTier('CPG_GRAMMAR_DIR relative', { CPG_GRAMMAR_DIR: 'grammars' }, home),
-    1,
     2,
+    4,
   );
   expectCode(
     'CPG_GRAMMAR_DIR without the grammar',

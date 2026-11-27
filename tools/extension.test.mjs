@@ -294,7 +294,8 @@ beforeEach(() => {
   root = join(temp, 'workspace');
   mkdirSync(join(root, '.git'), { recursive: true });
   writeFileSync(join(root, 'a.ts'), 'export const a = 1;\n');
-  writeFileSync(join(root, 'b.py'), 'b = 1\n');
+  // U6a.2-3: a comment only, so b.py's code tier stays one MODULE (Pass A would add a MEMBER)
+  writeFileSync(join(root, 'b.py'), '# b = 1\n');
   mkdirSync(join(root, 'sub'));
   writeFileSync(join(root, 'sub', 'c.ts'), '');
   symlinkSync(join(root, 'a.ts'), join(root, 'link.ts'));
@@ -761,7 +762,7 @@ describe('verify in the editor', () => {
       'cpg.config.yaml',
     ]);
     expect(files.find(({ id }) => id === 'file:b.py').data.revision_id).toBe(
-      createHash('sha256').update('b = 1\n').digest('hex'),
+      createHash('sha256').update('# b = 1\n').digest('hex'),
     );
     expect(seen.fsCalls.filter((call) => call.endsWith('.py') || call.endsWith('/sub'))).toEqual([
       `stat ${join(root, 'b.py')}`,

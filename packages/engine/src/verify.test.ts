@@ -193,8 +193,9 @@ describe('VerifyReport (I-21)', () => {
     expect(report.checks).toMatchObject([
       { state: 'pass', observed: 4, expected: 4, localisedTo: [] },
       { state: 'unavailable', localisedTo: [] },
-      // three DIRECTORYs and four FILEs, then src/b.py's MODULE and module SYMBOL (U6a.3-2)
-      { state: 'pass', observed: 9, expected: 9, localisedTo: [] },
+      // three DIRECTORYs and four FILEs, then src/b.py's MODULE and module SYMBOL (U6a.3-2), and
+      // its MEMBER `b` and that SYMBOL (U6a.2-3)
+      { state: 'pass', observed: 11, expected: 11, localisedTo: [] },
       { state: 'unavailable', localisedTo: [] },
       { state: 'pass', observed: 0, expected: 0, localisedTo: [] },
       { state: 'unavailable', localisedTo: [] },

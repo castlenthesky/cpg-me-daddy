@@ -28,17 +28,23 @@ import { webglRenderer } from './webgl';
 
 // fixtures/ladder/07-package/expected.cpg, [filesystem]: three FILEs, and two DIRECTORYs besides.
 const FILES = 3;
-// U6a.3-3 (decision 110 reversed): the watch runs the code tier. At U6a each python file brings the
-// rung's MODULE line and that MODULE's module SYMBOL (controller decision 90): two nodes per FILE.
-const NODES = 5 + 2 * FILES;
+// U6a.3-3 (decision 110 reversed): the watch runs the code tier. U6a.2-3: each python file brings the
+// rung's Pass A lines ([structural] MODULE, METHOD, PARAM) and one SYMBOL per DEFINES target ([symbols]):
+// main.py 2 + 2, shapes/__init__.py 1 + 1, shapes/square.py 3 + 2. CALL and IMPORT are Pass B's.
+const CODE_NODES = 4 + 2 + 5;
+const NODES = 5 + CODE_NODES;
 const STALE = 'shapes/square.py';
 /** A file the tests add: one more FILE node in a directory that is already there. */
 const ADDED = 'shapes/live.py';
-/** What ADDED brings to the graph: its FILE, its MODULE and its module SYMBOL. */
-const ADDED_NODES = 3;
 /**
- * A python file only the code-tier suite writes. A deleted file's module SYMBOL stays in the graph (decision
- * 104, stop-list 188), so a name another test had used would bring 2 nodes, not 3.
+ * What ADDED brings to the graph (`side = 4`): its FILE, its MODULE and its module SYMBOL, and (U6a.2-3) the
+ * MEMBER `side` and its SYMBOL. Deleted, it leaves both SYMBOLs behind (decision 104, stop-list 188), so the
+ * reload test's re-added file brings 3 new nodes onto those 2.
+ */
+const ADDED_NODES = 5;
+/**
+ * A python file only the code-tier suite writes. A deleted file's SYMBOLs stay in the graph (decision 104,
+ * stop-list 188), so a name another test had used would bring 3 nodes, not 5.
  */
 const SAVED = 'shapes/saved.py';
 /** One line and its newline: by the ladder (rung 07's two-line file is `1:0-3:0`) its MODULE spans `1:0-2:0`. */
@@ -316,7 +322,7 @@ suite('the graph in VS Code', () => {
     });
 
     // The payload's node count needs no WebGL, so this holds on both pins.
-    test('a saved python file brings its FILE, MODULE and module SYMBOL, the grammar read from the install', async () => {
+    test('a saved python file brings its FILE, MODULE, MEMBER and their SYMBOLs, the grammar read from the install', async () => {
       const before = check(await quiet(), 'id-uniqueness').observed;
       await writeFile(join(root, SAVED), SAVED_TEXT);
       const grown = await verdict(

@@ -212,7 +212,8 @@ async function indexInspect() {
   const ws = await tmp();
   await mkdir(join(ws, '.git'));
   await writeFile(join(ws, 'a.ts'), 'export const a = 1;\n');
-  await writeFile(join(ws, 'b.py'), 'b = 2\n');
+  // U6a.2-3: a comment only, so b.py's code tier stays one MODULE (Pass A would add a MEMBER)
+  await writeFile(join(ws, 'b.py'), '# b = 2\n');
   const run = await cpg(['index', ws, '--inspect'], ws);
   const url = await urlOf(run);
   // Round two (review d3): stdout is its own pipe, so wait for it rather than assume it came first.

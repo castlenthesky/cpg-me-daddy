@@ -212,6 +212,7 @@ export const NODE_LABELS = [
       { name: 'file', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       REVISION_ID,
       { name: 'range', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
+      { name: 'name_range', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'exported', type: 'bool', cardinality: 'one', golden: 'include', doc: '' },
       { name: 'async', type: 'bool', cardinality: 'one', golden: 'include', doc: '' },
       {
@@ -294,6 +295,7 @@ export const NODE_LABELS = [
       { name: 'default', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
       { name: 'file', type: 'string', cardinality: 'one', golden: 'include', doc: '' },
       REVISION_ID,
+      { name: 'range', type: 'string', cardinality: 'zeroOrOne', golden: 'include', doc: '' },
     ]),
     firstWrittenIn: 'M0.6',
     doc: 'A formal parameter. IN-only.',

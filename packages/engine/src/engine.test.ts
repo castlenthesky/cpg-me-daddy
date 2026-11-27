@@ -191,13 +191,15 @@ describe('index --dry-run (session null): NullGraphStore, no store', () => {
       },
       files: [
         { path: 'a.ts', revision_id: sha256(files['a.ts']), nodes: 0, edges: 0 },
-        // U6a.3-2 (decision 101): b.py's code tier is one MODULE; DEFINES and SOURCE_FILE
-        { path: 'b.py', revision_id: sha256(files['b.py']), nodes: 1, edges: 2 },
+        // U6a.3-2 (decision 101): b.py's code tier is its MODULE and (U6a.2-3) the MEMBER `b`; the
+        // MODULE's DEFINES, the MEMBER's DECLARES and DEFINES, and SOURCE_FILE
+        { path: 'b.py', revision_id: sha256(files['b.py']), nodes: 2, edges: 4 },
       ],
       // counted by the NullGraphStore: the root DIRECTORY and two FILEs, two HAS_ENTRY; then b.py's
-      // replace-file, three rows (MODULE, its SYMBOL, the FILE's code half) and two edge rows
-      nodesWritten: 6,
-      edgesWritten: 4,
+      // replace-file, five rows (MODULE, MEMBER, their two SYMBOLs, the FILE's code half) and four
+      // edge rows
+      nodesWritten: 8,
+      edgesWritten: 6,
       dryRun: true,
       interrupted: false,
       target: null,
@@ -571,10 +573,11 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
     );
     await session.close();
     // the memory store's own receipts: the root DIRECTORY and two FILEs, two HAS_ENTRY; then b.py's
-    // MODULE, SYMBOL and FILE rows, DEFINES and SOURCE_FILE (U6a.3-2)
+    // MODULE, SYMBOL and FILE rows, DEFINES and SOURCE_FILE (U6a.3-2), and (U6a.2-3) the MEMBER `b`,
+    // its SYMBOL, DECLARES and DEFINES
     expect(report).toMatchObject({
-      nodesWritten: 6,
-      edgesWritten: 4,
+      nodesWritten: 8,
+      edgesWritten: 6,
       dryRun: false,
       target: null,
       consumers: ['memory'],

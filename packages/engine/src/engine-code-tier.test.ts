@@ -170,9 +170,12 @@ describe('index(): the code tier after the filesystem tier (decision 101)', () =
       sha256(files['a.py']),
       sha256(files['lib/b.py']),
     ]);
-    // C-EXTRACT Q8: the engine attaches SOURCE_FILE, after the extracted file's own DEFINES
+    // C-EXTRACT Q8: the engine attaches SOURCE_FILE, after the extracted file's own edges; U6a.2-3:
+    // Pass A's MEMBER `a`, its DECLARES from the MODULE and its DEFINES come first
     expect(edgeLines(a.op)).toEqual([
       `DEFINES MODULE:${mod('a.py')} -> SYMBOL:\`a.py\`/`,
+      `DECLARES MODULE:${mod('a.py')} -> MEMBER:file:a.py:MEMBER:a`,
+      `DEFINES MEMBER:file:a.py:MEMBER:a -> SYMBOL:\`a.py\`/a.`,
       `SOURCE_FILE MODULE:${mod('a.py')} -> FILE:a.py`,
     ]);
     expect(a.op.edges.at(-1)?.properties).toEqual({});
@@ -189,11 +192,12 @@ describe('index(): the code tier after the filesystem tier (decision 101)', () =
       [true, 1],
       [true, 1],
     ]);
-    // the counts are the code tier's (stop-list 16); d.txt is not an indexed file
+    // the counts are the code tier's (stop-list 16); d.txt is not an indexed file. U6a.2-3: each
+    // assignment is a MEMBER with a DECLARES and a DEFINES (its SYMBOL is no file-owned node)
     expect(report.files.map((f) => [f.path, f.nodes, f.edges])).toEqual([
-      ['a.py', 1, 2],
+      ['a.py', 2, 4],
       ['c.ts', 0, 0],
-      ['lib/b.py', 1, 2],
+      ['lib/b.py', 3, 6],
     ]);
     expect(report.warnings).toEqual(['no extractor for typescript yet (U6b)']);
   });
@@ -259,8 +263,9 @@ describe('the write seq is the sink allocator (decision 98a)', () => {
       revision_id: sha256('a = 1\n'),
     });
     // counts are the extraction's; the written totals are the receipts' (the replace-file wrote 0)
+    // U6a.2-3: the MODULE and MEMBER `a`; DEFINES, DECLARES, DEFINES and SOURCE_FILE
     expect(second.files).toEqual([
-      { path: 'a.py', revision_id: sha256('a = 1\n'), nodes: 1, edges: 2 },
+      { path: 'a.py', revision_id: sha256('a = 1\n'), nodes: 2, edges: 4 },
     ]);
     expect([second.nodesWritten, second.edgesWritten]).toEqual([2, 1]);
   });
@@ -517,13 +522,14 @@ describe('a code tier failure is a warning, never fatal (decision 100)', () => {
       'code tier: 1 python file at the FILE tier only (internal): b.py: b broke',
     ]);
     expect(report.files.map((f) => [f.path, f.nodes])).toEqual([
-      ['a.py', 1],
+      ['a.py', 2],
       ['b.py', 0],
     ]);
-    // b.py keeps its MODULE at the old revision, and revision-reconciliation says so (BMO-43)
+    // b.py keeps its MODULE and its MEMBER (U6a.2-3) at the old revision, and revision-reconciliation
+    // says so (BMO-43): two stale nodes, one file
     expect(await nodeData(r.memory, mod('b.py'))).toMatchObject({ revision_id: sha256('b = 1\n') });
     const stale = check(await verifyWith(engine, root), 'revision-reconciliation');
-    expect([stale?.state, stale?.observed, stale?.localisedTo]).toEqual(['fail', 1, ['b.py']]);
+    expect([stale?.state, stale?.observed, stale?.localisedTo]).toEqual(['fail', 2, ['b.py']]);
   });
 });
 
@@ -585,8 +591,9 @@ describe('revision-reconciliation covers code nodes vs FILE (BMO-43)', () => {
       moves: [],
       removals: [],
     });
+    // U6a.2-3: a.py's MODULE and its MEMBER `a` are both stale
     const stale = check(await verifyWith(engine, root), 'revision-reconciliation');
-    expect([stale?.state, stale?.observed, stale?.localisedTo]).toEqual(['fail', 1, ['a.py']]);
+    expect([stale?.state, stale?.observed, stale?.localisedTo]).toEqual(['fail', 2, ['a.py']]);
 
     await indexWith(engine, root);
     expect(check(await verifyWith(engine, root), 'revision-reconciliation')?.state).toBe('pass');
@@ -722,7 +729,7 @@ describe('one ParseService per engine, bytes read once (decision 100; C-PARSE I1
       join(root, 'n.txt'),
     ]);
     expect(p.requests).toStrictEqual([{ key: 'a.py', text: 'é = 1\n', language: 'python' }]);
-    expect(report.files[0]?.nodes).toBe(1);
+    expect(report.files[0]?.nodes).toBe(2); // the MODULE and MEMBER `é` (U6a.2-3)
   });
 
   // Round two (review 9): an already-aborted signal parses nothing at all, not even the first file.

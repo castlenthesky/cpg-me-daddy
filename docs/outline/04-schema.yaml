@@ -252,6 +252,7 @@ nodes:
       - { name: file,                  type: string, cardinality: one,       golden: include, owner: code }
       - { name: revision_id,           type: string, cardinality: one,       golden: exclude, owner: code, doc: "sha256 of the file's bytes. A :CPG node whose value differs from its FILE's is stale." }
       - { name: range,                 type: string, cardinality: one,       golden: include, owner: code }
+      - { name: name_range,            type: string, cardinality: zeroOrOne, golden: include, owner: code }
       - { name: exported,              type: bool,   cardinality: one,       golden: include, owner: code }
       - { name: async,                 type: bool,   cardinality: one,       golden: include, owner: code }
       - { name: docstring_head,        type: string, cardinality: zeroOrOne, golden: include, owner: code }
@@ -276,6 +277,7 @@ nodes:
       - { name: default,     type: string, cardinality: zeroOrOne, golden: include, owner: code }
       - { name: file,        type: string, cardinality: one,       golden: include, owner: code }
       - { name: revision_id, type: string, cardinality: one,       golden: exclude, owner: code, doc: "sha256 of the file's bytes. A :CPG node whose value differs from its FILE's is stale." }
+      - { name: range,       type: string, cardinality: zeroOrOne, golden: include, owner: code }
     doc: "A formal parameter. IN-only."
 
   - label: MEMBER

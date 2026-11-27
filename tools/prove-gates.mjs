@@ -420,13 +420,14 @@ const CASES = [
       },
     };
   })(),
-  // check:sparsity (U6a.3-2, C-EXTRACT Q6). The MODULE-only code tier can never put a real file over
-  // the bar, so the density plant is a corpus of empty modules (4 MODULEs over 1 LOC); the vacuity
+  // check:sparsity (U6a.3-2, C-EXTRACT Q6). Real files stay far under the bar (stdlib 0.168 n/LOC
+  // after Pass A), so the density plant is a corpus of near-empty modules: 4 MODULEs and (U6a.2-3)
+  // one.py's MEMBER `x`, 5 nodes over 1 LOC; the vacuity
   // plant is the ladder itself with CPG_GRAMMAR_DIR naming a directory without the grammar, so no
   // code tier runs and a gate that only divided would pass.
   {
     name: 'check:sparsity rejects a corpus denser than 1.5 structural nodes/LOC',
-    expectOutput: /structural density 4\.000 n\/LOC is over the bar 1\.5/,
+    expectOutput: /structural density 5\.000 n\/LOC is over the bar 1\.5/,
     run() {
       const dir = mkdtempSync(`${tmpdir()}/cpg-sparsity-`);
       try {
