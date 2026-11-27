@@ -22,7 +22,7 @@ IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
 IN_SCOPE file:main.py:CALL:main:1 -> file:main.py:METHOD:main
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/
 DEFINES file:main.py:METHOD:helper -> `main.py`/helper().
 DEFINES file:main.py:METHOD:main -> `main.py`/main().
 

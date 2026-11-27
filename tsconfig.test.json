@@ -15,6 +15,7 @@
     // Listed one by one: @cpg/cli and @cpg/vscode-host live under apps/, so no @cpg/* wildcard.
     "paths": {
       "@cpg/engine": ["./packages/engine/src/index.ts"],
+      "@cpg/extract": ["./packages/extract/src/index.ts"],
       "@cpg/inspector": ["./apps/inspector/src/index.ts"],
       "@cpg/model": ["./packages/model/src/index.ts"],
       "@cpg/parse": ["./packages/parse/src/index.ts"],

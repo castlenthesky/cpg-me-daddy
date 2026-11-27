@@ -334,7 +334,7 @@ nodes:
     write: merge-on-key
     key: [fqn]
     properties:
-      - { name: fqn,      type: string, cardinality: one,       golden: include, owner: code, doc: "Owner-prefixed SCIP descriptor grammar. Workspace-local: `<path>`/<descriptors>, e.g. `src/users.ts`/UserService#findById(). External: <scheme>:<package>`<descriptors>, e.g. site:node`console.log(). The external prefix is INSIDE the fqn because fqn has a UNIQUE constraint and two packages exporting Foo#bar(). must not collide onto one node. UNIQUE." }
+      - { name: fqn,      type: string, cardinality: one,       golden: include, owner: code, doc: "Owner-prefixed SCIP descriptor grammar. Workspace-local: `<path>`/<descriptors>, e.g. `src/users.ts`/UserService#findById(). External: <scheme>:<package>`<descriptors>, e.g. site:node`console.log(). The external prefix is INSIDE the fqn because fqn has a UNIQUE constraint and two packages exporting Foo#bar(). must not collide onto one node. A name outside SCIP's simple identifiers [A-Za-z0-9_+$-] is backtick-quoted with each backtick doubled, so the rendering is injective; mint it only with makeSymbolFqn. UNIQUE." }
       - { name: scheme,   type: string, cardinality: zeroOrOne, golden: include, owner: code, doc: "SCIP scheme, stored separately so different resolvers agree on the descriptor (AM-5)." }
       - { name: manager,  type: string, cardinality: zeroOrOne, golden: include, owner: code, doc: "SCIP package manager." }
       - { name: package,  type: string, cardinality: zeroOrOne, golden: include, owner: code, doc: "SCIP package name." }

@@ -26,6 +26,9 @@
     "packages/parse": {
       "project": ["src/**/*.ts"]
     },
+    "packages/extract": {
+      "project": ["src/**/*.ts"]
+    },
     "packages/resolve": {
       "project": ["src/**/*.ts"]
     },

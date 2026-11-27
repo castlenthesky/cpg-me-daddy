@@ -25,6 +25,13 @@ summary:
   features: 24      # PR-sized; the 16-PR spine sliced finer, order unchanged
   stories: 53
   order_locked: true
+  # Owner amendments to the locked order. The order above is history and is not edited (README "How to change").
+  order_amendments:
+    - date: 2026-11-26
+      by: owner
+      change: "U6 (parse on save) runs before U5 (FalkorDB). U6's store writes land on the memory store; FalkorStore follows in U5 unchanged."
+      effect: "Until U5 lands, U6 rolls back to U4 (the file tier on the memory store), not to U5 as its rollback_to says."
+      recorded_by: "U6a.2-1 (BMO-40), controller decision 87"
   first_human_artifact: U2 (the developer's own repository rendered, unit two)
   first_cross_file_edge: U6 (IMPORTS)
   freshness_proven: U7

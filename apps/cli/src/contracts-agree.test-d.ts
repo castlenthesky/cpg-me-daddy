@@ -1,7 +1,8 @@
 // contracts-agree (U1.3.2): compile-time agreement between the seam contracts. Each `@ts-expect-error`
 // is its own anti-vacuity proof: if the line stops being an error, tsc reports the directive as unused.
 // Pairs that land later with their second side: GraphDelta model<->sink (U2a), NormalizedChange
-// watch<->cli (U4), RefSite extract<->resolve (U6a). CheckResult cli<->ext landed with U2b.1 part 3a.
+// watch<->cli (U4). CheckResult cli<->ext landed with U2b.1 part 3a; SyntaxNode extract<->parse and
+// RefSite extract<->resolve with U6a.2-1 (controller decision 88).
 import { assertType, describe, expectTypeOf, it } from 'vitest';
 import type {
   AbsolutePath,
@@ -15,9 +16,21 @@ import type {
   WorkspacePath,
 } from '@cpg/model';
 import type {
+  GrammarId,
+  RefKind as ExtractRefKind,
+  RefSite as ExtractRefSite,
+  ResolutionReason as ExtractReason,
+  SyntaxNode as ExtractSyntaxNode,
+  SyntaxPoint as ExtractSyntaxPoint,
+} from '@cpg/extract';
+import type {
+  LanguageId,
+  SyntaxNode as ParseSyntaxNode,
+  SyntaxPoint as ParseSyntaxPoint,
+} from '@cpg/parse';
+import type {
   DefinitionLookup,
   DefinitionSite,
-  ExtractedFileSet,
   RefKind,
   RefSite,
   ResolveDiagnostics,
@@ -28,7 +41,6 @@ import type {
   Resolver,
   ResolverStatus,
   ResolverWorkspace,
-  ExtractedFileRefs,
 } from '@cpg/resolve';
 import type { CheckResult as CliCheckResult, VerifyReport } from '@cpg/engine';
 import type { ChangeBatch, NormalizedChange, RawWatchEvent, WatchBackend } from '@cpg/watch';
@@ -71,11 +83,7 @@ describe('WorkspacePath on every resolve and watch path (SEAM-3)', () => {
     expectTypeOf<Parameters<DefinitionLookup['symbolNamed']>[0]>().toEqualTypeOf<WorkspacePath>();
     expectTypeOf<Parameters<DefinitionLookup['isIndexed']>[0]>().toEqualTypeOf<WorkspacePath>();
     expectTypeOf<Parameters<Resolver['fileChanged']>[0]>().toEqualTypeOf<WorkspacePath>();
-    expectTypeOf<ExtractedFileRefs['path']>().toEqualTypeOf<WorkspacePath>();
-    expectTypeOf<
-      ExtractedFileSet['files'] extends ReadonlyMap<infer K, unknown> ? K : never
-    >().toEqualTypeOf<WorkspacePath>();
-    expectTypeOf<ExtractedFileSet['refSites']>().toEqualTypeOf<readonly RefSite[]>();
+    expectTypeOf<ExtractRefSite['filePath']>().toEqualTypeOf<WorkspacePath>();
   });
 
   it('watch paths are WorkspacePath; raw events carry absolute strings', () => {
@@ -143,13 +151,57 @@ describe('C-RESOLVE amendments (U1.3.1)', () => {
   });
 });
 
-describe('ExtractedFileSet is unforgeable (D7)', () => {
-  it('cannot be built from an object literal before U6a seals it', () => {
-    const literal = { files: new Map<WorkspacePath, ExtractedFileRefs>(), refSites: [] };
-    // the SEALED symbol key is not exported, so no literal can satisfy it
-    expectTypeOf(literal).not.toExtend<ExtractedFileSet>();
-    // @ts-expect-error the same, as a direct assignment
-    assertType<ExtractedFileSet>(literal);
+// Controller decision 88: a contract may import only @cpg/model, so extract declares C-PARSE's SyntaxNode
+// and C-RESOLVE's RefSite again. These pin each copy to its owner both ways. ExtractedFileSet's
+// unforgeability cases moved to packages/extract/src/contract.test-d.ts with the brand.
+declare const parseNode: ParseSyntaxNode;
+declare const extractNode: ExtractSyntaxNode;
+declare const resolveSite: RefSite;
+declare const extractSite: ExtractRefSite;
+
+describe('extract <-> parse', () => {
+  it('a parse tree node is an extract SyntaxNode and back', () => {
+    assertType<ExtractSyntaxNode>(parseNode);
+    assertType<ParseSyntaxNode>(extractNode);
+    // identical, not only assignable: assignability ignores a dropped `readonly`
+    expectTypeOf<ExtractSyntaxNode>().toEqualTypeOf<ParseSyntaxNode>();
+    expectTypeOf<ExtractSyntaxPoint>().toEqualTypeOf<ParseSyntaxPoint>();
+    expectTypeOf<ExtractSyntaxNode['text']>().toEqualTypeOf<ParseSyntaxNode['text']>();
+  });
+
+  it('GrammarId is the LanguageId a parse handle reports', () => {
+    expectTypeOf<GrammarId>().toEqualTypeOf<LanguageId>();
+  });
+
+  it('a node without its untruncated text is neither', () => {
+    const textless = { ...extractNode, text: undefined };
+    // @ts-expect-error `text` is required (C-PARSE I21)
+    assertType<ParseSyntaxNode>(textless);
+    // @ts-expect-error the same for extract's copy
+    assertType<ExtractSyntaxNode>(textless);
+  });
+});
+
+describe('extract <-> resolve', () => {
+  it('a RefSite is the same shape on both sides', () => {
+    assertType<ExtractRefSite>(resolveSite);
+    assertType<RefSite>(extractSite);
+    // identical, not only assignable: assignability ignores a dropped `readonly`
+    expectTypeOf<ExtractRefSite>().toEqualTypeOf<RefSite>();
+    expectTypeOf<ExtractRefSite['position']>().toEqualTypeOf<RefSite['position']>();
+    expectTypeOf<ExtractRefKind>().toEqualTypeOf<RefKind>();
+    expectTypeOf<ExtractReason>().toEqualTypeOf<ResolutionReason>();
+    expectTypeOf<NonNullable<ExtractRefSite['importBinding']>>().toEqualTypeOf<
+      NonNullable<RefSite['importBinding']>
+    >();
+  });
+
+  it('a misspelt decline reason is neither', () => {
+    const misspelt = { ...extractSite, declined: 'receiver-unknwon' as const };
+    // @ts-expect-error not a ResolutionReason
+    assertType<RefSite>(misspelt);
+    // @ts-expect-error the same for extract's copy
+    assertType<ExtractRefSite>(misspelt);
   });
 });
 

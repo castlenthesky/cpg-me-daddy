@@ -301,7 +301,7 @@ contracts:
   - id: C-EXTRACT
     name: AST to graph elements, per file
     package: "@cpg/extract"
-    status: specified; suite exports verifyExtractContract (~30 activate with a harness) + verifySealContract; typechecks clean
+    status: "types real in packages/extract/src/contract.ts (U6a.2-1; controller decision 88: extract owns FileOwnedLabel/PropertyValue/EndpointRef/EdgeElement and the ExtractedFileSet brand, and declares C-PARSE's SyntaxNode and C-RESOLVE's RefSite structurally, pinned by apps/cli contracts-agree); the runtime is SEAT until U6a.2-2..4; verifyExtractContract (~30) + verifySealContract are written from the invariants as each piece lands (controller decision 87)"
     purpose: >
       Parse tree in, graph elements out, per file, zero cross-file knowledge. The producer boundary of the
       two-pass design. Salience (what gets a node) is decided in exactly one place, the LanguageAdapter's

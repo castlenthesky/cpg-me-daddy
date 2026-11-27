@@ -23,9 +23,7 @@ HAS_PARAM file:main.py:METHOD:Greeter.greet -> file:main.py:PARAM:Greeter.greet.
 HAS_PARAM file:main.py:METHOD:Greeter.greet -> file:main.py:PARAM:Greeter.greet.name
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/
 DEFINES file:main.py:TYPE_DECL:Greeter -> `main.py`/Greeter#
 DEFINES file:main.py:MEMBER:Greeter.greeting -> `main.py`/Greeter#greeting.
 DEFINES file:main.py:METHOD:Greeter.greet -> `main.py`/Greeter#greet().
-DEFINES file:main.py:PARAM:Greeter.greet.self -> `main.py`/Greeter#greet().(self)    # ?Q2
-DEFINES file:main.py:PARAM:Greeter.greet.name -> `main.py`/Greeter#greet().(name)    # ?Q2

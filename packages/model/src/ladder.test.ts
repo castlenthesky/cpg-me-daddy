@@ -5,8 +5,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { PropertySpec } from './schema';
-import { edgeSpec, nodeSpec, parseNodeId } from './schema';
+import type { PropertySpec, SymbolDescriptor, SymbolDescriptorKind } from './schema';
+import { edgeSpec, makeNodeId, makeSymbolFqn, MODULE_SCOPE, nodeSpec, parseNodeId } from './schema';
 
 const LADDER = join(__dirname, '../../../fixtures/ladder');
 const SECTIONS = ['parse', 'filesystem', 'structural', 'symbols', 'resolution'] as const;
@@ -19,7 +19,13 @@ const DESCRIPTOR_END: Readonly<Record<string, string>> = {
   TYPE_DECL: '#',
   METHOD: ').',
   MEMBER: '.',
-  PARAM: ')',
+};
+
+/** The descriptor each enclosing declaration contributes; MODULE is the fqn's owner, not a descriptor. */
+const DESCRIPTOR_KIND: Readonly<Record<string, SymbolDescriptorKind>> = {
+  TYPE_DECL: 'type',
+  METHOD: 'method',
+  MEMBER: 'term',
 };
 
 /** The section that owns each label or edge type; anything not listed is `structural`. */
@@ -72,6 +78,84 @@ function labelOf(id: string): string | undefined {
   if (parts?.form === 'file') return 'FILE';
   if (parts?.form === 'directory') return 'DIRECTORY';
   return parts?.kind;
+}
+
+/**
+ * The fqn a DEFINES from `id` must target: the path, then one descriptor per declaration on the rung whose
+ * scope is a prefix of `id`'s scope (controller decisions 89 and 90). A message when the chain breaks.
+ */
+function expectedSymbol(
+  id: string,
+  declared: ReadonlyMap<string | undefined, string | undefined>,
+): string {
+  const parts = parseNodeId(id);
+  if (parts?.form !== 'scoped') return `(not a scoped id: ${id})`;
+  const scope = parts.scope[0] === MODULE_SCOPE ? [] : parts.scope;
+  const descriptors: SymbolDescriptor[] = [];
+  for (const [i, name] of scope.entries()) {
+    const frames: [string, ...string[]] = [scope[0] ?? name, ...scope.slice(1, i + 1)];
+    const label = Object.keys(DESCRIPTOR_KIND).find((kind) =>
+      declared.has(makeNodeId({ form: 'scoped', path: parts.path, kind, scope: frames })),
+    );
+    const kind = DESCRIPTOR_KIND[label ?? ''];
+    if (kind === undefined) return `(no declaration on the rung for ${frames.join('.')})`;
+    descriptors.push({ kind, name });
+  }
+  return makeSymbolFqn({ form: 'local', path: parts.path, descriptors });
+}
+
+/** The labels that DEFINE a SYMBOL in v1: MODULE (decision 90) and each declaration; never PARAM (91). */
+const DEFINERS = new Set(['MODULE', ...Object.keys(DESCRIPTOR_KIND)]);
+
+/** `[line, column]` of a fact's `range=` start, or undefined. */
+function rangeStart(fact: Fact): readonly [number, number] | undefined {
+  const m = /^range=(\d+):(\d+)-/.exec(fact.words.find((w) => w.startsWith('range=')) ?? '');
+  return m === null ? undefined : [Number(m[1]), Number(m[2])];
+}
+
+/**
+ * Decision 92: CALL and IMPORT ordinals count every one in its region from 0, in pre-order source order,
+ * and a CALL is IN_SCOPE of its region's METHOD, or of the MODULE at `$root`.
+ */
+function ordinalProblems(nodeFacts: readonly Fact[], edgeFacts: readonly Fact[]): string[] {
+  const problems: string[] = [];
+  const groups = new Map<
+    string,
+    { ordinal: number; start: readonly [number, number]; at: string }[]
+  >();
+  for (const f of nodeFacts.filter((x) => x.words[0] === 'CALL' || x.words[0] === 'IMPORT')) {
+    const id = f.words[1] ?? '';
+    const parts = parseNodeId(id);
+    const start = rangeStart(f);
+    if (parts?.form !== 'scoped' || parts.ordinal === undefined || start === undefined) {
+      problems.push(`${f.at} ${id} needs a scoped id with an ordinal and a range`);
+      continue;
+    }
+    const key = `${parts.kind} ${parts.path} ${parts.scope.join('.')}`;
+    groups.set(key, [...(groups.get(key) ?? []), { ordinal: parts.ordinal, start, at: f.at }]);
+    if (parts.kind !== 'CALL') continue;
+    const region = parts.scope[0] === MODULE_SCOPE ? 'MODULE' : 'METHOD';
+    const want = makeNodeId({ form: 'scoped', path: parts.path, kind: region, scope: parts.scope });
+    const scopes = edgeFacts.filter((e) => e.words[0] === 'IN_SCOPE' && e.words[1] === id);
+    if (scopes.length !== 1 || scopes[0]?.words[3] !== want)
+      problems.push(`${f.at} ${id} must be IN_SCOPE of ${want} exactly once`);
+  }
+  for (const [key, calls] of groups) {
+    const sorted = calls.toSorted((a, b) => a.ordinal - b.ordinal);
+    sorted.forEach((c, i) => {
+      const prev = sorted[i - 1]?.start;
+      if (c.ordinal !== i)
+        problems.push(`${c.at} ${key}: ordinal ${String(c.ordinal)}, want ${String(i)}`);
+      if (
+        prev !== undefined &&
+        (c.start[0] < prev[0] || (c.start[0] === prev[0] && c.start[1] < prev[1]))
+      )
+        problems.push(
+          `${c.at} ${key}: ordinal ${String(c.ordinal)} starts before ordinal ${String(i - 1)}`,
+        );
+    });
+  }
+  return problems;
 }
 
 function checkProperties(
@@ -186,6 +270,37 @@ describe('fixtures/ladder', () => {
         if (!to.endsWith(end)) problems.push(`${f.at} a ${label} symbol ends with "${end}": ${to}`);
       }
       expect(problems).toEqual([]);
+    });
+
+    it('every DEFINES target is the fqn of its source and the declarations around it', () => {
+      const problems: string[] = [];
+      for (const f of edgeFacts.filter((x) => x.words[0] === 'DEFINES')) {
+        const [, from = '', , to = ''] = f.words;
+        const want = expectedSymbol(from, declared);
+        if (to !== want) problems.push(`${f.at} ${to} is not ${want}`);
+      }
+      expect(problems).toEqual([]);
+    });
+
+    it('every MODULE, TYPE_DECL, METHOD and MEMBER defines exactly one SYMBOL', () => {
+      const defines = edgeFacts.filter((f) => f.words[0] === 'DEFINES').map((f) => f.words[1]);
+      const problems = nodeFacts
+        .filter((f) => DEFINERS.has(f.words[0] ?? ''))
+        .map((f) => ({ f, n: defines.filter((from) => from === f.words[1]).length }))
+        .filter(({ n }) => n !== 1)
+        .map(({ f, n }) => `${f.at} ${f.words[1] ?? ''} defines ${String(n)} symbols`);
+      expect(problems).toEqual([]);
+    });
+
+    it('CALL and IMPORT ordinals count every one in its region, in source order', () => {
+      expect(ordinalProblems(nodeFacts, edgeFacts)).toEqual([]);
+    });
+
+    it('no PARAM defines a SYMBOL in v1 (controller decision 91)', () => {
+      const params = edgeFacts
+        .filter((f) => f.words[0] === 'DEFINES' && declared.get(f.words[1]) === 'PARAM')
+        .map((f) => f.at);
+      expect(params).toEqual([]);
     });
 
     it('puts each fact in the section that owns it', () => {

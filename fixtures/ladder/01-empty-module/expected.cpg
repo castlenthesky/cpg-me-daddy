@@ -13,4 +13,4 @@ MODULE file:main.py:MODULE:$root name=main range=1:0-1:0
 SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/

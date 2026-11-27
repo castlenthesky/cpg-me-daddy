@@ -19,7 +19,5 @@ HAS_PARAM file:main.py:METHOD:greet -> file:main.py:PARAM:greet.name
 HAS_PARAM file:main.py:METHOD:greet -> file:main.py:PARAM:greet.times
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/
 DEFINES file:main.py:METHOD:greet -> `main.py`/greet().
-DEFINES file:main.py:PARAM:greet.name -> `main.py`/greet().(name)    # ?Q2
-DEFINES file:main.py:PARAM:greet.times -> `main.py`/greet().(times)    # ?Q2

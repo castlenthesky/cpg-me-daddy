@@ -47,6 +47,8 @@
         "@cpg/model": "*",
       },
       "devDependencies": {
+        "@cpg/extract": "*",
+        "@cpg/parse": "*",
         "@cpg/resolve": "*",
         "@cpg/watch": "*",
       },
@@ -87,6 +89,13 @@
         "@cpg/watch": "*",
         "yaml": "2.9.1",
         "zod": "4.6.7",
+      },
+    },
+    "packages/extract": {
+      "name": "@cpg/extract",
+      "version": "0.0.1",
+      "dependencies": {
+        "@cpg/model": "*",
       },
     },
     "packages/model": {
@@ -251,6 +260,8 @@
     "@cpg/cli": ["@cpg/cli@workspace:apps/cli"],
 
     "@cpg/engine": ["@cpg/engine@workspace:packages/engine"],
+
+    "@cpg/extract": ["@cpg/extract@workspace:packages/extract"],
 
     "@cpg/inspector": ["@cpg/inspector@workspace:apps/inspector"],
 

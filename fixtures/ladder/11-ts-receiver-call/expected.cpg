@@ -23,7 +23,7 @@ IN_SCOPE file:main.ts:CALL:main:0 -> file:main.ts:METHOD:main
 IN_SCOPE file:main.ts:CALL:main:1 -> file:main.ts:METHOD:main
 
 [symbols]
-DEFINES file:main.ts:MODULE:$root -> `main.ts`/    # ?Q1
+DEFINES file:main.ts:MODULE:$root -> `main.ts`/
 DEFINES file:main.ts:TYPE_DECL:Greeter -> `main.ts`/Greeter#
 DEFINES file:main.ts:METHOD:Greeter.greet -> `main.ts`/Greeter#greet().
 DEFINES file:main.ts:METHOD:main -> `main.ts`/main().

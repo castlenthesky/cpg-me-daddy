@@ -7,4 +7,6 @@ export * from './reserved';
 export * from './types';
 export * from './validate';
 export * from './ids';
+export * from './symbols';
+export * from './range';
 export * from './doc';
