@@ -63,13 +63,17 @@ const check = ({ checks }: VerificationReport, id: string) => {
   assert.ok(found, `no ${id}`);
   return found;
 };
-/** The verdict once the page has reported on the graph, or the last one when it does not in time. */
+/**
+ * The verdict once the page has reported on the graph held, or the last one when it does not in time.
+ * Round two (R5): under a live watch a catch-up keeps the page's last report, which is `stale` until
+ * the page draws the new graph.
+ */
 async function reported(): Promise<VerificationReport> {
   const deadline = Date.now() + REPORT_MS;
   for (;;) {
     const report = await verify();
     const { state } = check(report, 'render-reconciliation');
-    if (state !== 'unavailable' || Date.now() > deadline) return report;
+    if ((state !== 'unavailable' && state !== 'stale') || Date.now() > deadline) return report;
     await delay(100);
   }
 }

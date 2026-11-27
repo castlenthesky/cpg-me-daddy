@@ -370,6 +370,19 @@ describe('a run that is no longer current', () => {
     expect([late.at, errors.length, starts]).toEqual([undefined, 1, [0, 0, 0, 500]]);
   });
 
+  // Round two (R11): a debounced run, with no now() waiting.
+  it('a run a change started that turns stale reports nothing; the change during it starts the next', async () => {
+    const { clock, scheduler, end, reports, starts } = setUp({ current: staleRuns });
+    scheduler.changed();
+    clock.advance(500);
+    scheduler.changed();
+    await end();
+    expect([reports, starts]).toEqual([[], [500]]);
+    clock.advance(500);
+    await end();
+    expect([reports, starts]).toEqual([[2], [500, 1000]]);
+  });
+
   it('dispose answers what waits on a stale run with undefined', async () => {
     const { scheduler, end, reports } = setUp({ current: staleRuns });
     const answer = watch(scheduler.now());

@@ -585,8 +585,12 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
       [],
       ['error: CPG: the graph refresh failed: disk on fire'],
     ]);
+    // Round two (R10): no graph, so nothing to judge; the first graph is judged.
+    expect([await s.session.verify(), s.timers]).toEqual([undefined, []]);
     watch.batch();
     await until(() => s.page().graphs.length === 1);
+    expect(s.timers.map(({ ms }) => ms)).toEqual([500]);
+    expect((await s.session.verify())?.seq).toBe(1);
     watch.batch();
     await until(() => s.messages.length === 3);
     watch.batch();
@@ -613,6 +617,8 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
 });
 
 describe('a watch that is replaced (decision 71, BMO-121)', () => {
+  // Round two (R7, R8, R9): the old refresh is still in flight when the old watch() resolves, one more is
+  // queued behind it, and the configuration changes while the old watch ends.
   it('ends before the new one loads anything, and its late refresh never lands', async () => {
     const root = await directory({ 'a.ts': 'a' });
     const s = setUp({ root, holdEnd: true });
@@ -620,21 +626,30 @@ describe('a watch that is replaced (decision 71, BMO-121)', () => {
     const held = s.holdInspect();
     first.batch();
     await held.reached;
+    first.batch();
     first.fail('the root went away');
     const reopening = s.session.openGraph();
     await allMicrotasks();
     expect(first.signal.aborted).toBe(true);
     await writeFile(join(root, 'b.ts'), '');
-    held.open();
-    await until(() => s.answered.length === 2);
-    await allMicrotasks();
-    expect([stamps(s.page()), s.engines.length, s.closes]).toEqual([['1/0'], 1, []]);
     first.end();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    // watch() has resolved, and its refresh is still in flight: nothing is closed or made yet.
+    expect([s.engines.length, s.closes, s.inspected.length]).toEqual([1, [], 2]);
+    await writeFile(join(root, CONFIG), 'version: 1\nwatch: { debounce_ms: 77 }\n');
+    held.open();
     const second = await s.watching(2);
+    expect(second.request.config).toMatchObject({ trailingMs: 77 });
     await second.ready();
     await reopening;
-    expect(stamps(s.page())).toEqual(['1/0', '2/0']);
-    expect(names(s.page().graphs[1])).toEqual(['.', 'a.ts', 'b.ts']);
+    // The queued refresh was dropped, and the one in flight did not land.
+    expect([s.inspected, stamps(s.page())]).toEqual([
+      [1, 1, 2],
+      ['1/0', '2/0'],
+    ]);
+    expect(names(s.page().graphs[1])).toEqual(['.', 'a.ts', 'b.ts', CONFIG]);
     expect(s.log.filter((entry) => !entry.includes(': '))).toEqual([
       'connect 1',
       'watch 1',
@@ -718,11 +733,13 @@ describe('while a watch is live (decision 72, BMO-109)', () => {
     expect([s.panels.length, restored.revealed, s.engines.length]).toEqual([0, 1, 1]);
     first.fail('gone');
     await until(() => s.closes.length === 1);
+    // Round two (m2): VS Code restores one panel; a second is closed, and the one there is revealed.
     const again = new FakeSurface();
     await s.session.restorePanel(again);
     await (await s.watching(2)).ready();
-    again.send(READY);
-    expect(stamps(again)).toEqual(['2/0']);
+    // Round two (R3): ready resolves before its refresh lands.
+    await until(() => restored.graphs.length === 2);
+    expect([again.disposed, restored.revealed, stamps(restored)]).toEqual([1, 2, ['1/0', '2/0']]);
   });
 
   it('cpg.verify with no graph: starts the watch, opens no panel, waits for its first graph, then judges', async () => {
@@ -891,6 +908,34 @@ describe('what the watch says (decision 74)', () => {
       'error: CPG: the watch stopped: gone',
       'error: CPG: cannot close the graph store: stuck',
     ]);
+  });
+
+  // Round two (R12).
+  it('a watch() that rejects: said as the watch stopping; its session closes, and the next one starts', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({
+      root,
+      engine: (n) => (n === 1 ? { watch: () => Promise.reject(new Error('broken')) } : {}),
+    });
+    await s.session.openGraph();
+    expect([s.messages, s.closes]).toEqual([['error: CPG: the watch stopped: broken'], [1]]);
+    const reopening = s.session.openGraph();
+    await (await s.watching(1)).ready([]);
+    await reopening;
+    expect([s.engines.length, stamps(s.page())]).toEqual([2, []]);
+    s.page().send(READY);
+    expect(stamps(s.page())).toEqual(['1/0']);
+  });
+
+  // Round two (R12).
+  it('a session that will not close after dispose: nothing is said', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root, closeFails: true });
+    await s.opened([]);
+    s.session.dispose();
+    await until(() => s.closes.length === 1);
+    await allMicrotasks();
+    expect(s.messages).toEqual([]);
   });
 
   it("shows the warnings: the configuration's, then ready's, zero files included", async () => {
@@ -1106,7 +1151,8 @@ describe('deactivation (decision 74)', () => {
     watch.warning('late');
     watch.batch();
     watch.fail('later');
-    await until(() => s.answered.length === 2);
+    // Round two (m1): a refresh the batch may start (it should not) has settled before anything is read.
+    await until(() => s.answered.length === s.inspected.length);
     await allMicrotasks();
     expect([s.messages, s.closes, stamps(s.page())]).toEqual([
       [`warning: CPG: ${U6A}`],
@@ -1135,13 +1181,19 @@ describe('deactivation (decision 74)', () => {
       if (when !== 'before ready') {
         void watch.ready();
         await held.reached;
+        // Round two (R9): one more queued behind it, dropped.
+        watch.batch();
       }
       s.session.dispose();
+      // Round two (R7): the session is not closed while a refresh is in flight.
+      await allMicrotasks();
+      expect(s.closes).toEqual(when === 'before ready' ? [1] : []);
       held.open();
       await opening;
       await until(() => s.closes.length === 1);
       await allMicrotasks();
       expect([s.messages, s.page().graphs, watch.signal.aborted]).toEqual([[], [], true]);
+      expect(s.inspected).toHaveLength(when === 'before ready' ? 0 : 1);
       await s.session.verify();
       expect([s.engines.length, s.messages]).toEqual([1, []]);
     },
@@ -1165,23 +1217,28 @@ describe('deactivation (decision 74)', () => {
 });
 
 describe('on the real engine and @parcel/watcher', () => {
-  it('a file written joins the graph and a deleted one leaves it, in one epoch; dispose closes it', async () => {
-    const root = await directory({ 'a.ts': 'a' });
-    const s = setUp({ root, real: true });
-    await s.session.openGraph();
-    s.page().send(READY);
-    expect(names(s.page().graphs[0])).toEqual(['.', 'a.ts']);
-    await writeFile(join(root, 'b.ts'), 'b');
-    await until(() => names(s.page().graphs.at(-1)).includes('b.ts'), 10_000);
-    await rm(join(root, 'a.ts'));
-    await until(() => !names(s.page().graphs.at(-1)).includes('a.ts'), 10_000);
-    expect(names(s.page().graphs.at(-1))).toEqual(['.', 'b.ts']);
-    const seen = stamps(s.page()).map((at) => at.split('/').map(Number));
-    expect([...new Set(seen.map(([epoch]) => epoch))]).toEqual([1]);
-    expect(seen[0]).toEqual([1, 0]);
-    const seqs = seen.map(([, seq]) => seq ?? -1);
-    expect(seqs.every((seq, at) => at === 0 || seq > (seqs[at - 1] ?? seq))).toBe(true);
-    s.session.dispose();
-    await until(() => s.closes.length === 1);
-  });
+  // Round two (R6): the waits below are 10 s each, so the test's own limit is above both.
+  it(
+    'a file written joins the graph and a deleted one leaves it, in one epoch; dispose closes it',
+    { timeout: 30_000 },
+    async () => {
+      const root = await directory({ 'a.ts': 'a' });
+      const s = setUp({ root, real: true });
+      await s.session.openGraph();
+      s.page().send(READY);
+      expect(names(s.page().graphs[0])).toEqual(['.', 'a.ts']);
+      await writeFile(join(root, 'b.ts'), 'b');
+      await until(() => names(s.page().graphs.at(-1)).includes('b.ts'), 10_000);
+      await rm(join(root, 'a.ts'));
+      await until(() => !names(s.page().graphs.at(-1)).includes('a.ts'), 10_000);
+      expect(names(s.page().graphs.at(-1))).toEqual(['.', 'b.ts']);
+      const seen = stamps(s.page()).map((at) => at.split('/').map(Number));
+      expect([...new Set(seen.map(([epoch]) => epoch))]).toEqual([1]);
+      expect(seen[0]).toEqual([1, 0]);
+      const seqs = seen.map(([, seq]) => seq ?? -1);
+      expect(seqs.every((seq, at) => at === 0 || seq > (seqs[at - 1] ?? seq))).toBe(true);
+      s.session.dispose();
+      await until(() => s.closes.length === 1);
+    },
+  );
 });

@@ -408,7 +408,8 @@ describe('verify in the editor', () => {
     await until(() => status.shown);
     expect([status.text, status.tooltip.split('\n')[0]]).toEqual([
       '$(question) CPG',
-      'CPG verify at seq -1: unavailable',
+      // Round two (R1): the first graph is ready's, at seq 0 (decision 70).
+      'CPG verify at seq 0: unavailable',
     ]);
     await until(() => ofType(panel, 'verification').length === 1);
     writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
@@ -580,7 +581,9 @@ describe('the theme', () => {
 describe('deactivation', () => {
   it('unregisters everything and leaves the panel for VS Code to restore', async () => {
     const { seen, run, panel, deactivate } = await opened();
-    writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
+    // Round two (m3): a diagnostic from the page, not the disk: a write would start the watch's own
+    // debounce timers, and the count below is the verify scheduler's.
+    draw(panel, { renderedNodeCount: 4, droppedNodeIds: ['file:a.ts'] });
     await run('cpg.verify');
     await until(() => seen.diagnostics.size === 1);
     // Round two (review a9): a run is pending, and the editor's own items are released.
