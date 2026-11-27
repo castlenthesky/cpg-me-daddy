@@ -396,6 +396,49 @@ describe('removals: what the store held decides, not the extension', () => {
   });
 });
 
+// Post-implementation (sabotage: the held set without its label filter survived): only file-owned
+// labels count as code a path held. An identity node may carry a `file` (C-STORE INV-12 never deletes
+// one), and a removed path that holds nothing else gets no delete-file.
+describe('removals: an identity node carrying a file is not code held for it', () => {
+  it('a removed z.py whose only node with file z.py is a SYMBOL gets no delete-file', async () => {
+    const memory = createMemoryStore();
+    await memory.open();
+    await memory.write({
+      kind: 'merge-filesystem',
+      directories: [],
+      files: [fileRow('x.ts'), fileRow('z.py')],
+      links: [],
+      moves: [],
+      removals: [],
+    });
+    const symbol = '`z.py`/';
+    const planted = await memory.write({
+      kind: 'replace-file',
+      file: wp('x.ts'),
+      seq: 3,
+      revision_id: '5d'.repeat(32),
+      nodes: [
+        {
+          label: 'MODULE',
+          key: mod('x.ts'),
+          properties: { name: 'x', file: 'x.ts', revision_id: '5d'.repeat(32), range: '1:0-1:1' },
+        },
+        {
+          label: 'SYMBOL',
+          key: symbol,
+          properties: { fqn: symbol, language: 'python', kind: 'module', file: 'z.py' },
+        },
+      ],
+      edges: [],
+    });
+    await memory.close();
+    expect(planted.applied).toBe(true);
+    const r = recorded(memory);
+    await indexWith(engineOn(r.sink), await tree({ 'a.py': 'a' }));
+    expect(kinds(r.writes.slice(1))).toEqual(['replace-file a.py', 'delete-file x.ts']);
+  });
+});
+
 describe('a code tier failure is a warning, never fatal (decision 100)', () => {
   it('a grammarDir without the grammar: FILE tier only, one warning for every python file', async () => {
     const empty = await tmp();
