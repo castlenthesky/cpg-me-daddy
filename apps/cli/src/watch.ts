@@ -2,9 +2,10 @@
 // on stdout as it arrives, the human lines on stderr, and with the inspector on, a full graph per
 // refresh. run() turns the WatchEnd into an exit code (decision 66).
 
-import type { CpgEngine, VerifyConfig, WatchFailure, WatchRequest } from '@cpg/engine';
-import type { StartInspector } from './inspector-process';
+import type { CpgEngine, VerifyConfig, WatchEvent, WatchFailure, WatchRequest } from '@cpg/engine';
+import type { InspectorProcess, StartInspector } from './inspector-process';
 import type { Io } from './io';
+import { livePicture } from './live';
 
 /** How a watch ended, for run() to turn into an exit code. */
 export type WatchEnd =
@@ -24,6 +25,27 @@ export interface WatchStreamOptions {
   readonly signal?: AbortSignal;
   /** Set when consumers.inspect is on: the launcher, and the config each refresh reads with. */
   readonly inspector?: { readonly start: StartInspector; readonly config: VerifyConfig };
+}
+
+interface WatchState {
+  consumers: string;
+  lastError: WatchFailure | undefined;
+  closedReason: 'signal' | 'error' | 'eof' | undefined;
+  inspectorFailure: string | undefined;
+  watchResolved: boolean;
+  proc: InspectorProcess | undefined;
+  pending: number | undefined;
+  pumping: boolean;
+  pumpPromise: Promise<void> | undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function inspectorExitMessage(code: number | null, signal: string | null): string {
+  const how = signal !== null ? `signal ${signal}` : `code ${String(code)}`;
+  return `the inspector exited unexpectedly (${how})`;
 }
 
 /**
@@ -68,7 +90,167 @@ export interface WatchStreamOptions {
  * Teardown: once the watch resolves, a queued refresh is dropped and the one in flight is awaited,
  * then the inspector is stopped.
  */
-export function streamWatch(_options: WatchStreamOptions): Promise<WatchEnd> {
-  // SEAT: U4.2.1 part b (decisions 65-67)
-  return Promise.reject(new Error('SEAT: streamWatch is not built yet (U4.2.1 part b)'));
+export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd> {
+  // REAL
+  const { engine, request, io, quiet, inspector } = options;
+  const stopper = new AbortController();
+  const onSignalAbort = (): void => {
+    stopper.abort();
+  };
+  if (options.signal?.aborted === true) {
+    stopper.abort();
+  } else {
+    options.signal?.addEventListener('abort', onSignalAbort, { once: true });
+  }
+
+  const picture = inspector !== undefined ? livePicture(io) : undefined;
+  const state: WatchState = {
+    consumers: 'none',
+    lastError: undefined,
+    closedReason: undefined,
+    inspectorFailure: undefined,
+    watchResolved: false,
+    proc: undefined,
+    pending: undefined,
+    pumping: false,
+    pumpPromise: undefined,
+  };
+
+  const failInspector = (message: string): void => {
+    if (stopper.signal.aborted || state.watchResolved) return;
+    state.inspectorFailure = message;
+    stopper.abort();
+  };
+
+  const runPump = async (): Promise<void> => {
+    if (inspector === undefined || picture === undefined) return;
+    try {
+      if (state.proc === undefined) {
+        let started: InspectorProcess;
+        try {
+          started = await inspector.start({ onRenderReport: picture.onRenderReport });
+        } catch (error: unknown) {
+          failInspector(`cannot start the inspector: ${errorMessage(error)}`);
+          return;
+        }
+        state.proc = started;
+        if (state.watchResolved || stopper.signal.aborted) return;
+        io.err(`cpg: inspector at ${started.url} (open it in a browser; Ctrl-C stops it)`);
+        void started.exited.then(({ code, signal }) => {
+          if (state.watchResolved) return;
+          if (signal === 'SIGINT') {
+            stopper.abort();
+            return;
+          }
+          failInspector(inspectorExitMessage(code, signal));
+        });
+      }
+      const active = state.proc;
+      while (!state.watchResolved && !stopper.signal.aborted && state.pending !== undefined) {
+        const seq = state.pending;
+        state.pending = undefined;
+        try {
+          // oxlint-disable-next-line no-await-in-loop
+          const verified = await engine.verify(request.session, inspector.config, null);
+          // oxlint-disable-next-line no-await-in-loop
+          const payload = await engine.inspect(request.session, inspector.config);
+          picture.show(active, { ...payload, seq }, verified.checks);
+        } catch (error: unknown) {
+          io.err(
+            `cpg: warning: inspector refresh at seq ${String(seq)} failed: ${errorMessage(error)}`,
+          );
+        }
+      }
+    } finally {
+      state.pumping = false;
+    }
+  };
+
+  const trigger = (seq: number): void => {
+    if (inspector === undefined || stopper.signal.aborted || state.watchResolved) return;
+    state.pending = seq;
+    if (!state.pumping) {
+      state.pumping = true;
+      state.pumpPromise = runPump();
+    }
+  };
+
+  const onEvent = (event: WatchEvent): void => {
+    io.out(JSON.stringify(event));
+    switch (event.kind) {
+      case 'ready': {
+        for (const w of event.report.warnings) {
+          io.err(`cpg: warning: ${w}`);
+        }
+        state.consumers = event.report.consumers.join(', ') || 'none';
+        io.err(
+          `cpg: watching ${event.root}: indexed ${String(event.report.walk.filesIndexed)} files in ${String(Math.round(event.report.durationMs))} ms; consumers: ${state.consumers}`,
+        );
+        trigger(event.seq);
+        break;
+      }
+      case 'batch': {
+        if (!quiet) {
+          io.err(
+            `cpg: batch ${String(event.seq)}: ${String(event.changes.length)} change(s) in ${String(Math.round(event.latencyMs.total))} ms; consumers: ${state.consumers}`,
+          );
+        }
+        trigger(event.seq);
+        break;
+      }
+      case 'warning': {
+        io.err(`cpg: warning: ${event.message}`);
+        break;
+      }
+      case 'error': {
+        state.lastError = event.error;
+        break;
+      }
+      case 'closed': {
+        state.closedReason = event.reason;
+        break;
+      }
+    }
+  };
+
+  try {
+    await engine.watch(request, onEvent, stopper.signal);
+  } finally {
+    state.watchResolved = true;
+    state.pending = undefined;
+    options.signal?.removeEventListener('abort', onSignalAbort);
+    if (state.pumpPromise !== undefined) {
+      await state.pumpPromise;
+    }
+    picture?.close();
+    if (state.proc !== undefined) {
+      await state.proc.stop();
+    }
+  }
+
+  if (state.closedReason === 'error') {
+    return {
+      kind: 'error',
+      error: state.lastError ?? {
+        kind: 'engine-rejected',
+        message: 'the watch closed on an error it did not report',
+      },
+    };
+  }
+  if (state.closedReason === undefined) {
+    return {
+      kind: 'error',
+      error: {
+        kind: 'engine-rejected',
+        message: 'the watch ended without a closed event',
+      },
+    };
+  }
+  if (state.inspectorFailure !== undefined) {
+    return { kind: 'inspector', message: state.inspectorFailure };
+  }
+  if (state.closedReason === 'eof') {
+    return { kind: 'eof' };
+  }
+  return { kind: 'signal' };
 }

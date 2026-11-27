@@ -121,6 +121,80 @@ function waitForLiveEnd(exited: Promise<InspectorExit>, signal?: AbortSignal): P
   });
 }
 
+/**
+ * What an inspector is showing: the payload last sent and its checks, re-judged on each
+ * render-report (serveLive and `cpg watch --inspect` share it).
+ */
+export interface LivePicture {
+  /** Pass as the inspector's onRenderReport. A report before the first show(), or after close(), is ignored. */
+  readonly onRenderReport: (message: RenderReportMessage) => void;
+  /**
+   * Sends `{ type: 'graph', payload }`, then a verification (`checks` with render-reconciliation
+   * replaced) whose render-reconciliation is judged against `payload` (its seq and node count) from
+   * the latest render-report received since the first show(), or none.
+   */
+  show(proc: InspectorProcess, payload: GraphPayload, checks: readonly CheckResult[]): void;
+  /** After it, show() and render-reports do nothing. */
+  close(): void;
+}
+
+/**
+ * Creates a live picture tracker for one inspector process: `show()` sends a graph and its
+ * verification, and `onRenderReport` recomputes render-reconciliation against the payload last
+ * shown, re-sending the verification and printing a status line only when the check changes.
+ */
+export function livePicture(io: Io): LivePicture {
+  // REAL
+  let closed = false;
+  let current:
+    | {
+        readonly proc: InspectorProcess;
+        readonly payload: GraphPayload;
+        readonly checks: readonly CheckResult[];
+        render: CheckResult;
+      }
+    | undefined;
+  let latest: { readonly seq: number; readonly report: RenderReportMessage['report'] } | null =
+    null;
+
+  const onRenderReport = (message: RenderReportMessage): void => {
+    if (closed || current === undefined) return;
+    latest = { seq: message.seq, report: message.report };
+    const next = renderReconciliation({
+      payloadSeq: current.payload.seq,
+      payloadNodeCount: current.payload.nodes.length,
+      latest,
+      url: current.proc.url,
+    });
+    if (JSON.stringify(next) === JSON.stringify(current.render)) return;
+    current.render = next;
+    io.err(
+      `cpg: render-reconciliation ${next.state}${next.detail !== undefined ? `: ${next.detail}` : ''}`,
+    );
+    current.proc.send({ type: 'verification', report: liveVerification(current.checks, next) });
+  };
+
+  return {
+    onRenderReport,
+    show(proc: InspectorProcess, payload: GraphPayload, checks: readonly CheckResult[]): void {
+      if (closed) return;
+      const render = renderReconciliation({
+        payloadSeq: payload.seq,
+        payloadNodeCount: payload.nodes.length,
+        latest,
+        url: proc.url,
+      });
+      current = { proc, payload, checks, render };
+      proc.send({ type: 'graph', payload });
+      proc.send({ type: 'verification', report: liveVerification(checks, render) });
+    },
+    close(): void {
+      closed = true;
+      current = undefined;
+    },
+  };
+}
+
 /** Why the live loop ended: the signal aborted, or the child exited on its own. */
 export type LiveEnd =
   | { readonly kind: 'interrupted' }
@@ -152,46 +226,17 @@ export interface LiveOptions {
 export async function serveLive(options: LiveOptions): Promise<LiveEnd> {
   // REAL
   const { payload, checks, io, signal } = options;
-  let ready = false;
-  let procRef: InspectorProcess | undefined;
-  let render: CheckResult | undefined;
-
-  const onRenderReport = (message: RenderReportMessage): void => {
-    if (!ready || procRef === undefined || render === undefined) return;
-    const next = renderReconciliation({
-      payloadSeq: payload.seq,
-      payloadNodeCount: payload.nodes.length,
-      latest: { seq: message.seq, report: message.report },
-      url: procRef.url,
-    });
-    if (JSON.stringify(next) === JSON.stringify(render)) return;
-    render = next;
-    io.err(
-      `cpg: render-reconciliation ${next.state}${next.detail !== undefined ? `: ${next.detail}` : ''}`,
-    );
-    procRef.send({ type: 'verification', report: liveVerification(checks, render) });
-  };
-
-  const proc = await options.start({ onRenderReport });
-  procRef = proc;
+  const picture = livePicture(io);
+  const proc = await options.start({ onRenderReport: picture.onRenderReport });
   try {
     if (signal?.aborted === true) {
       return { kind: 'interrupted' };
     }
     io.err(`cpg: inspector at ${proc.url} (open it in a browser; Ctrl-C stops it)`);
-    render = renderReconciliation({
-      payloadSeq: payload.seq,
-      payloadNodeCount: payload.nodes.length,
-      latest: null,
-      url: proc.url,
-    });
-    proc.send({ type: 'graph', payload });
-    proc.send({ type: 'verification', report: liveVerification(checks, render) });
-    ready = true;
-
+    picture.show(proc, payload, checks);
     return await waitForLiveEnd(proc.exited, signal);
   } finally {
-    ready = false;
+    picture.close();
     await proc.stop();
   }
 }

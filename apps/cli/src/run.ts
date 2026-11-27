@@ -28,6 +28,7 @@ import type { StartInspector } from './inspector-process';
 import type { Io, Manifest } from './io';
 import { parsePayloadDocument, savedPayloadChecks, serveLive, type LiveEnd } from './live';
 import { COMMANDS, RESERVED_VERBS, flagsOf, renderUsage, type CommandSpec } from './spec';
+import { streamWatch, type WatchEnd } from './watch';
 
 export const EXIT = { OK: 0, FAILED: 1, USAGE: 2, VERIFY_FAILED: 3, INTERRUPTED: 130 } as const;
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
@@ -131,7 +132,7 @@ async function dispatch(argv: readonly string[], io: Io, opts: RunOptions): Prom
   if (spec.verb === 'schema') return runSchema(spec, values, io, opts);
   if (spec.verb === 'config') return runConfig(spec, values, positionals, io, opts);
   if (spec.verb === 'inspect') return runInspect(spec, positionals, io, opts);
-  // SEAT: verbs without a handler yet stop here (watch, query, doctor).
+  // SEAT: verbs without a handler yet stop here (query, doctor).
   const seat = new Fail({ kind: 'not-built', verb, message: `'${verb}' is not built yet` });
   if (opts.createEngine === undefined) throw seat;
   if (opts.signal?.aborted) throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
@@ -650,16 +651,59 @@ async function runIndex(
  * is `interrupted` (130), `error` its CliError (exit 1), `inspector` an `inspector` CliError (exit
  * 1), and `eof` exits 0.
  */
-function runWatch(
-  _spec: CommandSpec,
-  _buildEngine: (config: EngineConfig) => CpgEngine,
-  _values: Values,
-  _positionals: readonly string[],
-  _io: Io,
-  _opts: RunOptions,
+async function runWatch(
+  spec: CommandSpec,
+  buildEngine: (config: EngineConfig) => CpgEngine,
+  values: Values,
+  positionals: readonly string[],
+  io: Io,
+  opts: RunOptions,
 ): Promise<ExitCode> {
-  // SEAT: U4.2.1 part b
-  return Promise.reject(new Error('SEAT: cpg watch is not built yet (U4.2.1 part b)'));
+  // REAL
+  const { resolved } = await load(spec, values, positionals, io, opts);
+  refuseUnbuiltConsumers(spec.verb, resolved);
+  const inspect = resolved.consumers.inspect.value;
+  const startInspector = inspect ? opts.startInspector : undefined;
+  if (inspect && startInspector === undefined) {
+    throw new Fail({
+      kind: 'not-built',
+      verb: spec.verb,
+      message: "'watch --inspect' is not built yet",
+    });
+  }
+  const config = toCpgConfigInput(resolved);
+  const engine = buildEngine({ version: opts.manifest.version, consumers: config.consumers });
+  const session = await connectStore(engine, targetOf(resolved), false);
+  let end: WatchEnd;
+  try {
+    end = await streamWatch({
+      engine,
+      request: {
+        config: {
+          ...config,
+          trailingMs: config.watch.trailingMs,
+          ceilingMs: config.watch.ceilingMs,
+        },
+        session,
+      },
+      io,
+      quiet: values['quiet'] === true,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(startInspector !== undefined ? { inspector: { start: startInspector, config } } : {}),
+    });
+  } finally {
+    await session.close();
+  }
+  if (end.kind === 'signal') {
+    throw new Fail({ kind: 'interrupted', committed: 0, pending: 0 });
+  }
+  if (end.kind === 'error') {
+    throw new Fail(end.error);
+  }
+  if (end.kind === 'inspector') {
+    throw new Fail({ kind: 'inspector', message: end.message });
+  }
+  return EXIT.OK;
 }
 
 type Values = Record<string, string | boolean | undefined>;
@@ -702,7 +746,7 @@ function parseFlags(
 
 const isPort = (v: string): boolean => /^\d{1,5}$/.test(v) && Number(v) >= 1 && Number(v) <= 65535;
 
-// SEAT: used only by verbs without a handler yet (watch, query).
+// SEAT: used only by verbs without a handler yet (query).
 function storeTarget(spec: CommandSpec, values: Values): StoreTarget | null {
   if (spec.session === 'none') return null;
   const str = (k: string, d: string) => (typeof values[k] === 'string' ? values[k] : d);
