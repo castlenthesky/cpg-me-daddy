@@ -4,7 +4,7 @@
 // Exercised by tools/check-cli-bin.mjs, which spawns the built dist/main.js.
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createEngine } from '@cpg/engine';
 import { resolveInspectorBin, spawnInspector } from './inspector-process';
 import type { Io, Manifest } from './io';
@@ -40,11 +40,18 @@ const io: Io = {
 const controller = new AbortController();
 process.once('SIGINT', () => controller.abort());
 
+const rawGrammarDir = process.env['CPG_GRAMMAR_DIR'];
+const grammarDir =
+  rawGrammarDir !== undefined && rawGrammarDir !== ''
+    ? resolve(process.cwd(), rawGrammarDir)
+    : undefined;
+
 // Composition root (03-architecture §2 rule 3): run() calls createEngine once the config has
 // resolved, and the engine builds its own sinks from the consumer switches (owner decision 5a).
 void run(process.argv.slice(2), io, {
   manifest,
-  createEngine,
+  createEngine: (config) =>
+    createEngine(grammarDir === undefined ? config : { ...config, grammarDir }),
   startInspector: (handlers) =>
     resolveInspectorBin().then((inspectorBin) =>
       spawnInspector(inspectorBin, { ...handlers, log: (line) => io.err(line) }),

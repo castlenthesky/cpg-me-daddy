@@ -2,25 +2,35 @@
 // rule 3, check-deps rule engine-call-site); this package defines it and never calls it.
 
 import { realpath } from 'node:fs/promises';
+import { createExtractor, type Extractor } from '@cpg/extract';
 import {
   CPG_SCHEMA,
   isWorkspacePath,
+  NODE_LABELS,
   WORKSPACE_ROOT,
   type GraphPayload,
   type SchemaDocInput,
   type WorkspacePath,
 } from '@cpg/model';
-import type { Extractor } from '@cpg/extract';
 import {
   BUILTIN_LANGUAGES,
   createLanguageRegistry,
+  createParseService,
   type ParseService,
   type ParseServiceOptions,
 } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
 import { createMemoryStore, type GraphSink, type MemoryStore } from '@cpg/sink';
-import type { EdgeRow, GraphStore, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
+import {
+  toWriteOp,
+  type EdgeRow,
+  type GraphStore,
+  type NodeRow,
+  type WriteOp,
+  type WriteReceipt,
+} from '@cpg/store';
 import { createParcelWatchBackend, type TimerApi, type WatchBackend } from '@cpg/watch';
+import { attachSourceFile, createCodeTier, type CodeTierResult } from './code-tier';
 import { createNullGraphStore } from './null-graph-store';
 import type {
   ConsumerSwitches,
@@ -40,7 +50,7 @@ import type {
 } from './port';
 import { verifyStore } from './verify';
 import { filesystemTier, type FilesystemTier } from './walker/filesystem-tier';
-import { walkWorkspace, type WalkResult } from './walker/walker';
+import { walkWorkspace, type WalkedFile, type WalkResult } from './walker/walker';
 import { runWatch, type IndexRun } from './watch';
 
 export interface EngineConfig {
@@ -52,7 +62,6 @@ export interface EngineConfig {
    * The grammar directory the front door chose, absolute (controller decision 100; C-PARSE I11's
    * `explicit` rule: the CLI passes CPG_GRAMMAR_DIR resolved against its cwd). Absent: the grammar
    * package's own directory. A directory that does not hold the grammar is a warning, never fatal.
-   * SEAT (U6a.3-2 RED): accepted and unused.
    */
   readonly grammarDir?: string;
 }
@@ -87,12 +96,12 @@ export interface EngineDeps {
   readonly timers?: TimerApi;
   /**
    * The code tier's extractor; its `grammars` are the languages the code tier runs for (decision
-   * 96). Default: `createExtractor()` from @cpg/extract. SEAT (U6a.3-2 RED): accepted and unused.
+   * 96). Default: `createExtractor()` from @cpg/extract.
    */
   readonly extractor?: Extractor;
   /**
    * Builds the engine's one ParseService, on the first file the code tier parses (decision 100).
-   * Default: @cpg/parse's `createParseService`. SEAT (U6a.3-2 RED): accepted and unused.
+   * Default: @cpg/parse's `createParseService`.
    */
   readonly createParseService?: (options: ParseServiceOptions) => ParseService;
 }
@@ -158,6 +167,37 @@ function stalePaths(payload: GraphPayload, walk: WalkResult): readonly Workspace
   return [...removals];
 }
 
+const FILE_OWNED_LABELS: ReadonlySet<string> = new Set(
+  NODE_LABELS.filter((spec) => spec.ownership === 'file-owned').map((spec) => spec.label),
+);
+
+interface CodeTierEntry {
+  readonly file: WalkedFile & { readonly language: string };
+  readonly result: CodeTierResult;
+}
+
+interface FailureGroup {
+  readonly language: string;
+  readonly code: string;
+  readonly firstPath: WorkspacePath;
+  readonly firstMessage: string;
+  count: number;
+}
+
+/**
+ * Every `node.data.file` string held by a file-owned node in `payload` (decision 101): decides
+ * which removed paths need a `delete-file` op.
+ */
+function heldCodeFiles(payload: GraphPayload): ReadonlySet<string> {
+  const held = new Set<string>();
+  for (const node of payload.nodes) {
+    if (!FILE_OWNED_LABELS.has(node.type)) continue;
+    const file = node.data?.['file'];
+    if (typeof file === 'string') held.add(file);
+  }
+  return held;
+}
+
 function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
   const parts: string[] = [];
   if (consumers.store === 'falkor') parts.push('consumers.store falkor (FalkorStore, U5)');
@@ -175,6 +215,13 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
   }
   registry.freeze();
   const languageOf = (p: string): string | undefined => registry.languageForPath(p);
+  const extractor = deps.extractor ?? createExtractor();
+  const codeTier = createCodeTier({
+    registry,
+    extractor,
+    createParseService: deps.createParseService ?? createParseService,
+    ...(config.grammarDir !== undefined ? { grammarDir: config.grammarDir } : {}),
+  });
 
   async function writeAll(op: WriteOp): Promise<WriteReceipt> {
     // Sequential by design: write each sink in order, never Promise.all.
@@ -188,20 +235,24 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
   }
 
   /**
-   * Walks the workspace and writes one `merge-filesystem` op. With a session, reads the built-in
-   * memory store first so paths the walk did not find for their label are removed across every sink
-   * in that same op (decision 77, S25-2); a dry run (`session === null`) reads nothing and writes
-   * with `removals: []` to a NullGraphStore.
+   * Walks the workspace and writes one `merge-filesystem` op, followed when `codeTierOn` is true by
+   * one `replace-file` per extracted file (walk order) and one `delete-file` per removed path that
+   * held file-owned nodes (with a session). With a session, reads the built-in memory store once so
+   * paths the walk did not find for their label are removed across every sink (decisions 77, 101);
+   * a dry run (`session === null`) reads nothing and writes `merge-filesystem` and `replace-file`
+   * ops (no `delete-file`s) to a NullGraphStore.
    */
   async function runIndex(
     req: IndexRequest,
     onProgress: (progress: IndexProgress) => void,
     signal: AbortSignal,
+    codeTierOn: boolean,
   ): Promise<IndexRun> {
     if (req.resumeFrom !== null) {
       throw new Error('SEAT: resumeFrom: v1 index is not resumable; pass null');
     }
     const start = performance.now();
+    const codeResults: CodeTierEntry[] = [];
     const walkResult = await walkWorkspace({
       root: req.config.root,
       languageOf,
@@ -209,6 +260,21 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       ...(req.config.exclude !== undefined ? { exclude: req.config.exclude } : {}),
       ...(req.config.maxFileSizeBytes !== undefined
         ? { maxFileSizeBytes: req.config.maxFileSizeBytes }
+        : {}),
+      ...(codeTierOn
+        ? {
+            onFile: async (file, bytes) => {
+              if (signal.aborted || file.language === null || !codeTier.covers(file.language)) {
+                return;
+              }
+              const coveredFile: WalkedFile & { readonly language: string } = {
+                ...file,
+                language: file.language,
+              };
+              const result = await codeTier.run(coveredFile, bytes);
+              codeResults.push({ file: coveredFile, result });
+            },
+          }
         : {}),
     });
     onProgress({ phase: 'walked', filesTotal: walkResult.files.length });
@@ -223,14 +289,51 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       filesFailed: stats.filesFailed,
     };
 
-    const warnings: string[] = [
-      'the code tier is not built yet (U6a): only the filesystem tier was indexed',
-    ];
-    if (walk.filesIndexed === 0) {
-      warnings.push(`no files indexed under ${req.config.root}`);
+    const warnings: string[] = [];
+    if (codeTierOn) {
+      const uncovered = new Set<string>();
+      for (const file of walkResult.files) {
+        if (file.language !== null && !codeTier.covers(file.language)) {
+          uncovered.add(file.language);
+        }
+      }
+      if (uncovered.size > 0) {
+        const langs = [...uncovered].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        warnings.push(`no extractor for ${langs.join(', ')} yet (U6b)`);
+      }
+
+      const failureGroups = new Map<string, FailureGroup>();
+      for (const entry of codeResults) {
+        if (entry.result.kind !== 'failed') continue;
+        const key = JSON.stringify([entry.file.language, entry.result.code]);
+        const group = failureGroups.get(key);
+        if (group !== undefined) {
+          group.count += 1;
+        } else {
+          failureGroups.set(key, {
+            language: entry.file.language,
+            code: entry.result.code,
+            firstPath: entry.file.path,
+            firstMessage: entry.result.message,
+            count: 1,
+          });
+        }
+      }
+      for (const group of failureGroups.values()) {
+        warnings.push(
+          `code tier: ${String(group.count)} ${group.language} file${group.count === 1 ? '' : 's'} at the FILE tier only (${group.code}): ${group.firstPath}: ${group.firstMessage}`,
+        );
+      }
+    } else {
+      warnings.push(
+        'the watch does not run the code tier yet (U6a.3-3): only the filesystem tier is watched',
+      );
     }
 
     if (signal.aborted) {
+      if (walk.filesIndexed === 0) {
+        warnings.push(`no files indexed under ${req.config.root}`);
+      }
       return {
         report: {
           root: req.config.root,
@@ -251,33 +354,84 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
     }
 
     const tier = filesystemTier(walkResult);
-
+    const fileCounts = new Map<WorkspacePath, { readonly nodes: number; readonly edges: number }>();
     let nodesWritten = 0;
     let edgesWritten = 0;
+
+    async function writeCodeTier(
+      write: (op: WriteOp) => Promise<WriteReceipt>,
+      deletes: readonly WorkspacePath[],
+    ): Promise<void> {
+      /* oxlint-disable no-await-in-loop */
+      for (const entry of codeResults) {
+        if (entry.result.kind !== 'extracted') continue;
+        const { op, attached } = attachSourceFile(
+          toWriteOp(entry.result.file, [], memory.nextWriteSeq()),
+        );
+        if (!attached) {
+          warnings.push(`code tier: ${entry.file.path}: no MODULE, so no SOURCE_FILE edge`);
+        }
+        const receipt = await write(op);
+        nodesWritten += receipt.nodesWritten;
+        edgesWritten += receipt.edgesWritten;
+        fileCounts.set(entry.file.path, {
+          nodes: entry.result.file.nodes.length,
+          edges: op.edges.length,
+        });
+      }
+      for (const file of deletes) {
+        const receipt = await write({ kind: 'delete-file', file, seq: memory.nextWriteSeq() });
+        nodesWritten += receipt.nodesWritten;
+        edgesWritten += receipt.edgesWritten;
+      }
+      /* oxlint-enable no-await-in-loop */
+    }
+
     if (req.session === null) {
       const op = toMergeFilesystemOp(tier);
       const nullStore = createNullGraphStore();
       await nullStore.open();
       try {
         const receipt = await nullStore.write(op);
-        nodesWritten = receipt.nodesWritten;
-        edgesWritten = receipt.edgesWritten;
+        nodesWritten += receipt.nodesWritten;
+        edgesWritten += receipt.edgesWritten;
+        if (codeTierOn) {
+          await writeCodeTier((nextOp) => nullStore.write(nextOp), []);
+        }
       } finally {
         await nullStore.close();
       }
     } else {
-      const removals = stalePaths(await memory.readAll(), walkResult);
+      const payload = await memory.readAll();
+      const removals = stalePaths(payload, walkResult);
       const op = toMergeFilesystemOp(tier, removals);
       const receipt = await writeAll(op);
-      nodesWritten = receipt.nodesWritten;
-      edgesWritten = receipt.edgesWritten;
+      nodesWritten += receipt.nodesWritten;
+      edgesWritten += receipt.edgesWritten;
+      if (codeTierOn) {
+        const held = heldCodeFiles(payload);
+        const deletes = removals.filter((file) => held.has(file));
+        await writeCodeTier(writeAll, deletes);
+      }
+    }
+
+    if (walk.filesIndexed === 0) {
+      warnings.push(`no files indexed under ${req.config.root}`);
     }
 
     onProgress({ phase: 'written', filesTotal: walkResult.files.length });
 
     const files: IndexedFile[] = walkResult.files
       .filter((f) => f.language !== null)
-      .map((f) => ({ path: f.path, revision_id: f.revision_id, nodes: 0, edges: 0 }))
+      .map((f) => {
+        const counts = fileCounts.get(f.path);
+        return {
+          path: f.path,
+          revision_id: f.revision_id,
+          nodes: counts?.nodes ?? 0,
+          edges: counts?.edges ?? 0,
+        };
+      })
       .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
     return {
@@ -337,7 +491,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       onProgress: (progress: IndexProgress) => void,
       signal: AbortSignal,
     ): Promise<IndexReport> {
-      return (await runIndex(req, onProgress, signal)).report;
+      return (await runIndex(req, onProgress, signal, true)).report;
     },
 
     watch(
@@ -349,7 +503,9 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       const backend = deps.watchBackend ?? createParcelWatchBackend({ now: readNow, realpath });
       return runWatch(
         {
-          runIndex,
+          // S32-1: the watch's batches stay filesystem-only until U6a.3-3.
+          runIndex: (indexReq, onProgress, indexSignal) =>
+            runIndex(indexReq, onProgress, indexSignal, false),
           write: writeAll,
           languageOf,
           backend,

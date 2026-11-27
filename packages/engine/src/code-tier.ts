@@ -4,35 +4,44 @@
 // (C-PARSE I19); the walker's revision_id travels through and nothing re-hashes (C-WATCH INV-26).
 // attachSourceFile is ported from f18ee71:packages/engine/src/indexer/source-file.ts (C-EXTRACT Q8),
 // and lineCountOf from f18ee71:packages/engine/src/indexer/index-workspace.ts:204.
-//
-// SEAT (U6a.3-2 RED): every export below throws until the implementation lands.
 
-import type { ExtractedFile, Extractor } from '@cpg/extract';
-import type {
-  GrammarDirOutcome,
-  GrammarSource,
-  LanguageRegistry,
-  ParseService,
-  ParseServiceOptions,
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { ExtractedFile, ExtractOutcome, Extractor } from '@cpg/extract';
+import {
+  resolveGrammarDir,
+  type GrammarDirOutcome,
+  type GrammarSource,
+  type LanguageRegistry,
+  type ParseService,
+  type ParseServiceOptions,
 } from '@cpg/parse';
-import type { WriteOp } from '@cpg/store';
+import type { EdgeRow, WriteOp } from '@cpg/store';
 import type { WalkedFile } from './walker/walker';
 
 /** The replace-file arm of WriteOp. */
 export type ReplaceFileOp = Extract<WriteOp, { readonly kind: 'replace-file' }>;
+
+const UTF8_DECODER = new TextDecoder('utf-8');
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * The text PARSE is handed: `new TextDecoder('utf-8')` over the raw bytes, so a UTF-8 BOM is
  * stripped (column 0 of line 1 is the first character after it) and an invalid sequence becomes
  * U+FFFD. Never throws.
  */
-export function decodeSource(_bytes: Uint8Array): string {
-  throw new Error('SEAT: decodeSource lands in U6a.3-2 (controller decision 100)');
+export function decodeSource(bytes: Uint8Array): string {
+  // REAL
+  return UTF8_DECODER.decode(bytes);
 }
 
 /** The file's line count (ExtractRequest.lineCount, FILE.loc): 0 for empty text, else `text.split('\n').length`. */
-export function lineCountOf(_text: string): number {
-  throw new Error('SEAT: lineCountOf lands in U6a.3-2');
+export function lineCountOf(text: string): number {
+  // REAL
+  return text.length === 0 ? 0 : text.split('\n').length;
 }
 
 /**
@@ -44,9 +53,28 @@ export function lineCountOf(_text: string): number {
  * `describe()` is `node:fs grammar source`.
  */
 export function createDiskGrammarSource(
-  _locate: (packageName: string) => GrammarDirOutcome,
+  locate: (packageName: string) => GrammarDirOutcome,
 ): GrammarSource {
-  throw new Error('SEAT: createDiskGrammarSource lands in U6a.3-2 (controller decision 100)');
+  // REAL
+  return {
+    async load(ref) {
+      const outcome = locate(ref.packageName);
+      if (!outcome.ok) {
+        return { ok: false, message: outcome.message };
+      }
+      const origin = join(outcome.dir, ref.wasmFile);
+      try {
+        const bytes = await readFile(origin);
+        return { ok: true, bytes, origin };
+      } catch (error) {
+        return { ok: false, message: `${origin}: ${errorMessage(error)}` };
+      }
+    },
+
+    describe(): string {
+      return 'node:fs grammar source';
+    },
+  };
 }
 
 /**
@@ -55,11 +83,27 @@ export function createDiskGrammarSource(
  * 'FILE', toKey: op.file, properties: {} }`, after the op's own edges. Pure: a new op, the input
  * untouched. With no MODULE row it returns the same op and `attached: false`: the caller warns.
  */
-export function attachSourceFile(_op: ReplaceFileOp): {
+export function attachSourceFile(op: ReplaceFileOp): {
   readonly op: ReplaceFileOp;
   readonly attached: boolean;
 } {
-  throw new Error('SEAT: attachSourceFile lands in U6a.3-2 (C-EXTRACT Q8)');
+  // REAL
+  const moduleRow = op.nodes.find((row) => row.label === 'MODULE');
+  if (moduleRow === undefined) {
+    return { op, attached: false };
+  }
+  const sourceFileEdge: EdgeRow = {
+    type: 'SOURCE_FILE',
+    fromLabel: 'MODULE',
+    fromKey: moduleRow.key,
+    toLabel: 'FILE',
+    toKey: op.file,
+    properties: {},
+  };
+  return {
+    op: { ...op, edges: [...op.edges, sourceFileEdge] },
+    attached: true,
+  };
 }
 
 export interface CodeTierOptions {
@@ -101,6 +145,74 @@ export interface CodeTier {
   run(file: WalkedFile & { readonly language: string }, bytes: Uint8Array): Promise<CodeTierResult>;
 }
 
-export function createCodeTier(_options: CodeTierOptions): CodeTier {
-  throw new Error('SEAT: createCodeTier lands in U6a.3-2 (controller decisions 96, 100)');
+export function createCodeTier(options: CodeTierOptions): CodeTier {
+  // REAL
+  const { registry, extractor, createParseService, grammarDir } = options;
+  const covered = new Set<string>(extractor.grammars);
+  let service: ParseService | undefined;
+
+  function getService(): ParseService {
+    if (service === undefined) {
+      const source = createDiskGrammarSource((packageName) =>
+        resolveGrammarDir({
+          packageName,
+          ...(grammarDir !== undefined ? { explicit: grammarDir } : {}),
+          resolvePackageJson: (p) => require.resolve(`${p}/package.json`),
+        }),
+      );
+      service = createParseService({ registry, source });
+    }
+    return service;
+  }
+
+  return {
+    covers(language: string | null): boolean {
+      return language !== null && covered.has(language);
+    },
+
+    async run(
+      file: WalkedFile & { readonly language: string },
+      bytes: Uint8Array,
+    ): Promise<CodeTierResult> {
+      try {
+        const parseService = getService();
+        const text = decodeSource(bytes);
+        const parsed = await parseService.parse({
+          key: file.path,
+          text,
+          language: file.language,
+        });
+        if (!parsed.ok) {
+          return { kind: 'failed', code: parsed.error.code, message: parsed.error.message };
+        }
+
+        let extracted: ExtractOutcome;
+        try {
+          extracted = extractor.extract({
+            path: file.path,
+            grammarId: file.language,
+            root: parsed.handle.root,
+            revision_id: file.revision_id,
+            lineCount: lineCountOf(text),
+          });
+        } finally {
+          parsed.handle.release();
+        }
+
+        if (extracted.kind === 'ok') {
+          return { kind: 'extracted', file: extracted.file };
+        }
+        if (extracted.kind === 'truncated') {
+          return {
+            kind: 'failed',
+            code: 'truncated',
+            message: `extraction truncated at ${extracted.truncation.limit} (${String(extracted.truncation.limitValue)})`,
+          };
+        }
+        return { kind: 'failed', code: extracted.error.code, message: extracted.error.message };
+      } catch (error) {
+        return { kind: 'failed', code: 'internal', message: errorMessage(error) };
+      }
+    },
+  };
 }

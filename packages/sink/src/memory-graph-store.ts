@@ -119,6 +119,7 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
   // Per file, the code tier's last seq and revision (INV-13, decision 97). It outlives the FILE, so
   // a file's seq stays monotone across its removal and return.
   const codeTier = new Map<WorkspacePath, CodeTierFile>();
+  let highestSeq = -1;
 
   function assertOpen(): void {
     if (!isOpen) {
@@ -142,6 +143,7 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
         const result = writeFileOp(cell.get(), op, codeTier.get(op.file));
         cell.set(result.graph);
         codeTier.set(op.file, result.file);
+        highestSeq = Math.max(highestSeq, result.file.seq);
         if (result.audit !== undefined) audit.push({ at: now(), ...result.audit });
         return { ...result.receipt, durationMs: Math.max(0, now() - start) };
       }
@@ -334,7 +336,9 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
     },
 
     nextWriteSeq(): number {
-      throw new Error('SEAT: nextWriteSeq lands in U6a.3-2 (controller decision 98a)');
+      // REAL
+      highestSeq += 1;
+      return highestSeq;
     },
 
     async readAll(): Promise<GraphPayload> {
