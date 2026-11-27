@@ -616,7 +616,6 @@ describe('GraphVisualizer.applyDelta', () => {
     const before = { framed: surface.framed.length, starts: [...surface.starts] };
     viz.applyDelta(
       delta({
-        producer: 'code',
         removedNodeIds: ['m'],
         addedNodes: [node('c', 'CALL'), node('t', 'METHOD'), node('m', 'MODULE')],
         addedEdges: [
