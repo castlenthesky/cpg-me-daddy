@@ -103,7 +103,9 @@ const batch = (seq: number, total: number, paths = ['src/a.ts']): WatchEvent => 
   changes: paths
     .filter(isWorkspacePath)
     .map((path) => ({ kind: 'changed', entry: 'file', path, observedAt: 1 })),
-  write: { nodesWritten: 2, edgesWritten: 1, statementCount: 1 },
+  // Post-implementation (sabotage #8): write counts unlike any change count, so a batch line that
+  // prints them instead of changes.length fails.
+  write: { nodesWritten: 5, edgesWritten: 6, statementCount: 1 },
   latencyMs: { t0_t1: null, t1_t2: 3, t2_t3: total - 3, total },
 });
 const warning = (seq: number, message: string): WatchEvent => ({
