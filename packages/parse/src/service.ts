@@ -1,5 +1,7 @@
-// REAL: grammar loading with provenance and the ABI gate, parse, handle lifetime, dispose.
+// REAL: grammar loading with provenance and the ABI gate, parse, handle lifetime, dispose, and the
+// runtime wasm from ParseServiceOptions.runtimeDir (stop-list 192).
 // SEAT: retain/releaseDocument (the retained-tree cache, I25/I26). No caller exists yet, so both throw.
+import { isAbsolute, join } from 'node:path';
 import {
   Language,
   LANGUAGE_VERSION,
@@ -41,6 +43,19 @@ export interface ParseServiceOptions {
    * live ABI bindings. A test passes a stand-in to fail init, or to narrow or blank the ABI range.
    */
   readonly runtime?: ParserRuntime;
+  /**
+   * The folder that holds web-tree-sitter's own runtime, `web-tree-sitter.wasm` (C-PARSE Q1,
+   * stop-list 192): the default runtime's `Parser.init` reads it from `<runtimeDir>/web-tree-sitter.wasm`
+   * (emscripten's `locateFile`), never from beside web-tree-sitter's module in node_modules, and a
+   * missing or unreadable file there is not retried anywhere else.
+   *
+   * - Absolute only: a relative or empty folder is refused at init, `runtime-unavailable` saying it
+   *   must be an absolute path, never resolved against the cwd (I10).
+   * - A failed init is `runtime-unavailable` whose message names `<runtimeDir>/web-tree-sitter.wasm`,
+   *   and it is not memoised (I15): once the file is there, the same service parses.
+   * - Absent: web-tree-sitter finds the file beside its own module. Ignored when `runtime` is given.
+   */
+  readonly runtimeDir?: string;
 }
 
 interface LoadedGrammar {
@@ -81,10 +96,35 @@ const WEB_TREE_SITTER: ParserRuntime = {
   }),
 };
 
+const RUNTIME_WASM = 'web-tree-sitter.wasm';
+
+/**
+ * WEB_TREE_SITTER with its runtime wasm read from `runtimeDir` (ParseServiceOptions.runtimeDir): `init`
+ * is `Parser.init({ locateFile })`, mapping each file web-tree-sitter asks for to
+ * `<runtimeDir>/<file>`. A relative or empty `runtimeDir` makes `init` reject without calling
+ * `Parser.init`. A rejection's message names `<runtimeDir>/web-tree-sitter.wasm`.
+ */
+function webTreeSitterAt(runtimeDir: string): ParserRuntime {
+  return {
+    async init() {
+      if (!isAbsolute(runtimeDir)) {
+        throw new Error(`runtimeDir must be an absolute path, got '${runtimeDir}'`);
+      }
+      try {
+        await Parser.init({ locateFile: (file: string) => join(runtimeDir, file) });
+      } catch (cause) {
+        throw new Error(`${join(runtimeDir, RUNTIME_WASM)}: ${String(cause)}`, { cause });
+      }
+    },
+    abiBindings: () => WEB_TREE_SITTER.abiBindings(),
+  };
+}
+
 export function createParseService({
   registry,
   source,
-  runtime = WEB_TREE_SITTER,
+  runtimeDir,
+  runtime = runtimeDir === undefined ? WEB_TREE_SITTER : webTreeSitterAt(runtimeDir),
 }: ParseServiceOptions): ParseService {
   const abi = createAbiGate(runtime);
   let ready: Promise<ParseError | undefined> | undefined;
