@@ -116,6 +116,14 @@ export interface CodeTierFailure {
   readonly message: string;
 }
 
+interface FailureGroup {
+  readonly language: string;
+  readonly code: string;
+  readonly firstPath: WorkspacePath;
+  readonly firstMessage: string;
+  count: number;
+}
+
 /**
  * The code tier's failure warnings (decision 100; one text for index() and the watch): one per
  * (language, code) group of `failures` whose key is not yet in `reported`, in the order each group
@@ -128,9 +136,32 @@ export function failureWarnings(
   failures: readonly CodeTierFailure[],
   reported: Set<string>,
 ): readonly string[] {
-  // SEAT (U6a.3-3)
-  void [failures, reported];
-  throw new Error('SEAT: failureWarnings (U6a.3-3)');
+  // REAL
+  const groups = new Map<string, FailureGroup>();
+  for (const failure of failures) {
+    const key = JSON.stringify([failure.language, failure.code]);
+    if (reported.has(key)) continue;
+    const existing = groups.get(key);
+    if (existing !== undefined) {
+      existing.count += 1;
+    } else {
+      groups.set(key, {
+        language: failure.language,
+        code: failure.code,
+        firstPath: failure.path,
+        firstMessage: failure.message,
+        count: 1,
+      });
+    }
+  }
+  const out: string[] = [];
+  for (const [key, group] of groups) {
+    reported.add(key);
+    out.push(
+      `code tier: ${String(group.count)} ${group.language} file${group.count === 1 ? '' : 's'} at the FILE tier only (${group.code}): ${group.firstPath}: ${group.firstMessage}`,
+    );
+  }
+  return out;
 }
 
 export interface CodeTierOptions {

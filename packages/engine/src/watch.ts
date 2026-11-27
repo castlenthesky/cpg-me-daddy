@@ -14,7 +14,7 @@ import {
   type GraphNode,
   type WorkspacePath,
 } from '@cpg/model';
-import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
+import { toWriteOp, type EdgeRow, type NodeRow, type WriteOp, type WriteReceipt } from '@cpg/store';
 import {
   createWatchSession,
   type EntryKind,
@@ -25,7 +25,13 @@ import {
   type WatchSession,
   type WatchSink,
 } from '@cpg/watch';
-import type { CodeTier, ReplaceFileOp } from './code-tier';
+import {
+  attachSourceFile,
+  failureWarnings,
+  type CodeTier,
+  type CodeTierFailure,
+  type ReplaceFileOp,
+} from './code-tier';
 import type {
   IndexProgress,
   IndexReport,
@@ -208,14 +214,30 @@ function nodeIdFor(label: NodeRow['label'], key: string): string {
   return makeNodeId({ form: label === 'DIRECTORY' ? 'directory' : 'file', path: key });
 }
 
+function cloneProperty(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneProperty);
+  if (typeof value === 'object' && value !== null) {
+    const copy: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      copy[key] = cloneProperty(entry);
+    }
+    return copy;
+  }
+  return value;
+}
+
 function pruneProperties(properties: NodeRow['properties']): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(properties)) {
     if (value !== null && value !== undefined) {
-      out[key] = value;
+      out[key] = cloneProperty(value);
     }
   }
   return out;
+}
+
+function endpointId(label: NodeRow['label'], key: string): string {
+  return label === 'FILE' || label === 'DIRECTORY' ? nodeIdFor(label, key) : key;
 }
 
 function rowToNode(row: NodeRow): GraphNode {
@@ -377,18 +399,23 @@ export type DeleteFileOp = Extract<WriteOp, { readonly kind: 'delete-file' }>;
  * a delete-file of that file removes from the store.
  */
 export class HeldCode {
+  private readonly byFile = new Map<WorkspacePath, readonly string[]>();
+
   /** Copies `entries`; an entry with no ids is not held. */
   constructor(entries: ReadonlyMap<WorkspacePath, readonly string[]>) {
-    // SEAT (U6a.3-3)
-    void entries;
-    throw new Error('SEAT: HeldCode (U6a.3-3)');
+    // REAL
+    for (const [file, ids] of entries) {
+      if (ids.length > 0) {
+        this.byFile.set(file, [...ids]);
+      }
+    }
   }
 
   /** The ids held for `file`, in the order they were held; `[]` when it holds none. */
   idsOf(file: WorkspacePath): readonly string[] {
-    // SEAT (U6a.3-3)
-    void file;
-    throw new Error('SEAT: HeldCode.idsOf (U6a.3-3)');
+    // REAL
+    const ids = this.byFile.get(file);
+    return ids === undefined ? [] : [...ids];
   }
 
   /**
@@ -396,23 +423,31 @@ export class HeldCode {
    * order; never a file that only shares the prefix (`pkg2/a.py` is not under `pkg`).
    */
   filesAt(path: WorkspacePath): readonly WorkspacePath[] {
-    // SEAT (U6a.3-3)
-    void path;
-    throw new Error('SEAT: HeldCode.filesAt (U6a.3-3)');
+    // REAL
+    const prefix = `${path}/`;
+    const files: WorkspacePath[] = [];
+    for (const file of this.byFile.keys()) {
+      if (file === path || file.startsWith(prefix)) {
+        files.push(file);
+      }
+    }
+    return files.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   }
 
   /** Holds `ids` (copied) for `file`, replacing what it held; an empty `ids` forgets the file. */
   hold(file: WorkspacePath, ids: readonly string[]): void {
-    // SEAT (U6a.3-3)
-    void [file, ids];
-    throw new Error('SEAT: HeldCode.hold (U6a.3-3)');
+    // REAL
+    if (ids.length === 0) {
+      this.byFile.delete(file);
+      return;
+    }
+    this.byFile.set(file, [...ids]);
   }
 
   /** Forgets `file`; a file it does not hold is a no-op. */
   forget(file: WorkspacePath): void {
-    // SEAT (U6a.3-3)
-    void file;
-    throw new Error('SEAT: HeldCode.forget (U6a.3-3)');
+    // REAL
+    this.byFile.delete(file);
   }
 }
 
@@ -439,9 +474,40 @@ export function planCodeWrites(
   languageOf: (path: string) => string | undefined,
   covers: (language: string | null) => boolean,
 ): CodeWritePlan {
-  // SEAT (U6a.3-3)
-  void [changes, held, languageOf, covers];
-  throw new Error('SEAT: planCodeWrites (U6a.3-3)');
+  // REAL
+  const deletes: { readonly change: number; readonly file: WorkspacePath }[] = [];
+  const replaces: { readonly change: number; readonly language: string }[] = [];
+  const seenDeletes = new Set<WorkspacePath>();
+
+  for (let i = 0; i < changes.length; i += 1) {
+    const change = changes[i];
+    if (change === undefined) continue;
+    const removePath =
+      change.kind === 'deleted'
+        ? change.path
+        : change.kind === 'moved'
+          ? change.fromPath
+          : undefined;
+    if (removePath !== undefined) {
+      for (const file of held.filesAt(removePath)) {
+        if (seenDeletes.has(file)) continue;
+        seenDeletes.add(file);
+        deletes.push({ change: i, file });
+      }
+    }
+    if (
+      (change.kind === 'created' || change.kind === 'changed' || change.kind === 'moved') &&
+      change.entry === 'file' &&
+      change.revision_id !== undefined
+    ) {
+      const language = languageOf(change.path);
+      if (language !== undefined && covers(language)) {
+        replaces.push({ change: i, language });
+      }
+    }
+  }
+
+  return { deletes, replaces };
 }
 
 /**
@@ -466,9 +532,58 @@ export function toCodeDelta(
   removed: readonly string[],
   seq: number,
 ): GraphDelta | undefined {
-  // SEAT (U6a.3-3)
-  void [op, removed, seq];
-  throw new Error('SEAT: toCodeDelta (U6a.3-3)');
+  // REAL
+  const removedNodeIds = [...removed];
+  if (op.kind === 'delete-file') {
+    if (removedNodeIds.length === 0) return undefined;
+    return {
+      seq,
+      file: op.file,
+      revision_id: '',
+      producer: 'code',
+      addedNodes: [],
+      addedEdges: [],
+      removedNodeIds,
+    };
+  }
+
+  const addedNodes: GraphNode[] = [];
+  for (const row of op.nodes) {
+    if (row.label === 'FILE') continue;
+    const data = pruneProperties(row.properties);
+    const name = typeof data['name'] === 'string' ? data['name'] : undefined;
+    addedNodes.push({
+      id: row.key,
+      type: row.label,
+      ...(name !== undefined ? { name } : {}),
+      data,
+    });
+  }
+
+  const addedEdges: GraphEdge[] = [];
+  for (const edge of op.edges) {
+    const data = pruneProperties(edge.properties);
+    addedEdges.push({
+      source: endpointId(edge.fromLabel, edge.fromKey),
+      target: endpointId(edge.toLabel, edge.toKey),
+      type: edge.type,
+      ...(Object.keys(data).length > 0 ? { data } : {}),
+    });
+  }
+
+  if (addedNodes.length === 0 && addedEdges.length === 0 && removedNodeIds.length === 0) {
+    return undefined;
+  }
+
+  return {
+    seq,
+    file: op.file,
+    revision_id: op.revision_id,
+    producer: 'code',
+    addedNodes,
+    addedEdges,
+    removedNodeIds,
+  };
 }
 
 /**
@@ -671,30 +786,179 @@ export async function runWatch(
           indexRun.walk.files.map((file) => file.path),
           indexRun.walk.directories.map((dir) => dir.path),
         );
+        const heldCode = new HeldCode(indexRun.heldCode);
+        const reported = new Set<string>(indexRun.reportedFailures);
         let graphSeq = 0;
         const { report } = indexRun;
         const sink: WatchSink = {
           async onBatch(batch) {
             if (stop !== undefined) return;
-            let receipt: WriteReceipt | undefined;
+            let nodesWritten = 0;
+            let edgesWritten = 0;
+            let statementCount = 0;
+            const deleteOps = new Map<number, DeleteFileOp[]>();
+            const replaceOps = new Map<
+              number,
+              { readonly op: ReplaceFileOp; readonly ids: readonly string[] }
+            >();
+            const deletedFiles: WorkspacePath[] = [];
+            const failures: CodeTierFailure[] = [];
+            const noModuleWarnings: string[] = [];
+
+            const addReceipt = (receipt: WriteReceipt): void => {
+              nodesWritten += receipt.nodesWritten;
+              edgesWritten += receipt.edgesWritten;
+              statementCount += receipt.statementCount;
+            };
+
             if (batch.changes.length > 0) {
-              receipt = await deps.write(toBatchOp(batch.changes, deps.languageOf));
+              const plan = planCodeWrites(batch.changes, heldCode, deps.languageOf, (language) =>
+                deps.codeTier.covers(language),
+              );
+              const fsOp = toBatchOp(batch.changes, deps.languageOf);
+
+              /* oxlint-disable no-await-in-loop */
+              for (const entry of plan.deletes) {
+                if (stop !== undefined) return;
+                const delOp: DeleteFileOp = {
+                  kind: 'delete-file',
+                  file: entry.file,
+                  seq: deps.nextWriteSeq(),
+                };
+                addReceipt(await deps.write(delOp));
+                deletedFiles.push(entry.file);
+                const list = deleteOps.get(entry.change);
+                if (list !== undefined) list.push(delOp);
+                else deleteOps.set(entry.change, [delOp]);
+              }
+
+              if (stop !== undefined) return;
+              addReceipt(await deps.write(fsOp));
+
+              for (const entry of plan.replaces) {
+                if (stop !== undefined) return;
+                const change = batch.changes[entry.change];
+                if (change === undefined || change.revision_id === undefined) continue;
+                let bytes: Uint8Array;
+                try {
+                  bytes = await probe.read(change.path);
+                } catch (error) {
+                  failures.push({
+                    path: change.path,
+                    language: entry.language,
+                    code: 'read-failed',
+                    message: errorMessage(error),
+                  });
+                  continue;
+                }
+                if (stop !== undefined) return;
+                const result = await deps.codeTier.run(
+                  {
+                    path: change.path,
+                    parent: parentOf(change.path),
+                    language: entry.language,
+                    sizeBytes: change.sizeBytes ?? 0,
+                    revision_id: change.revision_id,
+                  },
+                  bytes,
+                );
+                if (stop !== undefined) return;
+                if (result.kind === 'failed') {
+                  failures.push({
+                    path: change.path,
+                    language: entry.language,
+                    code: result.code,
+                    message: result.message,
+                  });
+                  continue;
+                }
+                const { op: repOp, attached } = attachSourceFile(
+                  toWriteOp(result.file, [], deps.nextWriteSeq()),
+                );
+                if (!attached) {
+                  noModuleWarnings.push(
+                    `code tier: ${change.path}: no MODULE, so no SOURCE_FILE edge`,
+                  );
+                }
+                addReceipt(await deps.write(repOp));
+                replaceOps.set(entry.change, {
+                  op: repOp,
+                  ids: result.file.nodes.map((node) => node.id),
+                });
+              }
+              /* oxlint-enable no-await-in-loop */
             }
+
             const at = deps.now();
             if (stop !== undefined) return;
+
+            const advanceHeldCode = (): void => {
+              for (const file of deletedFiles) {
+                heldCode.forget(file);
+              }
+              for (const { op: repOp, ids } of replaceOps.values()) {
+                heldCode.hold(repOp.file, ids);
+              }
+            };
+
+            const emitCodeWarnings = (): void => {
+              if (stop !== undefined) return;
+              for (const message of failureWarnings(failures, reported)) {
+                emit({ kind: 'warning', message }, at);
+              }
+              for (const message of noModuleWarnings) {
+                emit({ kind: 'warning', message }, at);
+              }
+            };
+
             if (batch.cause === 'initial') {
               for (const change of batch.changes) {
                 held.advance(change);
               }
+              advanceHeldCode();
               emit({ kind: 'ready', root: req.config.root, report, graphSeq: 0 }, at);
               readyEmitted = true;
               flushWarnings();
+              emitCodeWarnings();
               return;
             }
-            if (receipt === undefined) return;
-            const deltas = toBatchDeltas(batch.changes, deps.languageOf, held, graphSeq + 1);
-            const lastDelta = deltas.at(-1);
-            if (lastDelta !== undefined) graphSeq = lastDelta.seq;
+
+            if (batch.changes.length === 0) return;
+
+            const deltas: GraphDelta[] = [];
+            for (let i = 0; i < batch.changes.length; i += 1) {
+              const change = batch.changes[i];
+              if (change === undefined) continue;
+              const fsDeltas = toBatchDeltas([change], deps.languageOf, held, graphSeq + 1);
+              for (const delta of fsDeltas) {
+                deltas.push(delta);
+                graphSeq = delta.seq;
+              }
+              const deletesForChange = deleteOps.get(i);
+              if (deletesForChange !== undefined) {
+                for (const delOp of deletesForChange) {
+                  const codeDelta = toCodeDelta(delOp, heldCode.idsOf(delOp.file), graphSeq + 1);
+                  if (codeDelta !== undefined) {
+                    deltas.push(codeDelta);
+                    graphSeq = codeDelta.seq;
+                  }
+                }
+              }
+              const replaceForChange = replaceOps.get(i);
+              if (replaceForChange !== undefined) {
+                const codeDelta = toCodeDelta(
+                  replaceForChange.op,
+                  heldCode.idsOf(replaceForChange.op.file),
+                  graphSeq + 1,
+                );
+                if (codeDelta !== undefined) {
+                  deltas.push(codeDelta);
+                  graphSeq = codeDelta.seq;
+                }
+              }
+            }
+            advanceHeldCode();
+
             const t1_t2 = batch.clock.settledAt - batch.clock.firstEventAt;
             const t2_t3 = at - batch.clock.settledAt;
             emit(
@@ -702,17 +966,14 @@ export async function runWatch(
                 kind: 'batch',
                 cause: batch.cause,
                 changes: batch.changes,
-                write: {
-                  nodesWritten: receipt.nodesWritten,
-                  edgesWritten: receipt.edgesWritten,
-                  statementCount: receipt.statementCount,
-                },
+                write: { nodesWritten, edgesWritten, statementCount },
                 latencyMs: { t0_t1: null, t1_t2, t2_t3, total: t1_t2 + t2_t3 },
                 deltas,
                 graphSeq,
               },
               at,
             );
+            emitCodeWarnings();
           },
         };
 

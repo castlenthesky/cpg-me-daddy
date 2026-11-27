@@ -30,7 +30,13 @@ import {
   type WriteReceipt,
 } from '@cpg/store';
 import { createParcelWatchBackend, type TimerApi, type WatchBackend } from '@cpg/watch';
-import { attachSourceFile, createCodeTier, type CodeTierResult } from './code-tier';
+import {
+  attachSourceFile,
+  createCodeTier,
+  failureWarnings,
+  type CodeTierFailure,
+  type CodeTierResult,
+} from './code-tier';
 import { createNullGraphStore } from './null-graph-store';
 import type {
   ConsumerSwitches,
@@ -176,24 +182,22 @@ interface CodeTierEntry {
   readonly result: CodeTierResult;
 }
 
-interface FailureGroup {
-  readonly language: string;
-  readonly code: string;
-  readonly firstPath: WorkspacePath;
-  readonly firstMessage: string;
-  count: number;
-}
-
 /**
- * Every `node.data.file` string held by a file-owned node in `payload` (decision 101): decides
- * which removed paths need a `delete-file` op.
+ * File-owned node ids grouped by their `data.file` string in `payload` order (decisions 101, 102):
+ * decides which removed paths need a `delete-file` op and seeds `IndexRun.heldCode`.
  */
-function heldCodeFiles(payload: GraphPayload): ReadonlySet<string> {
-  const held = new Set<string>();
+function heldCodeFromPayload(payload: GraphPayload): Map<WorkspacePath, string[]> {
+  const held = new Map<WorkspacePath, string[]>();
   for (const node of payload.nodes) {
     if (!FILE_OWNED_LABELS.has(node.type)) continue;
     const file = node.data?.['file'];
-    if (typeof file === 'string') held.add(file);
+    if (typeof file !== 'string' || !isWorkspacePath(file)) continue;
+    const ids = held.get(file);
+    if (ids !== undefined) {
+      ids.push(node.id);
+    } else {
+      held.set(file, [node.id]);
+    }
   }
   return held;
 }
@@ -235,18 +239,17 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
   }
 
   /**
-   * Walks the workspace and writes one `merge-filesystem` op, followed when `codeTierOn` is true by
-   * one `replace-file` per extracted file (walk order) and one `delete-file` per removed path that
-   * held file-owned nodes (with a session). With a session, reads the built-in memory store once so
-   * paths the walk did not find for their label are removed across every sink (decisions 77, 101);
-   * a dry run (`session === null`) reads nothing and writes `merge-filesystem` and `replace-file`
-   * ops (no `delete-file`s) to a NullGraphStore.
+   * Walks the workspace and writes one `merge-filesystem` op, followed by one `replace-file` per
+   * extracted file (walk order) and one `delete-file` per removed path that held file-owned nodes
+   * (with a session). With a session, reads the built-in memory store once so paths the walk did
+   * not find for their label are removed across every sink (decisions 77, 101); a dry run
+   * (`session === null`) reads nothing and writes `merge-filesystem` and `replace-file` ops (no
+   * `delete-file`s) to a NullGraphStore.
    */
   async function runIndex(
     req: IndexRequest,
     onProgress: (progress: IndexProgress) => void,
     signal: AbortSignal,
-    codeTierOn: boolean,
   ): Promise<IndexRun> {
     if (req.resumeFrom !== null) {
       throw new Error('SEAT: resumeFrom: v1 index is not resumable; pass null');
@@ -261,21 +264,17 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       ...(req.config.maxFileSizeBytes !== undefined
         ? { maxFileSizeBytes: req.config.maxFileSizeBytes }
         : {}),
-      ...(codeTierOn
-        ? {
-            onFile: async (file, bytes) => {
-              if (signal.aborted || file.language === null || !codeTier.covers(file.language)) {
-                return;
-              }
-              const coveredFile: WalkedFile & { readonly language: string } = {
-                ...file,
-                language: file.language,
-              };
-              const result = await codeTier.run(coveredFile, bytes);
-              codeResults.push({ file: coveredFile, result });
-            },
-          }
-        : {}),
+      onFile: async (file, bytes) => {
+        if (signal.aborted || file.language === null || !codeTier.covers(file.language)) {
+          return;
+        }
+        const coveredFile: WalkedFile & { readonly language: string } = {
+          ...file,
+          language: file.language,
+        };
+        const result = await codeTier.run(coveredFile, bytes);
+        codeResults.push({ file: coveredFile, result });
+      },
     });
     onProgress({ phase: 'walked', filesTotal: walkResult.files.length });
 
@@ -290,45 +289,30 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
     };
 
     const warnings: string[] = [];
-    if (codeTierOn) {
-      const uncovered = new Set<string>();
-      for (const file of walkResult.files) {
-        if (file.language !== null && !codeTier.covers(file.language)) {
-          uncovered.add(file.language);
-        }
+    const uncovered = new Set<string>();
+    for (const file of walkResult.files) {
+      if (file.language !== null && !codeTier.covers(file.language)) {
+        uncovered.add(file.language);
       }
-      if (uncovered.size > 0) {
-        const langs = [...uncovered].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-        warnings.push(`no extractor for ${langs.join(', ')} yet (U6b)`);
-      }
-
-      const failureGroups = new Map<string, FailureGroup>();
-      for (const entry of codeResults) {
-        if (entry.result.kind !== 'failed') continue;
-        const key = JSON.stringify([entry.file.language, entry.result.code]);
-        const group = failureGroups.get(key);
-        if (group !== undefined) {
-          group.count += 1;
-        } else {
-          failureGroups.set(key, {
-            language: entry.file.language,
-            code: entry.result.code,
-            firstPath: entry.file.path,
-            firstMessage: entry.result.message,
-            count: 1,
-          });
-        }
-      }
-      for (const group of failureGroups.values()) {
-        warnings.push(
-          `code tier: ${String(group.count)} ${group.language} file${group.count === 1 ? '' : 's'} at the FILE tier only (${group.code}): ${group.firstPath}: ${group.firstMessage}`,
-        );
-      }
-    } else {
-      warnings.push(
-        'the watch does not run the code tier yet (U6a.3-3): only the filesystem tier is watched',
-      );
     }
+    if (uncovered.size > 0) {
+      const langs = [...uncovered].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      warnings.push(`no extractor for ${langs.join(', ')} yet (U6b)`);
+    }
+
+    const reportedFailures = new Set<string>();
+    const failures: CodeTierFailure[] = [];
+    for (const entry of codeResults) {
+      if (entry.result.kind === 'failed') {
+        failures.push({
+          path: entry.file.path,
+          language: entry.file.language,
+          code: entry.result.code,
+          message: entry.result.message,
+        });
+      }
+    }
+    warnings.push(...failureWarnings(failures, reportedFailures));
 
     if (signal.aborted) {
       if (walk.filesIndexed === 0) {
@@ -350,21 +334,25 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
           consumers: [],
         },
         walk: walkResult,
-        // SEAT (U6a.3-3): the held code tier and the reported failure groups (IndexRun).
+        // REAL
         heldCode: new Map(),
-        reportedFailures: new Set(),
+        reportedFailures,
       };
     }
 
     const tier = filesystemTier(walkResult);
     const fileCounts = new Map<WorkspacePath, { readonly nodes: number; readonly edges: number }>();
+    const heldCode = new Map<WorkspacePath, readonly string[]>();
     let nodesWritten = 0;
     let edgesWritten = 0;
 
     async function writeCodeTier(
       write: (op: WriteOp) => Promise<WriteReceipt>,
       deletes: readonly WorkspacePath[],
+      trackHeld: Map<WorkspacePath, readonly string[]> | undefined,
     ): Promise<void> {
+      const appliedReplaces: { readonly file: WorkspacePath; readonly ids: readonly string[] }[] =
+        [];
       /* oxlint-disable no-await-in-loop */
       for (const entry of codeResults) {
         if (entry.result.kind !== 'extracted') continue;
@@ -381,6 +369,12 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
           nodes: entry.result.file.nodes.length,
           edges: op.edges.length,
         });
+        if (receipt.applied) {
+          appliedReplaces.push({
+            file: entry.file.path,
+            ids: entry.result.file.nodes.map((node) => node.id),
+          });
+        }
       }
       for (const file of deletes) {
         const receipt = await write({ kind: 'delete-file', file, seq: memory.nextWriteSeq() });
@@ -388,6 +382,18 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         edgesWritten += receipt.edgesWritten;
       }
       /* oxlint-enable no-await-in-loop */
+      if (trackHeld !== undefined) {
+        for (const file of deletes) {
+          trackHeld.delete(file);
+        }
+        for (const { file, ids } of appliedReplaces) {
+          if (ids.length > 0) {
+            trackHeld.set(file, ids);
+          } else {
+            trackHeld.delete(file);
+          }
+        }
+      }
     }
 
     if (req.session === null) {
@@ -398,9 +404,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         const receipt = await nullStore.write(op);
         nodesWritten += receipt.nodesWritten;
         edgesWritten += receipt.edgesWritten;
-        if (codeTierOn) {
-          await writeCodeTier((nextOp) => nullStore.write(nextOp), []);
-        }
+        await writeCodeTier((nextOp) => nullStore.write(nextOp), [], undefined);
       } finally {
         await nullStore.close();
       }
@@ -411,11 +415,11 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       const receipt = await writeAll(op);
       nodesWritten += receipt.nodesWritten;
       edgesWritten += receipt.edgesWritten;
-      if (codeTierOn) {
-        const held = heldCodeFiles(payload);
-        const deletes = removals.filter((file) => held.has(file));
-        await writeCodeTier(writeAll, deletes);
+      for (const [file, ids] of heldCodeFromPayload(payload)) {
+        heldCode.set(file, ids);
       }
+      const deletes = removals.filter((file) => heldCode.has(file));
+      await writeCodeTier(writeAll, deletes, heldCode);
     }
 
     if (walk.filesIndexed === 0) {
@@ -453,9 +457,9 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         consumers: req.session === null ? [] : sinks.map((s) => s.id),
       },
       walk: walkResult,
-      // SEAT (U6a.3-3): the held code tier and the reported failure groups (IndexRun).
-      heldCode: new Map(),
-      reportedFailures: new Set(),
+      // REAL
+      heldCode,
+      reportedFailures,
     };
   }
 
@@ -497,7 +501,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       onProgress: (progress: IndexProgress) => void,
       signal: AbortSignal,
     ): Promise<IndexReport> {
-      return (await runIndex(req, onProgress, signal, true)).report;
+      return (await runIndex(req, onProgress, signal)).report;
     },
 
     watch(
@@ -509,9 +513,7 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       const backend = deps.watchBackend ?? createParcelWatchBackend({ now: readNow, realpath });
       return runWatch(
         {
-          // S32-1: the watch's batches stay filesystem-only until U6a.3-3.
-          runIndex: (indexReq, onProgress, indexSignal) =>
-            runIndex(indexReq, onProgress, indexSignal, false),
+          runIndex,
           write: writeAll,
           languageOf,
           codeTier,

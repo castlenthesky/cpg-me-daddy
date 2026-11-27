@@ -116,9 +116,8 @@ export function createWatchProbe(root: string, options: WatchProbeOptions = {}):
       return symlinks.has(path);
     },
     async read(path: WorkspacePath): Promise<Uint8Array> {
-      // SEAT (U6a.3-3)
-      void path;
-      throw new Error('SEAT: NodeWatchProbe.read (U6a.3-3)');
+      // REAL
+      return readFile(join(root, path));
     },
   };
 }
