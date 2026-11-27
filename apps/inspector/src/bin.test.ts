@@ -1,10 +1,25 @@
 // The `cpg-inspector` bin, spawned as its own process the way part 3b's CLI will start it (owner
 // decision 9a). It needs the built dist/main.js, which `tsc -b` writes before vitest runs in
-// `bun run check`. A `ws` client plays the page; nothing here needs the page bundle.
+// `bun run check`. A `ws` client plays the page; nothing here needs the real page bundle.
+//
+// Sprint 36 (stop-list 143): a test that fetches the bundle spawns a private copy of the bin's
+// directory, so the page/graph.js beside that copy is the test's alone. The real
+// dist/page/graph.js belongs to tools/build-inspector.test.mjs, which builds, removes and rebuilds
+// it in another worker during the same run: a bin spawned from dist could find it missing at
+// startup and present at the fetch, or the reverse, and log one line where the test expected none
+// or two (bin.test.ts:133 under load).
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
@@ -12,12 +27,14 @@ const ROOT = join(__dirname, '..');
 
 // Post-implementation (U2b.1 part 3b, sabotage group A): a failing assertion must not leave a bin
 // running, or the vitest worker cannot exit and the run hangs. Every bin still running after its
-// test is SIGKILLed.
+// test is SIGKILLed, and every copy of the bin is removed.
 const spawned: ChildProcess[] = [];
+const copies: string[] = [];
 afterEach(() => {
   for (const p of spawned.splice(0)) {
     if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL');
   }
+  for (const dir of copies.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 function binPath(): string {
@@ -33,8 +50,22 @@ function binPath(): string {
   return join(ROOT, entry);
 }
 
-function spawnBin(args: readonly string[] = []) {
-  const proc = spawn(process.execPath, [binPath(), ...args], { stdio: 'pipe' });
+// Sprint 36: the bin's .js files copied into a fresh directory beside them, so `ws` and `@cpg/model`
+// resolve exactly as they do for dist/main.js, and the copy's page/ is empty until the test writes it.
+function copyOfBin(): { bin: string; bundlePath: string } {
+  const bin = binPath();
+  const from = dirname(bin);
+  const to = mkdtempSync(join(from, 'bin-test-'));
+  copies.push(to);
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.js'))
+      copyFileSync(join(from, entry.name), join(to, entry.name));
+  }
+  return { bin: join(to, basename(bin)), bundlePath: join(to, 'page', 'graph.js') };
+}
+
+function spawnBin(bin: string, args: readonly string[] = []) {
+  const proc = spawn(process.execPath, [bin, ...args], { stdio: 'pipe' });
   spawned.push(proc);
   let out = '';
   let err = '';
@@ -74,21 +105,31 @@ function urlOf(first: string | undefined): URL {
   return new URL(parsed.url);
 }
 
+async function listening(child: ReturnType<typeof spawnBin>): Promise<URL> {
+  await until(
+    () => child.stdout().length > 0 || child.proc.exitCode !== null,
+    'the listening line',
+  );
+  if (child.stdout().length === 0) throw new Error(`the bin exited: ${child.stderr()}`);
+  const url = urlOf(child.stdout()[0]);
+  expect(url.href).toBe(`http://127.0.0.1:${url.port}/`);
+  return url;
+}
+
 describe('the cpg-inspector bin', () => {
   // A spawned node process can take seconds to start on a busy macOS runner.
   it(
     'serves stdin to a page, reports on stdout, and exits 0 when stdin ends',
     { timeout: 20_000 },
     async () => {
-      const child = spawnBin();
+      // Round two (review b1), sprint 36: the bin serves page/graph.js beside it, these bytes.
+      const { bin, bundlePath } = copyOfBin();
+      const script = `/* the bundle beside ${bin} */\n`;
+      mkdirSync(dirname(bundlePath));
+      writeFileSync(bundlePath, script);
+      const child = spawnBin(bin);
       try {
-        await until(
-          () => child.stdout().length > 0 || child.proc.exitCode !== null,
-          'the listening line',
-        );
-        if (child.stdout().length === 0) throw new Error(`the bin exited: ${child.stderr()}`);
-        const url = urlOf(child.stdout()[0]);
-        expect(url.href).toBe(`http://127.0.0.1:${url.port}/`);
+        const url = await listening(child);
 
         const payload = { seq: 0, nodes: [{ id: 'd', type: 'DIRECTORY' }], edges: [] };
         child.proc.stdin.write(`${JSON.stringify({ type: 'graph', payload })}\n`);
@@ -119,18 +160,38 @@ describe('the cpg-inspector bin', () => {
         await until(() => child.stdout().length === 2, 'the render-report line');
         expect(JSON.parse(child.stdout()[1] ?? '')).toStrictEqual(renderReport);
 
-        // Round two (review b1): the bin serves dist/page/graph.js beside it. `check` doesn't build
-        // the bundle, so either it is served, or the one stderr line names where the bin looked.
         const bundle = await fetch(new URL('graph.js', url));
-        const bundlePath = join(ROOT, 'dist', 'page', 'graph.js');
-        expect([200, 404]).toContain(bundle.status);
+        expect({ status: bundle.status, body: await bundle.text() }).toStrictEqual({
+          status: 200,
+          body: script,
+        });
+
+        child.proc.stdin.end();
+        expect(await child.exited).toBe(0);
+        expect(child.stderr()).toBe('');
+      } finally {
+        child.proc.kill();
+      }
+    },
+  );
+
+  // Round two (U2b.1 part 3b review c2), sprint 36: with no bundle beside it, the bin names the path
+  // it looked at once at startup and once for the request it answers 404, and still exits 0.
+  it(
+    'names a missing bundle beside it at startup and on a request, and still exits 0',
+    { timeout: 20_000 },
+    async () => {
+      const { bin, bundlePath } = copyOfBin();
+      const child = spawnBin(bin);
+      try {
+        const url = await listening(child);
+        const bundle = await fetch(new URL('graph.js', url));
+        expect(bundle.status).toBe(404);
 
         child.proc.stdin.end();
         expect(await child.exited).toBe(0);
         const lines = child.stderr().split('\n').slice(0, -1);
-        // Round two (U2b.1 part 3b review c2): a missing bundle is also named once at startup.
-        const logged = bundle.status === 200 ? [] : [true, true];
-        expect(lines.map((line) => line.includes(bundlePath))).toEqual(logged);
+        expect(lines.map((line) => line.includes(bundlePath))).toEqual([true, true]);
       } finally {
         child.proc.kill();
       }
@@ -141,7 +202,7 @@ describe('the cpg-inspector bin', () => {
     'refuses arguments with exit 2 and a stderr line, and serves nothing',
     { timeout: 20_000 },
     async () => {
-      const child = spawnBin(['--port', '8080']);
+      const child = spawnBin(binPath(), ['--port', '8080']);
       try {
         expect(await child.exited).toBe(2);
         expect(child.stderr()).toBe(
@@ -156,7 +217,7 @@ describe('the cpg-inspector bin', () => {
 
   // Post-implementation (sabotage main #1): one argument is refused too, not only two.
   it('refuses a single argument with exit 2', { timeout: 20_000 }, async () => {
-    const child = spawnBin(['-']);
+    const child = spawnBin(binPath(), ['-']);
     try {
       expect(await child.exited).toBe(2);
       expect(child.stdout()).toEqual([]);
