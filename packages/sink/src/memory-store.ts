@@ -24,9 +24,10 @@ export interface MemoryStoreOptions {
 
 /**
  * C-SINK's and C-STORE's capabilities share a name but no field, so one object carries both.
- * `readAll` is the store half's whole-graph read (C-CLI Q6), outside both contracts.
+ * `readAll` is the store half's whole-graph read (C-CLI Q6) and `nextWriteSeq` its write seq
+ * (decision 98a), both outside both contracts.
  */
-export type MemoryStore = GraphSink & GraphStore & Pick<StoreHalf, 'readAll'>;
+export type MemoryStore = GraphSink & GraphStore & Pick<StoreHalf, 'readAll' | 'nextWriteSeq'>;
 
 const MEMORY_STORE_CAPABILITIES: SinkCapabilities = {
   durability: 'durable',

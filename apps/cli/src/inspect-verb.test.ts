@@ -366,10 +366,10 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     const root = await workspace();
     const l = live(['index', root, '--inspect']);
     await until(() => l.inspector.sent.length >= 2, 'the verification');
-    // 3 nodes sent; the page claims the payload had 1 and drew 1
+    // 5 nodes sent (both tiers, U6a.3-2); the page claims the payload had 1 and drew 1
     l.inspector.report(-1, { payloadNodeCount: 1, renderedNodeCount: 1, renderedEdgeCount: 0 });
     await until(() => l.inspector.sent.length >= 3, 'the fail');
-    expect(renderAt(l.inspector, 2)).toMatchObject({ state: 'fail', observed: 1, expected: 3 });
+    expect(renderAt(l.inspector, 2)).toMatchObject({ state: 'fail', observed: 1, expected: 5 });
     l.abort();
     await l.done;
   });
@@ -648,7 +648,7 @@ describe('cpg index --inspect (controller decisions 20, 21, 23)', () => {
     expect(l.io.stdout).toEqual([
       `root ${root}`,
       'files seen=2 indexed=2 excluded=0 unsupported=0 tooLarge=0 failed=0',
-      'written nodes=3 edges=2 dryRun=false',
+      'written nodes=6 edges=4 dryRun=false',
     ]);
     const [graph] = l.inspector.sent;
     if (graph?.type !== 'graph') throw new Error('the first line is not the graph');
@@ -659,9 +659,13 @@ describe('cpg index --inspect (controller decisions 20, 21, 23)', () => {
         makeNodeId({ form: 'directory', path: wp('.') }),
         makeNodeId({ form: 'file', path: wp('a.ts') }),
         makeNodeId({ form: 'file', path: wp('b.py') }),
+        // U6a.3-2: b.py's MODULE and its module SYMBOL (a SYMBOL's id is its fqn)
+        'file:b.py:MODULE:$root',
+        '`b.py`/',
       ].toSorted(),
     );
-    expect(graph.payload.edges).toHaveLength(2);
+    // two HAS_ENTRY, then DEFINES and SOURCE_FILE
+    expect(graph.payload.edges).toHaveLength(4);
     const report = verificationAt(l.inspector, 1);
     expect(report.seq).toBe(-1);
     expect(report.state).toBe('unavailable');
@@ -686,13 +690,14 @@ describe('cpg index --inspect (controller decisions 20, 21, 23)', () => {
     const root = await workspace();
     const l = live(['index', root, '--inspect']);
     await until(() => l.inspector.sent.length >= 2, 'the verification');
-    l.inspector.report(-1, { payloadNodeCount: 3, renderedNodeCount: 3 });
+    // both tiers: the root, two FILEs, b.py's MODULE and SYMBOL (U6a.3-2)
+    l.inspector.report(-1, { payloadNodeCount: 5, renderedNodeCount: 5 });
     await until(() => l.inspector.sent.length >= 3, 'the pass');
     expect(renderAt(l.inspector, 2)).toEqual({
       id: 'render-reconciliation',
       state: 'pass',
-      observed: 3,
-      expected: 3,
+      observed: 5,
+      expected: 5,
       localisedTo: [],
       asOfSeq: -1,
     });

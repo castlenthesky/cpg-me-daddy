@@ -13,12 +13,14 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@cpg/extract": "*",
     "@cpg/model": "*",
     "@cpg/parse": "*",
     "@cpg/resolve": "*",
     "@cpg/sink": "*",
     "@cpg/store": "*",
     "@cpg/watch": "*",
+    "@vscode/tree-sitter-wasm": "0.3.1",
     "yaml": "2.9.1",
     "zod": "4.6.7"
   }

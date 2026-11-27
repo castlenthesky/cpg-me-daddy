@@ -37,6 +37,7 @@ Then press F5 in VS Code to launch the Extension Development Host, and run **CPG
 | `bun run check:cli-bin`     | builds `apps/cli` and runs the built `cpg` bin (`tools/check-cli-bin.mjs`)                                       |
 | `bun run check:unit-diff`   | a `feat/u3.*` PR leaves `packages/` alone (CI, pull requests only; not in `check`)                               |
 | `bun run check:purity`      | runs the bin's `cpg index --dry-run` under a `Module._load` trap, then `--plant` (`tools/purity-proof.mjs`)      |
+| `bun run check:sparsity`    | structural nodes/LOC <= 1.5 over `fixtures/ladder` through the built bin (`tools/check-sparsity.mjs`)            |
 | `bun run build:inspector`   | bundles the page `cpg index --inspect` and `cpg inspect` serve (`tools/build-inspector.mjs`; not in `check`)     |
 | `bun run schema:doc`        | regenerates the GENERATED region of `docs/outline/04-schema.yaml` from `CPG_SCHEMA` (`--check` exits 1 on drift) |
 | `bun run knip`              | unused files/exports/deps                                                                                        |

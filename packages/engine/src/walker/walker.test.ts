@@ -162,3 +162,89 @@ describe('walkWorkspace', () => {
     ]);
   });
 });
+
+// U6a.3-2 (controller decision 100): the walker's one read is the engine's one read, so its bytes are
+// handed on through `onFile` instead of being re-read. Written from WalkOptions.onFile's doc.
+describe('walkWorkspace onFile: the byte hand-off', () => {
+  const BIN = Uint8Array.from([0xef, 0xbb, 0xbf, 0xff, 0x0a]);
+
+  it('hands every emitted file, with the bytes its revision_id hashes, once each and in walk order', async () => {
+    const root = await tree({
+      'b.py': 'b = 1\n',
+      'a/z.ts': 'z',
+      'C.dat': BIN,
+      'big.py': '#'.repeat(11),
+      'node_modules/x.js': 'x',
+    });
+    const seen: { readonly file: unknown; readonly bytes: Uint8Array }[] = [];
+    const r = await walk(root, {
+      maxFileSizeBytes: 10,
+      onFile: async (file, bytes) => {
+        seen.push({ file, bytes });
+      },
+    });
+    expect(paths(r)).toEqual(['C.dat', 'a/z.ts', 'b.py']);
+    expect(seen.map((s) => s.file)).toEqual(r.files);
+    expect(seen.map((s) => [sha256(s.bytes), [...s.bytes]])).toEqual([
+      [sha256(BIN), [...BIN]],
+      [sha256('z'), [...Buffer.from('z')]],
+      [sha256('b = 1\n'), [...Buffer.from('b = 1\n')]],
+    ]);
+  });
+
+  it('awaits each call before the walk moves on to the next entry', async () => {
+    const root = await tree({ 'a.py': 'a', 'b.py': 'b', 'c/d.py': 'd' });
+    const log: string[] = [];
+    await walk(root, {
+      // round two (review 4): the walk's own per-file step is logged too, so a walker that walks
+      // everything first and calls the hook afterwards (holding every file's bytes) fails
+      languageOf: (path) => {
+        log.push(`lang ${path}`);
+        return languageOf(path);
+      },
+      onFile: async (file) => {
+        log.push(`start ${file.path}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        log.push(`end ${file.path}`);
+      },
+    });
+    expect(log).toEqual([
+      'lang a.py',
+      'start a.py',
+      'end a.py',
+      'lang b.py',
+      'start b.py',
+      'end b.py',
+      'lang c/d.py',
+      'start c/d.py',
+      'end c/d.py',
+    ]);
+  });
+
+  it('a rejection rejects the walk', async () => {
+    const root = await tree({ 'a.py': 'a', 'b.py': 'b' });
+    const calls: string[] = [];
+    const walked = walk(root, {
+      onFile: async (file) => {
+        calls.push(file.path);
+        if (file.path === 'a.py') throw new Error('hook failed on a.py');
+      },
+    });
+    await expect(walked).rejects.toThrow('hook failed on a.py');
+    expect(calls).toEqual(['a.py']);
+  });
+
+  // Root reads through any permission, so the unreadable file is only unreadable for a normal user.
+  it.skipIf(process.getuid?.() === 0)('is not called for a file it could not read', async () => {
+    const root = await tree({ 'a.py': 'a', 'locked.py': 'x' });
+    await chmod(join(root, 'locked.py'), 0o000);
+    const calls: string[] = [];
+    const r = await walk(root, {
+      onFile: async (file) => {
+        calls.push(file.path);
+      },
+    });
+    await chmod(join(root, 'locked.py'), 0o600);
+    expect([calls, r.stats.filesFailed]).toEqual([['a.py'], 1]);
+  });
+});

@@ -151,6 +151,24 @@
       ],
       "outputs": []
     },
+    "//#check:sparsity": {
+      // Structural nodes/LOC over the ladder corpus through the built bin (C-EXTRACT Q6, U6a.3-2).
+      // After check:cli-bin, which builds apps/cli, so the tool's own build is a no-op and no two
+      // tsc -b race.
+      "dependsOn": ["//#check:cli-bin"],
+      "inputs": [
+        "apps/cli/**",
+        "packages/*/src/**",
+        "packages/*/package.json",
+        "packages/*/tsconfig*.json",
+        "tsconfig.base.json",
+        "tools/check-sparsity.mjs",
+        "fixtures/ladder/**",
+        "!apps/cli/dist/**",
+        "!**/.tsbuildinfo"
+      ],
+      "outputs": []
+    },
     "//#typecheck:tests": {
       // tsc over every test file and the sources they import; no outputs (noEmit).
       "inputs": [

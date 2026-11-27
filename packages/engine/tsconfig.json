@@ -9,6 +9,7 @@
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
   "references": [
+    { "path": "../extract" },
     { "path": "../model" },
     { "path": "../parse" },
     { "path": "../resolve" },

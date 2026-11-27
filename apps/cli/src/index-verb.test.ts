@@ -288,9 +288,10 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
       body: {
         root,
         walk: { filesSeen: 2, filesIndexed: 2 },
-        // the root DIRECTORY and two FILEs, two HAS_ENTRY
-        nodesWritten: 3,
-        edgesWritten: 2,
+        // the root DIRECTORY and two FILEs, two HAS_ENTRY; then b.py's replace-file (U6a.3-2): its
+        // MODULE, module SYMBOL and FILE rows, DEFINES and SOURCE_FILE
+        nodesWritten: 6,
+        edgesWritten: 4,
         dryRun: false,
         interrupted: false,
         target: null,
@@ -308,7 +309,7 @@ describe('cpg index without --dry-run: the memory store consumer (U2c.2)', () =>
     expect(r.stdout).toEqual([
       `root ${root}`,
       'files seen=2 indexed=2 excluded=0 unsupported=0 tooLarge=0 failed=0',
-      'written nodes=3 edges=2 dryRun=false',
+      'written nodes=6 edges=4 dryRun=false',
     ]);
   });
 

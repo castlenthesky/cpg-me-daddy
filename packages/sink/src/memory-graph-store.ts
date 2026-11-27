@@ -38,8 +38,8 @@ export interface GraphCell {
 
 /**
  * The GraphStore half, plus `readAll`: the whole-graph read C-CLI Q6 names ("MemoryStore's
- * readFile/readAll"), which CpgEngine.inspect reads (U2b.1 part 3b). It is not part of C-STORE's
- * GraphStore.
+ * readFile/readAll"), which CpgEngine.inspect reads (U2b.1 part 3b), and `nextWriteSeq`, the code
+ * tier's write seq (controller decision 98a). Neither is part of C-STORE's GraphStore.
  */
 export type StoreHalf = Omit<GraphStore, 'capabilities'> & {
   /**
@@ -47,6 +47,15 @@ export type StoreHalf = Omit<GraphStore, 'capabilities'> & {
    * Like every read, it throws STORE_NOT_OPEN before open() or after close().
    */
   readAll(): Promise<GraphPayload>;
+  /**
+   * The seq for the next replace-file or delete-file (controller decision 98a: SINK is the one seq
+   * allocator, 03-architecture §4; the engine asks, it holds no counter). One more than the highest
+   * of every value it has returned and every code-tier record's seq (FileState.seq), so it is
+   * strictly monotone per store instance across index() and every watch(), and above a seq a caller
+   * wrote directly: 0 on a fresh store. Synchronous, never throws, and not a write: it needs no
+   * open() and changes neither the graph nor any record.
+   */
+  nextWriteSeq(): number;
 };
 
 export const MEMORY_TIER_CAPABILITIES: StoreCapabilities = {
@@ -110,6 +119,7 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
   // Per file, the code tier's last seq and revision (INV-13, decision 97). It outlives the FILE, so
   // a file's seq stays monotone across its removal and return.
   const codeTier = new Map<WorkspacePath, CodeTierFile>();
+  let highestSeq = -1;
 
   function assertOpen(): void {
     if (!isOpen) {
@@ -133,6 +143,7 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
         const result = writeFileOp(cell.get(), op, codeTier.get(op.file));
         cell.set(result.graph);
         codeTier.set(op.file, result.file);
+        highestSeq = Math.max(highestSeq, result.file.seq);
         if (result.audit !== undefined) audit.push({ at: now(), ...result.audit });
         return { ...result.receipt, durationMs: Math.max(0, now() - start) };
       }
@@ -322,6 +333,12 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
         if (node.type === label) keys.push(nodeKey(node));
       }
       return keys;
+    },
+
+    nextWriteSeq(): number {
+      // REAL
+      highestSeq += 1;
+      return highestSeq;
     },
 
     async readAll(): Promise<GraphPayload> {
