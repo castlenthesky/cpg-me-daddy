@@ -16,9 +16,12 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
@@ -27,13 +30,15 @@ const ROOT = join(__dirname, '..');
 
 // Post-implementation (U2b.1 part 3b, sabotage group A): a failing assertion must not leave a bin
 // running, or the vitest worker cannot exit and the run hangs. Every bin still running after its
-// test is SIGKILLed, and every copy of the bin is removed.
+// test is SIGKILLed, every page socket is closed, and every copy of the bin is removed.
 const spawned: ChildProcess[] = [];
+const sockets: WebSocket[] = [];
 const copies: string[] = [];
 afterEach(() => {
   for (const p of spawned.splice(0)) {
     if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL');
   }
+  for (const socket of sockets.splice(0)) socket.terminate();
   for (const dir of copies.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -50,16 +55,21 @@ function binPath(): string {
   return join(ROOT, entry);
 }
 
-// Sprint 36: the bin's .js files copied into a fresh directory beside them, so `ws` and `@cpg/model`
-// resolve exactly as they do for dist/main.js, and the copy's page/ is empty until the test writes it.
+// Sprint 36: a copy of the bin whose page/ holds nothing until the test writes it. Round two
+// (review 2, 3, 6, 7): the copy is in a fresh directory under the OS temp dir, never in the
+// repository, so a killed worker leaks nothing into dist. The directory is realpath'd because
+// node gives the bin its real __dirname (macOS keeps the temp dir behind the /var symlink). Its
+// node_modules links to the repository's, where `ws` and `@cpg/model` resolve for dist/main.js
+// too. Every regular file at the top of the bin's directory is copied. Its subdirectories are not,
+// because other tests make and remove their own there (page/, build-inspector-test-<pid>/).
 function copyOfBin(): { bin: string; bundlePath: string } {
   const bin = binPath();
   const from = dirname(bin);
-  const to = mkdtempSync(join(from, 'bin-test-'));
+  const to = realpathSync(mkdtempSync(join(tmpdir(), 'cpg-inspector-bin-')));
   copies.push(to);
+  symlinkSync(join(ROOT, '..', '..', 'node_modules'), join(to, 'node_modules'), 'dir');
   for (const entry of readdirSync(from, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith('.js'))
-      copyFileSync(join(from, entry.name), join(to, entry.name));
+    if (entry.isFile()) copyFileSync(join(from, entry.name), join(to, entry.name));
   }
   return { bin: join(to, basename(bin)), bundlePath: join(to, 'page', 'graph.js') };
 }
@@ -116,6 +126,24 @@ async function listening(child: ReturnType<typeof spawnBin>): Promise<URL> {
   return url;
 }
 
+// Round two (sprint 36 review 1): an error on the page's socket is recorded, never left unhandled,
+// and a socket that cannot connect fails the wait at once rather than at the test's timeout.
+async function openPage(url: URL) {
+  const socket = new WebSocket(`ws://127.0.0.1:${url.port}/ws`, { origin: url.origin });
+  sockets.push(socket);
+  const received: unknown[] = [];
+  const errors: Error[] = [];
+  socket.on('message', (data: Buffer, isBinary: boolean) =>
+    received.push(isBinary ? 'a binary frame' : JSON.parse(data.toString('utf8'))),
+  );
+  socket.on('error', (error: Error) => errors.push(error));
+  await new Promise<void>((resolve, reject) => {
+    socket.once('open', () => resolve());
+    socket.once('error', reject);
+  });
+  return { socket, received, errors };
+}
+
 describe('the cpg-inspector bin', () => {
   // A spawned node process can take seconds to start on a busy macOS runner.
   it(
@@ -133,12 +161,7 @@ describe('the cpg-inspector bin', () => {
 
         const payload = { seq: 0, nodes: [{ id: 'd', type: 'DIRECTORY' }], edges: [] };
         child.proc.stdin.write(`${JSON.stringify({ type: 'graph', payload })}\n`);
-        const socket = new WebSocket(`ws://127.0.0.1:${url.port}/ws`, { origin: url.origin });
-        const received: unknown[] = [];
-        socket.on('message', (data: Buffer, isBinary: boolean) =>
-          received.push(isBinary ? 'a binary frame' : JSON.parse(data.toString('utf8'))),
-        );
-        await new Promise<void>((resolve) => socket.on('open', () => resolve()));
+        const { socket, received, errors } = await openPage(url);
         socket.send(JSON.stringify({ type: 'ready', protocol: 1 }));
         await until(() => received.length === 1, 'the graph');
         expect(received).toStrictEqual([{ type: 'graph', protocol: 1, epoch: 1, seq: 0, payload }]);
@@ -166,6 +189,7 @@ describe('the cpg-inspector bin', () => {
           body: script,
         });
 
+        expect(errors).toEqual([]);
         child.proc.stdin.end();
         expect(await child.exited).toBe(0);
         expect(child.stderr()).toBe('');
@@ -182,6 +206,10 @@ describe('the cpg-inspector bin', () => {
     { timeout: 20_000 },
     async () => {
       const { bin, bundlePath } = copyOfBin();
+      // Round two (sprint 36 review 4): page/ exists and holds only graph.js.map, so a check of the
+      // directory, or of the sourcemap, finds something and must still name the missing graph.js.
+      mkdirSync(dirname(bundlePath));
+      writeFileSync(`${bundlePath}.map`, '{}\n');
       const child = spawnBin(bin);
       try {
         const url = await listening(child);
@@ -192,6 +220,29 @@ describe('the cpg-inspector bin', () => {
         expect(await child.exited).toBe(0);
         const lines = child.stderr().split('\n').slice(0, -1);
         expect(lines.map((line) => line.includes(bundlePath))).toEqual([true, true]);
+      } finally {
+        child.proc.kill();
+      }
+    },
+  );
+
+  // Round two (sprint 36 review 5): the real bin, from where it is installed. Its directory is the
+  // one `bun run build:inspector` writes page/graph.js into (apps/inspector/dist), and with no
+  // arguments it listens and exits 0 when stdin ends. tools/build-inspector.test.mjs may build or
+  // remove that bundle during this run, so the only stderr allowed is a line that names it.
+  it(
+    'runs from apps/inspector/dist, where build:inspector writes page/graph.js, and exits 0',
+    { timeout: 20_000 },
+    async () => {
+      expect(dirname(binPath())).toBe(join(ROOT, 'dist'));
+      const child = spawnBin(binPath());
+      try {
+        await listening(child);
+        child.proc.stdin.end();
+        expect(await child.exited).toBe(0);
+        const realBundle = join(realpathSync(ROOT), 'dist', 'page', 'graph.js');
+        const lines = child.stderr().split('\n').slice(0, -1);
+        expect(lines.filter((line) => !line.includes(realBundle))).toEqual([]);
       } finally {
         child.proc.kill();
       }
