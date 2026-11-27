@@ -1,6 +1,8 @@
 # packages/extract: agent notes
 
-Status (U6a.2-2): `src/contract.ts` is C-EXTRACT's types. It owns `FileOwnedLabel`, `PropertyValue`, `EndpointRef`, `EdgeElement` and the `ExtractedFileSet` brand (controller decision 88). REAL: `createExtractor` (python only; typescript, tsx and javascript fail `grammar-unsupported`, decision 96), the builder's I5-I10/I19 asserts, `elementDigest`, `interfaceHash`, `sealExtractedFiles`, and the walker's MODULE tier (a MODULE, its SYMBOL, DEFINES). SEAT: Pass A declarations (U6a.2-3) and Pass B calls, imports and ref sites (U6a.2-4); the Python coverage table marks each of them declared-not-emitted with that tracking id.
+Status (U6a.2-3): `src/contract.ts` is C-EXTRACT's types. It owns `FileOwnedLabel`, `PropertyValue`, `EndpointRef`, `EdgeElement` and the `ExtractedFileSet` brand (controller decision 88). REAL: `createExtractor` (python only; typescript, tsx and javascript fail `grammar-unsupported`, decision 96), the builder's I5-I10/I19 asserts, `elementDigest`, `interfaceHash`, `sealExtractedFiles`, the walker's MODULE tier and Pass A (TYPE_DECL, METHOD with `nameRange`, PARAM, MEMBER, an UNKNOWN per ERROR region, decorated definitions; a repeated id takes an ordinal). SEAT: Pass B calls, imports, decorator CALLs and ref sites (U6a.2-4); the Python coverage table marks each of them declared-not-emitted with that tracking id.
+
+- `test/fixtures/pass-a/` is extract's own Pass A fixture in the ladder's format (Pass A facts only); `src/ladder.test.ts` reads it beside `fixtures/ladder`.
 
 - `node:crypto` is the one builtin allowed (interfaceHash's sha256). `src/purity.test.ts` runs the built dist under a `Module._load` trap, so run `bun run typecheck` (it runs `tsc -b`) before running that test alone.
 - When a pass starts emitting a label or edge, flip its row in `src/python.ts`'s coverage table in the same change: `src/ladder.test.ts` checks the table against the ladder both ways (I14).
