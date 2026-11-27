@@ -22,6 +22,7 @@ import type {
   ParseService,
   SyntaxNode,
 } from './contract';
+import { checkGrammarAbi, createAbiGate, type ParserRuntime } from './abi';
 
 /** Reading `root` from a released handle is a caller bug (I24), one of the two throws C-PARSE allows. */
 export class HandleReleasedError extends Error {
@@ -35,6 +36,11 @@ export interface ParseServiceOptions {
   /** Frozen by the composition root before it is handed here. */
   readonly registry: LanguageRegistry;
   readonly source: GrammarSource;
+  /**
+   * The parser runtime (controller decision 99). Omitted: web-tree-sitter's `Parser.init` and its
+   * live ABI bindings. A test passes a stand-in to fail init, or to narrow or blank the ABI range.
+   */
+  readonly runtime?: ParserRuntime;
 }
 
 interface LoadedGrammar {
@@ -67,8 +73,21 @@ function diagnose(root: Node): ParseDiagnostics {
   return { errorNodeCount, missingNodeCount, errorSpanRatio: total === 0 ? 0 : errorChars / total };
 }
 
-export function createParseService({ registry, source }: ParseServiceOptions): ParseService {
-  let runtime: Promise<ParseError | undefined> | undefined;
+const WEB_TREE_SITTER: ParserRuntime = {
+  init: () => Parser.init(),
+  abiBindings: () => ({
+    minCompatible: MIN_COMPATIBLE_VERSION,
+    languageVersion: LANGUAGE_VERSION,
+  }),
+};
+
+export function createParseService({
+  registry,
+  source,
+  runtime = WEB_TREE_SITTER,
+}: ParseServiceOptions): ParseService {
+  const abi = createAbiGate(runtime);
+  let ready: Promise<ParseError | undefined> | undefined;
   const grammars = new Map<LanguageId, Promise<LoadedGrammar | ParseError>>();
   const loaded: LoadedGrammar[] = [];
   const live = new Set<ParseHandle>();
@@ -79,16 +98,16 @@ export function createParseService({ registry, source }: ParseServiceOptions): P
   // shared by promise, so concurrent first use loads once (I16).
   async function startRuntime(): Promise<ParseError | undefined> {
     try {
-      await Parser.init();
+      await abi.init();
       return undefined;
     } catch (cause) {
-      runtime = undefined;
+      ready = undefined;
       return { code: 'runtime-unavailable', message: `Parser.init failed: ${String(cause)}` };
     }
   }
   function initRuntime(): Promise<ParseError | undefined> {
-    runtime ??= startRuntime();
-    return runtime;
+    ready ??= startRuntime();
+    return ready;
   }
 
   async function loadGrammar(
@@ -97,10 +116,9 @@ export function createParseService({ registry, source }: ParseServiceOptions): P
     const language = registration.id;
     const initError = await initRuntime();
     if (initError) return initError;
-    // Live bindings, undefined until Parser.init resolves (I13): read them only here.
-    const abi = { minCompatible: MIN_COMPATIBLE_VERSION, languageVersion: LANGUAGE_VERSION };
-    if (!Number.isInteger(abi.minCompatible) || !Number.isInteger(abi.languageVersion))
-      return { code: 'abi-unreadable', language, message: 'web-tree-sitter exposed no ABI range' };
+    // Only through the gate, which opens when init resolves (I13): the bindings are live.
+    const range = abi.range();
+    if (!range.ok) return { code: 'abi-unreadable', language, message: range.message };
     grammarLoads++;
     const bytes = await source.load(registration.grammar);
     if (!bytes.ok)
@@ -115,12 +133,9 @@ export function createParseService({ registry, source }: ParseServiceOptions): P
     } catch (cause) {
       return { code: 'grammar-rejected', language, message: `${bytes.origin}: ${String(cause)}` };
     }
-    if (grammar.abiVersion < abi.minCompatible || grammar.abiVersion > abi.languageVersion)
-      return {
-        code: 'abi-out-of-range',
-        language,
-        message: `${bytes.origin} has ABI ${String(grammar.abiVersion)}, runtime accepts ${String(abi.minCompatible)}..${String(abi.languageVersion)}`,
-      };
+    const reason = checkGrammarAbi(grammar.abiVersion, range.range);
+    if (reason !== undefined)
+      return { code: 'abi-out-of-range', language, message: `${bytes.origin} ${reason}` };
     if (disposed) return { code: 'disposed', language, message: 'disposed while loading' };
     const parser = new Parser();
     parser.setLanguage(grammar);
@@ -131,7 +146,7 @@ export function createParseService({ registry, source }: ParseServiceOptions): P
       origin: bytes.origin,
       bytesSha256: await sha256(bytes.bytes),
       abiVersion: grammar.abiVersion,
-      abiSupported: abi,
+      abiSupported: range.range,
     };
     const result = { parser, registration, provenance };
     loaded.push(result);

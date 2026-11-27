@@ -35,7 +35,7 @@ describe('routing (C-PARSE I5)', () => {
     expect(builtins().languageForPath(path)).toBe(language);
   });
 
-  it.each(['Makefile', 'notes.txt', '.py', 'dir.py/README', 'a.', 'script'])(
+  it.each(['Makefile', 'notes.txt', '.py', 'pkg/.py', 'dir.py/README', 'a.', 'script'])(
     '%s routes nowhere',
     (path) => {
       expect(builtins().languageForPath(path)).toBeUndefined();
