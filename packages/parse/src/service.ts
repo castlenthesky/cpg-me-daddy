@@ -1,4 +1,5 @@
-// REAL: grammar loading with provenance and the ABI gate, parse, handle lifetime, dispose.
+// REAL: grammar loading with provenance and the ABI gate, parse, handle lifetime, dispose, and the
+// runtime wasm from ParseServiceOptions.runtimeDir (stop-list 192).
 // SEAT: retain/releaseDocument (the retained-tree cache, I25/I26). No caller exists yet, so both throw.
 import { isAbsolute, join } from 'node:path';
 import {
