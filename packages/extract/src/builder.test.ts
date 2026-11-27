@@ -90,6 +90,8 @@ function brokenBy(run: () => unknown): string {
 }
 
 const NUL = '\u0000';
+const listed = (t: readonly string[]): SymbolElement =>
+  symbol({ fqn: '`main.py`/t.', properties: { t } });
 const forgedLabel = (label: string): NodeElement => Object.assign(method(), { label });
 
 describe('ElementBuilder', () => {
@@ -163,6 +165,13 @@ describe('ElementBuilder: each rule fails as its own invariant', () => {
     ['I7: one fqn, other fields', { symbols: [symbol({ language: 'typescript' })] }, 'I7'],
     ['I7: one fqn, other properties', { symbols: [symbol({ properties: { kind: 'x' } })] }, 'I7'],
     ['I7: one fqn, other origin (r2)', { symbols: [symbol({ origin: 'external' })] }, 'I7'],
+    // Post-implementation (sabotage #2, #4): a longer list, and one extra property key.
+    ['I7: one fqn, a longer list', { symbols: [listed(['a']), listed(['a', 'b'])] }, 'I7'],
+    [
+      'I7: one fqn, an extra key',
+      { symbols: [symbol({ properties: { kind: 'module', x: 1 } })] },
+      'I7',
+    ],
     ['I8: a FILE in nodes', { nodes: [forgedLabel('FILE')] }, 'I8'],
     ['I8: a SYMBOL in nodes', { nodes: [forgedLabel('SYMBOL')] }, 'I8'],
     ['I8: a DIRECTORY in nodes', { nodes: [forgedLabel('DIRECTORY')] }, 'I8'],
