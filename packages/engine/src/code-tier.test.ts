@@ -311,6 +311,7 @@ function rig(
     readonly extract?: (request: ExtractRequest) => ExtractOutcome;
     readonly grammars?: readonly string[];
     readonly registry?: CodeTierOptions['registry'];
+    readonly runtimeDir?: string;
   } = {},
 ): Rig {
   const created: ParseServiceOptions[] = [];
@@ -335,6 +336,7 @@ function rig(
         return { ok: true, handle: h.handle };
       });
     },
+    ...(o.runtimeDir !== undefined && { runtimeDir: o.runtimeDir }),
   });
   return { tier, created, parses, extracts, handles, releasedAtExtract };
 }
@@ -358,6 +360,18 @@ describe('createCodeTier (decisions 96, 100)', () => {
     expect(r.created).toHaveLength(1);
     expect(r.created[0]?.registry).toBe(frozen);
     expect(r.created[0]?.source.describe()).toBe('node:fs grammar source');
+  });
+
+  // Stop-list 192: the folder of web-tree-sitter's own runtime reaches the one ParseService.
+  it('hands createParseService the runtimeDir it was given, and no runtimeDir without one', async () => {
+    const given = rig({ runtimeDir: '/install/apps/vscode/dist/grammars' });
+    const none = rig();
+    await given.tier.run(walked('a.py', utf8('a')), utf8('a'));
+    await none.tier.run(walked('a.py', utf8('a')), utf8('a'));
+    expect([
+      given.created.map((options) => options.runtimeDir),
+      none.created.map((options) => Object.hasOwn(options, 'runtimeDir')),
+    ]).toEqual([['/install/apps/vscode/dist/grammars'], [false]]);
   });
 
   it('hands PARSE the decoded text, never a path to read (C-PARSE I19), and extract the walk revision', async () => {

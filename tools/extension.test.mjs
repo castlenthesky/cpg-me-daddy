@@ -17,7 +17,7 @@ import {
 import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, posix } from 'node:path';
+import { dirname, join, posix, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,6 +35,11 @@ const PYTHON_WASM = join(
   'wasm',
   'tree-sitter-python.wasm',
 );
+// Stop-list 192 (sprint 37): compile copies web-tree-sitter's own runtime wasm beside the grammar, and the
+// extension names that folder as the parse service's runtimeDir, so node_modules' copy is never read.
+const RUNTIME_WASM = createRequire(import.meta.url).resolve('web-tree-sitter/web-tree-sitter.wasm');
+/** node:fs as web-tree-sitter's CommonJS build requires it. */
+const cjsFs = createRequire(import.meta.url)('node:fs');
 
 class Uri {
   constructor(path) {
@@ -251,15 +256,21 @@ function standIn(root) {
 let stubs = '';
 let install = '';
 let bare = '';
+let noRuntime = '';
 let hooks;
 beforeAll(() => {
   stubs = realpathSync(mkdtempSync(join(tmpdir(), 'extension-vscode-')));
-  // An install as compile leaves it, and one without the grammar.
+  // An install as compile leaves it (the grammar and web-tree-sitter's runtime), one without the grammar,
+  // and one without the runtime (stop-list 192).
   install = join(stubs, 'install');
   bare = join(stubs, 'bare');
-  mkdirSync(join(install, GRAMMARS), { recursive: true });
+  noRuntime = join(stubs, 'no-runtime');
+  for (const home of [install, bare, noRuntime])
+    mkdirSync(join(home, GRAMMARS), { recursive: true });
   copyFileSync(PYTHON_WASM, join(install, GRAMMARS, 'tree-sitter-python.wasm'));
-  mkdirSync(join(bare, GRAMMARS), { recursive: true });
+  copyFileSync(RUNTIME_WASM, join(install, GRAMMARS, 'web-tree-sitter.wasm'));
+  copyFileSync(RUNTIME_WASM, join(bare, GRAMMARS, 'web-tree-sitter.wasm'));
+  copyFileSync(PYTHON_WASM, join(noRuntime, GRAMMARS, 'tree-sitter-python.wasm'));
   const stub = join(stubs, 'vscode.cjs');
   writeFileSync(stub, 'module.exports = globalThis.vscodeStandIn;\n');
   hooks = registerHooks({
@@ -296,14 +307,20 @@ afterEach(() => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-/** Loads the built extension afresh on the stand-in and activates it, installed at `home`. */
-function activate(folder = root, home = install) {
+/**
+ * Loads the built extension afresh on the stand-in and activates it, installed at `home`. `cold` (stop-list
+ * 192) reloads the workspace packages and web-tree-sitter too: web-tree-sitter's first successful init
+ * otherwise holds for the whole process, so an earlier test's install would decide where it loads from.
+ */
+function activate(folder = root, home = install, { cold = false } = {}) {
   const { seen, vscode } = standIn(folder ?? undefined);
   globalThis.vscodeStandIn = vscode;
   const require = createRequire(MAIN);
   const apps = join(REPO, 'apps', 'vscode', 'dist');
+  const reloaded = [join(REPO, 'apps'), join(REPO, 'packages'), dirname(RUNTIME_WASM)];
   for (const key of Object.keys(require.cache)) {
     if (key.startsWith(apps) || key.startsWith(stubs)) delete require.cache[key];
+    else if (cold && reloaded.some((dir) => key.startsWith(dir + sep))) delete require.cache[key];
   }
   const extension = require(MAIN);
   const subscriptions = [];
@@ -334,6 +351,24 @@ async function until(done) {
   }
 }
 const ofType = (panel, type) => panel.posted.filter((message) => message.type === type);
+/**
+ * Hides web-tree-sitter's own .wasm files in node_modules, as an install without node_modules would
+ * (stop-list 192): web-tree-sitter 0.27.0 reads its runtime with fs.readFileSync, which now fails ENOENT
+ * for them. Returns the restore.
+ */
+function hideNodeModulesRuntime() {
+  const parser = dirname(RUNTIME_WASM) + sep;
+  const real = cjsFs.readFileSync;
+  const spy = vi.spyOn(cjsFs, 'readFileSync').mockImplementation((file, ...rest) => {
+    const path = file instanceof URL ? fileURLToPath(file) : String(file);
+    if (path.startsWith(parser) && path.endsWith('.wasm')) {
+      const error = new Error(`ENOENT: no such file or directory, open '${path}'`);
+      throw Object.assign(error, { code: 'ENOENT' });
+    }
+    return real(file, ...rest);
+  });
+  return () => spy.mockRestore();
+}
 /** What a page holds (sprint 26): its latest graph's node ids with each delta after it applied. */
 function picture(panel) {
   const graph = ofType(panel, 'graph').at(-1);
@@ -539,6 +574,51 @@ describe('the code tier grammar', () => {
     const named = `; grammars ${join(install, GRAMMARS)}`;
     const [first] = lines(seen, 'info');
     expect(first[1].slice(-named.length)).toBe(named);
+  });
+
+  // Stop-list 192: web-tree-sitter's own runtime comes from the same folder of the install. Cold starts,
+  // so this test's install, not an earlier one's, decides where the runtime loads from.
+  it('takes the parser runtime from the install: without it there, one warning and the FILE tier only', async () => {
+    const { seen, run } = activate(root, noRuntime, { cold: true });
+    await run('cpg.openGraph');
+    const [panel] = seen.panels;
+    panel.send(READY);
+    const ids = ofType(panel, 'graph')[0].payload.nodes.map(({ id }) => id);
+    expect(new Set(ids)).toEqual(
+      new Set(['dir:.', 'dir:sub', 'file:a.ts', 'file:b.py', 'file:sub/c.ts']),
+    );
+    await until(() => seen.warnings.length > 0);
+    const [said, ...more] = seen.warnings;
+    const failure = 'code tier: 1 python file at the FILE tier only (runtime-unavailable): b.py: ';
+    const file = join(noRuntime, GRAMMARS, 'web-tree-sitter.wasm');
+    expect([said.split(failure).length, said.includes(file), more]).toEqual([2, true, []]);
+    expect(seen.errors).toEqual([]);
+  });
+
+  it("parses with node_modules' web-tree-sitter wasm hidden: the install's copy is enough", async () => {
+    const restore = hideNodeModulesRuntime();
+    try {
+      expect(() => cjsFs.readFileSync(RUNTIME_WASM)).toThrow('ENOENT');
+      const { seen, run } = activate(root, install, { cold: true });
+      await run('cpg.openGraph');
+      const [panel] = seen.panels;
+      panel.send(READY);
+      const ids = ofType(panel, 'graph')[0].payload.nodes.map(({ id }) => id);
+      expect(new Set(ids)).toEqual(
+        new Set([
+          'dir:.',
+          'dir:sub',
+          'file:a.ts',
+          'file:b.py',
+          'file:sub/c.ts',
+          'file:b.py:MODULE:$root',
+          '`b.py`/',
+        ]),
+      );
+      expect(seen.errors).toEqual([]);
+    } finally {
+      restore();
+    }
   });
 });
 

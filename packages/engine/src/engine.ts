@@ -70,6 +70,14 @@ export interface EngineConfig {
    * package's own directory. A directory that does not hold the grammar is a warning, never fatal.
    */
   readonly grammarDir?: string;
+  /**
+   * The folder holding web-tree-sitter's own `web-tree-sitter.wasm`, absolute (stop-list 192;
+   * C-PARSE Q1): the code tier's ParseServiceOptions.runtimeDir. The VS Code extension gives the
+   * folder of its install that `bun run compile` copies it into. Absent: web-tree-sitter's own folder,
+   * so CPG_GRAMMAR_DIR still names a folder of grammars only. A folder without it is a warning
+   * (`runtime-unavailable`), never fatal.
+   */
+  readonly runtimeDir?: string;
 }
 
 /** A durable store sink: MemoryStore now, FalkorStore at U5. */

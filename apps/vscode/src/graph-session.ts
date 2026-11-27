@@ -26,6 +26,12 @@ export interface GraphSessionOptions {
    * decision 112, C-PARSE Q1). Absent: the engine's own default, the grammar package's directory.
    */
   readonly grammarDir?: string;
+  /**
+   * EngineConfig.runtimeDir, passed to every engine the session makes when it is given: the folder of
+   * the extension's install that `bun run compile` copies web-tree-sitter's own `web-tree-sitter.wasm`
+   * into (stop-list 192, C-PARSE Q1). Absent: web-tree-sitter's own folder.
+   */
+  readonly runtimeDir?: string;
   readonly createEngine: (config: EngineConfig) => CpgEngine;
   /** The workspace at `root`. */
   readonly fileSystem: WorkspaceFileSystem;

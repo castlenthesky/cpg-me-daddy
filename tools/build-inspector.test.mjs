@@ -181,7 +181,8 @@ describe.each([
 // U3.1.1 part 3 (controller decision 31): `bun run compile`, F5's build task, builds the bundle the
 // panel loads. Its steps after `tsc -b` run here for real; tsc -b itself would rebuild the dist that
 // other tests load. (Round two: RED compared the script's words.) U6a.3-3 part 2 (controller decision
-// 112): it then copies the python grammar into the extension's install, apps/vscode/dist/grammars.
+// 112): it then copies the python grammar into the extension's install, apps/vscode/dist/grammars, and
+// (stop-list 192, sprint 37) web-tree-sitter's own runtime wasm beside it.
 describe("F5's build task", () => {
   it('is the compile script: tsc -b, the page bundle, the grammars, stopping on a failure', () => {
     const tasks = JSON.parse(read(join(REPO, '.vscode', 'tasks.json')));
@@ -192,14 +193,16 @@ describe("F5's build task", () => {
     expect(first).toBe('tsc -b');
     expect(rest).toHaveLength(2);
     const grammar = join(REPO, 'apps', 'vscode', 'dist', 'grammars', 'tree-sitter-python.wasm');
+    const runtime = join(REPO, 'apps', 'vscode', 'dist', 'grammars', 'web-tree-sitter.wasm');
     rmSync(files.defaulted, { force: true });
     rmSync(grammar, { force: true });
+    rmSync(runtime, { force: true });
     for (const step of rest) {
       expect(step).not.toMatch(/[;|&]/);
       const r = spawnSync(step, { cwd: REPO, encoding: 'utf8', shell: true });
       expect({ status: r.status, out: `${r.stdout}${r.stderr}` }).toMatchObject({ status: 0 });
     }
     expectDevelopment(files.defaulted);
-    expect(statSync(grammar).size).toBeGreaterThan(0);
+    expect([statSync(grammar).size > 0, statSync(runtime).size > 0]).toEqual([true, true]);
   }, 60_000);
 });

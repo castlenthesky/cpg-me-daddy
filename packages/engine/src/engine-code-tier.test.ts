@@ -21,7 +21,7 @@ import type {
 import { createExtractor } from '@cpg/extract';
 import type { WorkspacePath } from '@cpg/model';
 import { isWorkspacePath } from '@cpg/model';
-import type { ParseRequest, ParseService } from '@cpg/parse';
+import type { ParseRequest, ParseService, ParseServiceOptions } from '@cpg/parse';
 import { createParseService } from '@cpg/parse';
 import { createMemoryStore, type MemoryStore } from '@cpg/sink';
 import type { NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
@@ -436,6 +436,28 @@ describe('removals: an identity node carrying a file is not code held for it', (
     const r = recorded(memory);
     await indexWith(engineOn(r.sink), await tree({ 'a.py': 'a' }));
     expect(kinds(r.writes.slice(1))).toEqual(['replace-file a.py', 'delete-file x.ts']);
+  });
+});
+
+// Stop-list 192: EngineConfig.runtimeDir is the code tier's ParseService runtimeDir; absent, not passed.
+describe('EngineConfig.runtimeDir (stop-list 192)', () => {
+  it('reaches the ParseService the code tier makes, and is not passed without one', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const made: ParseServiceOptions[] = [];
+    const deps: EngineDeps = {
+      createParseService: (options) => {
+        made.push(options);
+        return createParseService({ registry: options.registry, source: options.source });
+      },
+    };
+    const runtimeDir = '/install/apps/vscode/dist/grammars';
+    const config = { version: '0', consumers: CONSUMERS, runtimeDir };
+    await indexWith(createEngine(config, { ...deps, memoryStore: recorded().sink }), root);
+    await indexWith(engineOn(recorded().sink, deps), root);
+    expect([
+      made[0]?.runtimeDir,
+      made.map((options) => Object.hasOwn(options, 'runtimeDir')),
+    ]).toEqual([runtimeDir, [true, false]]);
   });
 });
 

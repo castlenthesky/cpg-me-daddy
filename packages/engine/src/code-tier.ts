@@ -175,6 +175,12 @@ export interface CodeTierOptions {
    * grammar package's own directory (the package anchor).
    */
   readonly grammarDir?: string;
+  /**
+   * The front door's folder for web-tree-sitter's own `web-tree-sitter.wasm`, handed to
+   * `createParseService` as ParseServiceOptions.runtimeDir (stop-list 192). Absent: not passed, so
+   * web-tree-sitter finds it beside its own module.
+   */
+  readonly runtimeDir?: string;
 }
 
 /** One file's code tier. `code` is the ParseError or ExtractOutcome code, or `truncated`/`internal`. */
@@ -187,10 +193,10 @@ export interface CodeTier {
   covers(language: string | null): boolean;
   /**
    * One walked file of a covered language, from the walker's bytes. Never throws. In order:
-   * 1. On the first call only: `createParseService({ registry, source })`, with `source` =
+   * 1. On the first call only: `createParseService({ registry, source, runtimeDir })`, with `source` =
    *    `createDiskGrammarSource(pkg => resolveGrammarDir({ packageName: pkg, explicit: grammarDir,
    *    resolvePackageJson: p => require.resolve(`${p}/package.json`) }))` (`explicit` omitted when
-   *    `grammarDir` is). Every later call reuses that service.
+   *    `grammarDir` is, `runtimeDir` when `runtimeDir` is). Every later call reuses that service.
    * 2. `text = decodeSource(bytes)`, then `parse({ key: file.path, text, language: file.language })`.
    *    `ok: false` is `failed` with the ParseError's code and message.
    * 3. `extract({ path: file.path, grammarId: file.language, root: handle.root, revision_id:

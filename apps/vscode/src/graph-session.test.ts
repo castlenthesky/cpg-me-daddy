@@ -407,6 +407,7 @@ interface SetUp {
   readonly onReport?: (report: VerificationReport) => void;
   readonly log?: Logger;
   readonly grammarDir?: string;
+  readonly runtimeDir?: string;
 }
 
 function setUp(over: SetUp = {}) {
@@ -436,6 +437,7 @@ function setUp(over: SetUp = {}) {
     root: over.root,
     version: '9.8.7',
     ...(over.grammarDir === undefined ? {} : { grammarDir: over.grammarDir }),
+    ...(over.runtimeDir === undefined ? {} : { runtimeDir: over.runtimeDir }),
     createEngine: (config) => {
       engines.push(config);
       const n = engines.length;
@@ -648,6 +650,21 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
     const consumers = { inspect: false, store: 'memory', vscode: true };
     expect(given.engines).toEqual([{ version: '9.8.7', consumers, grammarDir }]);
     expect(none.engines.map((config) => Object.hasOwn(config, 'grammarDir'))).toEqual([false]);
+  });
+
+  // Stop-list 192: the folder of web-tree-sitter's own runtime in the install reaches the engine too.
+  it('gives the engine the runtimeDir it was given, and none when it was given none', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const runtimeDir = '/install/apps/vscode/dist/runtime';
+    const given = setUp({ root, runtimeDir });
+    void given.session.openGraph();
+    await given.watching(1);
+    const none = setUp({ root });
+    void none.session.openGraph();
+    await none.watching(1);
+    const consumers = { inspect: false, store: 'memory', vscode: true };
+    expect(given.engines).toEqual([{ version: '9.8.7', consumers, runtimeDir }]);
+    expect(none.engines.map((config) => Object.hasOwn(config, 'runtimeDir'))).toEqual([false]);
   });
 
   it('resolves once ready is a graph: an initial snapshot at seq 0, a new epoch, then the warnings', async () => {
