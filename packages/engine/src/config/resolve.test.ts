@@ -81,7 +81,13 @@ describe('resolveConfig: built-in defaults', () => {
       },
       queryTimeoutMs: builtIn(30000),
       resolve: { perFileMs: builtIn(500), perSiteMs: builtIn(250) },
-      watch: { trailingMs: builtIn(100), ceilingMs: builtIn(500), bulkThresholdFiles: builtIn(50) },
+      watch: {
+        trailingMs: builtIn(100),
+        ceilingMs: builtIn(500),
+        bulkThresholdFiles: builtIn(50),
+        // Sprint 25 (controller decision 78): five minutes.
+        rescanIntervalMs: builtIn(300000),
+      },
     });
   });
 
@@ -172,6 +178,7 @@ describe('resolveConfig: precedence flag > env > file > manifest > default', () 
       'watch.trailingMs': 14,
       'watch.ceilingMs': 15,
       'watch.bulkThresholdFiles': 16,
+      'watch.rescanIntervalMs': 17,
     };
     expect(resolveConfig([at('file', 'F', values)])).toEqual({
       root: f('/r'),
@@ -182,7 +189,12 @@ describe('resolveConfig: precedence flag > env > file > manifest > default', () 
       store: { host: f('h'), port: f(1), graph: f('g'), mode: f('docker') },
       queryTimeoutMs: f(11),
       resolve: { perFileMs: f(12), perSiteMs: f(13) },
-      watch: { trailingMs: f(14), ceilingMs: f(15), bulkThresholdFiles: f(16) },
+      watch: {
+        trailingMs: f(14),
+        ceilingMs: f(15),
+        bulkThresholdFiles: f(16),
+        rescanIntervalMs: f(17),
+      },
     });
   });
 });
@@ -221,6 +233,10 @@ describe('resolveConfig: validation (a failure is never swallowed)', () => {
     ['watch.trailingMs', 0],
     ['watch.ceilingMs', null],
     ['watch.bulkThresholdFiles', 0],
+    // Sprint 25 (decision 78): 0 turns the crawl off; otherwise a positive integer.
+    ['watch.rescanIntervalMs', -1],
+    ['watch.rescanIntervalMs', 1.5],
+    ['watch.rescanIntervalMs', '300000'],
   ])('%s = %j is a ConfigError on that key', (key, bad) => {
     const e = configError(() => resolveConfig([CWD, at('env', 'SRC', { [key]: bad })]));
     expect([e.key, e.layer, e.source]).toEqual([key, 'env', 'SRC']);
@@ -235,6 +251,8 @@ describe('resolveConfig: validation (a failure is never swallowed)', () => {
     ['consumers.inspect', false],
     ['consumers.store', 'falkor'],
     ['consumers.vscode', true],
+    ['watch.rescanIntervalMs', 0],
+    ['watch.rescanIntervalMs', 1],
   ])('%s = %j is accepted (the boundary is inclusive)', (key, ok) => {
     const r = resolveConfig([CWD, at('env', 'SRC', { [key]: ok })]);
     expect(leaf(r, key)).toEqual({ value: ok, layer: 'env', source: 'SRC' });
@@ -334,7 +352,7 @@ describe('toCpgConfigInput', () => {
       store: { host: '127.0.0.1', port: 7000, graph: 'cpg', mode: 'remote' },
       queryTimeoutMs: 30000,
       resolve: { perFileMs: 500, perSiteMs: 250 },
-      watch: { trailingMs: 5, ceilingMs: 500, bulkThresholdFiles: 50 },
+      watch: { trailingMs: 5, ceilingMs: 500, bulkThresholdFiles: 50, rescanIntervalMs: 300000 },
     });
   });
 });

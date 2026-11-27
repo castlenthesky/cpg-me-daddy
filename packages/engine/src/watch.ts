@@ -326,6 +326,8 @@ export async function runWatch(
             emit(
               {
                 kind: 'batch',
+                // SEAT: decision 80 passes the session batch's cause (sprint 25).
+                cause: 'live',
                 changes: batch.changes,
                 write: {
                   nodesWritten: receipt.nodesWritten,

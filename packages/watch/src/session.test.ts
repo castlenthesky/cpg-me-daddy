@@ -1671,6 +1671,134 @@ describe('createWatchSession: backend errors and the rescan (decision 57, INV-25
   });
 });
 
+// Sprint 25 (the drift crawl): controller decision 76 (rescan() is the reconcile a rescanRequired error
+// runs, under its rules), S25-1 (onRescanDone), C-WATCH INV-20, INV-21, INV-22 and silence after close.
+describe('rescan(): the drift crawl (decision 76) and onRescanDone (S25-1)', () => {
+  it('runs one reconcile: cause rescan, the next seq; it finds what no event reported, and known state advances', async () => {
+    const h = await start({}, { disk: { 'a.ts': 'A', lib: null, 'lib/x.ts': 'X' } });
+    h.disk.write('a.ts', 'A2');
+    h.disk.rm('lib');
+    h.disk.write('b.ts', 'B');
+    await h.wait(30);
+    h.session.rescan();
+    await h.wait(0);
+    const changes = [
+      gone('directory', 'lib', 30),
+      file('changed', 'a.ts', 'A2', 30),
+      file('created', 'b.ts', 'B', 30),
+    ];
+    expect(h.sink.delivered).toEqual([rescan(1, changes, 30, 30)]);
+    expect(h.disk.probe.list.mock.calls).toEqual([[WORKSPACE_ROOT]]);
+    // Delivered, so known: a second rescan finds nothing, delivers nothing and takes no seq (INV-20).
+    h.session.rescan();
+    await h.wait(0);
+    h.disk.write('c.ts', 'C');
+    h.emit(['created', 'c.ts']);
+    await h.wait();
+    expect(h.disk.probe.list).toHaveBeenCalledTimes(2);
+    expect(h.sink.delivered.slice(1)).toEqual([
+      live(2, [file('created', 'c.ts', 'C', 30)], 30, 130),
+    ]);
+  });
+
+  it('waits behind a batch in flight (INV-21); calls before it starts collapse, a rescanRequired error too; one during its walk gets its own', async () => {
+    const h = await start();
+    const hung = deferred();
+    h.sink.plan.push(hung);
+    h.disk.write('a.ts', 'a');
+    h.emit(['created', 'a.ts']);
+    await h.wait();
+    h.session.rescan();
+    h.fail({ ...RESCAN });
+    h.session.rescan();
+    await h.wait(0);
+    expect(h.disk.probe.list).not.toHaveBeenCalled();
+    hung.resolve();
+    await h.wait(0);
+    expect(h.disk.probe.list).toHaveBeenCalledTimes(1);
+    const listing = deferred<Listing>();
+    h.disk.probe.list.mockReturnValueOnce(listing.promise);
+    h.session.rescan();
+    await h.wait(0);
+    h.session.rescan();
+    listing.resolve([]);
+    await h.wait(0);
+    expect(h.disk.probe.list).toHaveBeenCalledTimes(3);
+  });
+
+  it('after close(), rescan() does nothing: no walk, no sink call, no onRescanDone', async () => {
+    const done = vi.fn<() => void>();
+    const h = await start({ onRescanDone: done });
+    h.disk.write('a.ts', 'a');
+    await h.session.close();
+    expect(() => h.session.rescan()).not.toThrow();
+    await h.wait(1000);
+    expect([h.disk.probe.list.mock.calls, h.sink.calls, done.mock.calls]).toEqual([[], [], []]);
+  });
+
+  it('onRescanDone follows each rescan once it has ended: after its batch is confirmed, when it is empty, and for a rescanRequired error; never for the initial batch or a live window', async () => {
+    const seen: number[] = [];
+    let held: { readonly sink: { readonly delivered: readonly ChangeBatch[] } } | undefined;
+    const onRescanDone = (): void => void seen.push(held?.sink.delivered.length ?? -1);
+    const h = await start({ onRescanDone }, { disk: { 'a.ts': 'A' } });
+    held = h;
+    h.disk.write('b.ts', 'B');
+    h.emit(['created', 'b.ts']);
+    await h.wait();
+    expect(seen).toEqual([]);
+    const hung = deferred();
+    h.sink.plan.push(hung);
+    h.disk.write('c.ts', 'C');
+    h.session.rescan();
+    await h.wait(0);
+    expect([h.sink.calls.length, seen]).toEqual([2, []]);
+    hung.resolve();
+    await h.wait(0);
+    expect(seen).toEqual([2]);
+    h.session.rescan();
+    await h.wait(0);
+    h.fail({ ...RESCAN });
+    await h.wait(0);
+    expect([seen, h.sink.calls.length]).toEqual([[2, 2, 2], 2]);
+  });
+
+  it('onRescanDone follows a rescan that reached onDegraded, its walk thrown or its retries exhausted (INV-22)', async () => {
+    const order: string[] = [];
+    const h = await start({
+      onRescanDone: () => order.push('done'),
+      onDegraded: (paths) => order.push(`degraded ${paths.join(' ')}`),
+    });
+    h.disk.probe.list.mockRejectedValueOnce(new Error('EIO'));
+    h.session.rescan();
+    await h.wait(0);
+    h.disk.write('a.ts', 'a');
+    h.sink.plan.push(...[1, 2, 3, 4, 5].map((n) => new Error(`store down ${String(n)}`)));
+    h.session.rescan();
+    await h.wait(0);
+    await backoff(h);
+    expect(order).toEqual(['degraded .', 'done', 'degraded a.ts', 'done']);
+  });
+
+  it.each([
+    ['resolves', (listing: ReturnType<typeof deferred<Listing>>) => listing.resolve([])],
+    [
+      'rejects',
+      (listing: ReturnType<typeof deferred<Listing>>) => listing.reject(new Error('EIO')),
+    ],
+  ])('a rescan whose walk %s after close() ends with no onRescanDone', async (_case, end) => {
+    const done = vi.fn<() => void>();
+    const h = await start({ onRescanDone: done }, { disk: { 'a.ts': 'a' } });
+    const listing = deferred<Listing>();
+    h.disk.probe.list.mockReturnValueOnce(listing.promise);
+    h.session.rescan();
+    await h.wait(0);
+    await h.session.close();
+    end(listing);
+    await h.wait(1000);
+    expect([done.mock.calls, h.sink.calls]).toEqual([[], []]);
+  });
+});
+
 describe('C-WATCH INV-3', () => {
   const SRC = __dirname;
   const IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;

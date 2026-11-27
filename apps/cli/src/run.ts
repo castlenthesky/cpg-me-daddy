@@ -18,6 +18,7 @@ import {
   type IndexProgress,
   type IndexReport,
   type Provenanced,
+  type RescanTrigger,
   type ResolvedConfig,
   type StoreTarget,
   type VerifyReport,
@@ -81,6 +82,11 @@ export interface RunOptions {
    */
   readonly startInspector?: StartInspector;
   readonly signal?: AbortSignal;
+  /**
+   * The composition root's rescan command (controller decision 79): main.ts listens for SIGHUP only
+   * while `cpg watch` is subscribed. SEAT: `cpg watch` passes it on in sprint 25.
+   */
+  readonly rescan?: RescanTrigger;
   /** The process working directory, read in main.ts: the last workspace-root fallback (C-CLI). */
   readonly cwd?: string;
 }

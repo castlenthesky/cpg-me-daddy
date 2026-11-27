@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import type {
   CheckResult,
   CpgEngine,
+  RescanTrigger,
   EngineConfig,
   EngineDeps,
   EngineSession,
@@ -96,10 +97,16 @@ const ready = (report = REPORT): WatchEvent => ({
   root: '/w',
   report,
 });
-const batch = (seq: number, total: number, paths = ['src/a.ts']): WatchEvent => ({
+const batch = (
+  seq: number,
+  total: number,
+  paths = ['src/a.ts'],
+  cause: 'live' | 'rescan' = 'live',
+): WatchEvent => ({
   kind: 'batch',
   seq,
   at: 2000 + seq,
+  cause,
   changes: paths
     .filter(isWorkspacePath)
     .map((path) => ({ kind: 'changed', entry: 'file', path, observedAt: 1 })),
@@ -374,6 +381,7 @@ interface LiveOptions {
   readonly configs?: EngineConfig[];
   readonly io?: CapturedIo;
   readonly env?: Record<string, string>;
+  readonly rescan?: RescanTrigger;
 }
 
 function live(argv: string[], o: LiveOptions = {}): Live {
@@ -389,6 +397,7 @@ function live(argv: string[], o: LiveOptions = {}): Live {
       return o.engine ?? createEngine(config, o.deps);
     },
     ...(o.noInspector === true ? {} : { startInspector: inspector.start }),
+    ...(o.rescan !== undefined && { rescan: o.rescan }),
     cwd: tmpdir(),
     signal: controller.signal,
   }).finally(() => {
@@ -1133,4 +1142,85 @@ describe('cpg watch over the real engine (I-23, decision 67)', () => {
     expect(await l.done).toBe(EXIT.INTERRUPTED);
     expect(field(parsed(l).at(-1), 'kind')).toBe('closed');
   });
+});
+
+// ── sprint 25: the drift crawl (controller decisions 78-80) ──
+
+/** A RescanTrigger the test fires, as main.ts's SIGHUP would. */
+function commands() {
+  const listeners = new Set<() => void>();
+  const trigger: RescanTrigger = {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+  const fire = (): void => {
+    for (const listener of listeners) listener();
+  };
+  return { trigger, fire, count: () => listeners.size };
+}
+
+describe('cpg watch: the drift crawl (decisions 78-80)', () => {
+  it.each([
+    ['the built-in', undefined, 300000],
+    ['a file', 'version: 1\nwatch: { rescan_interval_ms: 1234 }\n', 1234],
+    ['a file that turns it off', 'version: 1\nwatch: { rescan_interval_ms: 0 }\n', 0],
+  ])('the request carries watch.rescanIntervalMs: %s', async (_w, file, ms) => {
+    const root = await workspace(file);
+    const s = scripted();
+    const l = await watching(['watch', root], s);
+    expect(s.requests[0]?.config.rescanIntervalMs).toBe(ms);
+    l.abort();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
+  });
+
+  it('a command reaches the engine after `cpg: rescan requested`; once the engine unsubscribes, a command does nothing', async () => {
+    const root = await workspace();
+    const s = scripted();
+    const t = commands();
+    const l = live(['watch', root], { engine: s.engine, rescan: t.trigger });
+    await until(l, () => s.requests.length === 1, 'engine.watch');
+    expect(t.count()).toBe(0);
+    s.emit(ready());
+    const heard: number[] = [];
+    const off = s.requests[0]?.rescan?.subscribe(() => heard.push(l.io.stderr.length));
+    t.fire();
+    t.fire();
+    off?.();
+    t.fire();
+    const said = l.io.stderr.slice(READY_LINES.length);
+    expect([heard, said, t.count()]).toEqual([
+      [READY_LINES.length + 1, READY_LINES.length + 2],
+      ['cpg: rescan requested', 'cpg: rescan requested'],
+      0,
+    ]);
+    l.abort();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
+  });
+
+  it.each([
+    [
+      [],
+      [
+        'cpg: rescan batch 1: 2 change(s) in 13 ms; consumers: memory, panel',
+        'cpg: batch 2: 1 change(s) in 4 ms; consumers: memory, panel',
+      ],
+    ],
+    [['--quiet'], []],
+  ])(
+    'a rescan batch line says so, a live one does not (%j); stdout carries the cause',
+    async (flags, lines) => {
+      const root = await workspace();
+      const s = scripted();
+      const l = await watching(['watch', root, ...flags], s);
+      s.emit(ready());
+      s.emit(batch(1, 13, ['a.ts', 'b.ts'], 'rescan'));
+      s.emit(batch(2, 4, ['a.ts']));
+      expect(l.io.stderr.slice(READY_LINES.length)).toEqual(lines);
+      expect(parsed(l).map((e) => field(e, 'cause'))).toEqual([undefined, 'rescan', 'live']);
+      l.abort();
+      expect(await l.done).toBe(EXIT.INTERRUPTED);
+    },
+  );
 });

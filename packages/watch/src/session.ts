@@ -650,5 +650,11 @@ export async function createWatchSession(options: WatchSessionOptions): Promise<
   await initial.promise;
   startup = false;
 
-  return { close };
+  return {
+    close,
+    rescan(): void {
+      // SEAT: decision 76 (sprint 25): enqueueRescan() under the rescanRequired rules.
+      throw new Error('SEAT: WatchSession.rescan() lands in sprint 25 (decision 76)');
+    },
+  };
 }

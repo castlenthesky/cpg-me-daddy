@@ -23,7 +23,13 @@ import type {
 } from '@cpg/watch';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createEngine } from './engine';
-import type { ConsumerSwitches, StoreTarget, WatchEvent, WatchRequest } from './port';
+import type {
+  ConsumerSwitches,
+  RescanTrigger,
+  StoreTarget,
+  WatchEvent,
+  WatchRequest,
+} from './port';
 import { toBatchOp } from './watch';
 
 const roots: string[] = [];
@@ -264,6 +270,7 @@ interface StartOptions {
   readonly config?: Partial<Omit<WatchRequest['config'], 'root'>>;
   readonly controller?: AbortController;
   readonly onEvent?: (event: WatchEvent) => void;
+  readonly rescan?: RescanTrigger;
 }
 async function start(root: string, o: StartOptions = {}): Promise<Run> {
   const clock = o.clock ?? fakeClock(5000);
@@ -285,7 +292,7 @@ async function start(root: string, o: StartOptions = {}): Promise<Run> {
   const events: WatchEvent[] = [];
   let closesAtClosed: number | undefined;
   const done = engine.watch(
-    { config: { root, ...o.config }, session },
+    { config: { root, ...o.config }, session, ...(o.rescan !== undefined && { rescan: o.rescan }) },
     (event) => {
       events.push(event);
       if (event.kind === 'closed') closesAtClosed = backend.closes;
@@ -458,6 +465,7 @@ describe('live batches (decisions 62, 63)', () => {
       kind: 'batch',
       seq: 1,
       at: 5157,
+      cause: 'live',
       changes: [
         {
           kind: 'created',
@@ -980,6 +988,186 @@ describe('stop (decision 63)', () => {
     await until(() => host.landed === 2, 'the write');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(kinds(run.events)).toEqual(['ready', 'closed']);
+  });
+});
+
+// Sprint 25 (the drift crawl, stop-list 151): controller decisions 76-80 and S25-1/S25-3, C-CLI I-23
+// (seq dense, closed last) and C-WATCH's silence after close. The disk changes behind the backend's
+// back: only a rescan can find what no event reported.
+function commands() {
+  const listeners = new Set<() => void>();
+  const log: string[] = [];
+  const trigger: RescanTrigger = {
+    subscribe(listener) {
+      log.push('subscribe');
+      listeners.add(listener);
+      return () => {
+        log.push('unsubscribe');
+        listeners.delete(listener);
+      };
+    },
+  };
+  const fire = (): void => {
+    for (const listener of listeners) listener();
+  };
+  return { trigger, log, fire, count: () => listeners.size };
+}
+const crawl = (b: BatchEvent): unknown[] => [
+  b.seq,
+  b.at,
+  b.cause,
+  b.changes.map((c) => `${c.kind} ${c.path}`),
+];
+
+describe('the drift crawl (decisions 76-80)', () => {
+  it('the interval: armed once ready is out; it runs that long after each rescan ended, empty or not (decision 78)', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const clock = fakeClock(5000);
+    let writeTakes = 0;
+    const memory = recorder({ during: () => clock.tick(writeTakes) });
+    let armedAtReady = -1;
+    const onEvent = (e: WatchEvent): void => {
+      if (e.kind === 'ready') armedAtReady = clock.armed();
+    };
+    const config = { rescanIntervalMs: 1000 };
+    const run = await start(root, { clock, memory, config, onEvent });
+    await ready(run);
+    await until(() => clock.armed() === 1, 'the interval');
+    await writeFile(join(root, 'b.ts'), 'b');
+    writeTakes = 400;
+    clock.advance(999);
+    expect(clock.armed()).toBe(1);
+    clock.advance(1);
+    await until(() => batches(run.events).length === 1, 'the first rescan');
+    writeTakes = 0;
+    await until(() => clock.armed() === 1, 'the interval again');
+    // The rescan's write took 400 ms: the next is due 1000 ms after it ended, not after it began.
+    clock.advance(999);
+    expect(clock.armed()).toBe(1);
+    clock.advance(1);
+    await until(() => clock.armed() === 1, 'the interval after an empty rescan');
+    await rm(join(root, 'b.ts'));
+    clock.advance(1000);
+    await until(() => batches(run.events).length === 2, 'the third rescan');
+    expect(batches(run.events).map(crawl)).toEqual([
+      [1, 6400, 'rescan', ['created b.ts']],
+      [2, 8400, 'rescan', ['deleted b.ts']],
+    ]);
+    expect([armedAtReady, await nodePaths(memory.store)]).toEqual([0, ['.', 'a.ts']]);
+  });
+
+  it('a command: subscribed once ready is out; it rescans now and restarts the countdown; unsubscribed at stop, before closed (decision 79)', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const t = commands();
+    let subscribedAtReady = -1;
+    const onEvent = (e: WatchEvent): void => {
+      if (e.kind === 'ready') subscribedAtReady = t.count();
+      if (e.kind === 'closed') t.log.push('closed');
+    };
+    const config = { rescanIntervalMs: 1000 };
+    const run = await start(root, { config, rescan: t.trigger, onEvent });
+    await ready(run);
+    await until(
+      () => t.count() === 1 && run.clock.armed() === 1,
+      'the subscription and the interval',
+    );
+    run.clock.advance(600);
+    await writeFile(join(root, 'b.ts'), 'b');
+    t.fire();
+    expect(run.clock.armed()).toBe(0);
+    await until(() => batches(run.events).length === 1, 'the commanded rescan');
+    await until(() => run.clock.armed() === 1, 'the countdown');
+    run.clock.advance(999);
+    expect(run.clock.armed()).toBe(1);
+    run.abort();
+    await run.done;
+    t.fire();
+    await realDelay();
+    expect([subscribedAtReady, t.log, batches(run.events).map(crawl)]).toEqual([
+      0,
+      ['subscribe', 'unsubscribe', 'closed'],
+      [[1, 5600, 'rescan', ['created b.ts']]],
+    ]);
+    expect(run.clock.armed()).toBe(0);
+  });
+
+  it.each([
+    ['0', 0],
+    ['absent', undefined],
+  ])(
+    'rescanIntervalMs %s: no interval, and a command still rescans (decisions 78, 79; S25-3)',
+    async (_name, ms) => {
+      const root = await tree({ 'a.ts': 'a' });
+      const t = commands();
+      const config = ms === undefined ? {} : { rescanIntervalMs: ms };
+      const run = await start(root, { config, rescan: t.trigger });
+      await ready(run);
+      await until(() => t.count() === 1, 'the subscription');
+      await writeFile(join(root, 'b.ts'), 'b');
+      run.clock.advance(3_600_000);
+      await realDelay();
+      expect([run.clock.armed(), batches(run.events)]).toEqual([0, []]);
+      t.fire();
+      await until(() => batches(run.events).length === 1, 'the commanded rescan');
+      await realDelay();
+      expect(run.clock.armed()).toBe(0);
+    },
+  );
+
+  it('nothing fires after closed: a stop clears the interval and its rescan in flight arms nothing', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const clock = fakeClock(5000);
+    const gate = { open: (): void => undefined };
+    let hold = false;
+    const memory = recorder({
+      during: () =>
+        hold
+          ? new Promise<void>((resolve) => {
+              gate.open = resolve;
+            })
+          : undefined,
+    });
+    const run = await start(root, { clock, memory, config: { rescanIntervalMs: 1000 } });
+    await ready(run);
+    await until(() => clock.armed() === 1, 'the interval');
+    await writeFile(join(root, 'b.ts'), 'b');
+    hold = true;
+    clock.advance(1000);
+    await until(() => memory.ops.length === 2, 'the rescan write');
+    run.abort();
+    await run.done;
+    gate.open();
+    await realDelay();
+    clock.advance(3_600_000);
+    await realDelay();
+    expect([clock.armed(), kinds(run.events), memory.ops.length]).toEqual([
+      0,
+      ['ready', 'closed'],
+      2,
+    ]);
+  });
+
+  it('a watch on a store that still holds files deleted since an earlier index starts without them (decision 77, stop-list 151)', async () => {
+    const root = await tree({ 'a.ts': 'a', 'gone.ts': 'g', 'old/x.ts': 'x' });
+    const memory = recorder();
+    const first = createEngine(
+      { version: '1', consumers: HEADLESS },
+      { memoryStore: memory.store },
+    );
+    const session = await first.connect(TARGET, { readOnly: false });
+    const signal = new AbortController().signal;
+    await first.index({ config: { root }, session, resumeFrom: null }, () => undefined, signal);
+    await rm(join(root, 'gone.ts'));
+    await rm(join(root, 'old'), { recursive: true });
+    const run = await start(root, { memory });
+    await ready(run);
+    const op = memory.ops[1];
+    const removals = op?.kind === 'merge-filesystem' ? op.removals.toSorted(byText) : undefined;
+    expect([removals, await nodePaths(memory.store), memory.ops.length]).toEqual([
+      ['gone.ts', 'old', 'old/x.ts'],
+      ['.', 'a.ts'],
+      2,
+    ]);
   });
 });
 
