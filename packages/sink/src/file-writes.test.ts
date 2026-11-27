@@ -668,6 +668,35 @@ describe('MemoryStore replace-file', () => {
   });
 });
 
+// Post-implementation (named in the PR): sabotage #26 survived (no test read GraphNode.name),
+// and the review of the implementation found an edge merge that collapsed other files' duplicates.
+describe('MemoryStore replace-file, after the implementation', () => {
+  it("names a created node from its name property and keeps a merged node's name", async () => {
+    const store = await opened();
+    await store.write(TREE);
+    await plant(store, [{ id: S_F, type: 'SYMBOL', name: 'f', data: { fqn: S_F } }]);
+    await store.write(writeA(1));
+    const { nodes } = await store.readAll();
+    expect([A_MOD, A_F, S_F].map((id) => nodes.find((n) => n.id === id)?.name)).toEqual([
+      'a',
+      'f',
+      'f',
+    ]);
+  });
+
+  it("leaves another file's duplicate edges as they are (INV-12)", async () => {
+    const store = await seeded();
+    const twin: GraphEdge = { source: B_CALL, target: S_B, type: 'TARGETS' };
+    const twins = async (): Promise<unknown[]> =>
+      (await store.readAll()).edges.filter((x) => x.type === 'TARGETS');
+    // The GraphSink half concatenates edges (stop-list 50), so both land.
+    await plant(store, [], [twin, twin]);
+    expect(await twins()).toEqual([twin, twin]);
+    await store.write(writeA(2, REV_A2));
+    expect(await twins()).toEqual([twin, twin]);
+  });
+});
+
 describe('MemoryStore delete-file', () => {
   it('deletes the file-owned subgraph only: the FILE and every SYMBOL stay (decision 104)', async () => {
     const store = await seeded();
