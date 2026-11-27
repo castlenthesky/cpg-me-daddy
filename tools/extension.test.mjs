@@ -67,7 +67,9 @@ function standIn(root) {
     diagnostics: new Map(),
     collections: [],
     errors: [],
+    errorButtons: [],
     warnings: [],
+    channels: [],
     opened: [],
     framed: [],
     themeListeners: [],
@@ -119,6 +121,7 @@ function standIn(root) {
   seen.panel = panel;
   const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 };
   const vscode = {
+    version: '1.148.0',
     Uri,
     Position,
     Range,
@@ -182,7 +185,21 @@ function standIn(root) {
         seen.themeListeners.push(listener);
         return disposable(() => seen.themeListeners.splice(0));
       },
-      showErrorMessage: async (text) => void seen.errors.push(text),
+      showErrorMessage: async (text, ...buttons) => {
+        seen.errors.push(text);
+        seen.errorButtons.push(buttons);
+        return undefined;
+      },
+      createOutputChannel: (name, options) => {
+        const channel = { name, options, lines: [], shown: 0 };
+        for (const level of ['trace', 'debug', 'info', 'warn', 'error']) {
+          channel[level] = (message, ...args) => channel.lines.push([level, message, ...args]);
+        }
+        channel.show = () => (channel.shown += 1);
+        channel.dispose = () => seen.disposed.push('log');
+        seen.channels.push(channel);
+        return channel;
+      },
       showWarningMessage: async (text) => void seen.warnings.push(text),
       showTextDocument: async (uri, options) => {
         if (seen.openFails) throw new Error('cannot open');
@@ -329,10 +346,13 @@ describe('the manifest', () => {
     expect(manifest.contributes.commands).toEqual([
       { command: 'cpg.openGraph', title: 'CPG: Open Graph' },
       { command: 'cpg.verify', title: 'CPG: Verify' },
+      { command: 'cpg.showLog', title: 'CPG: Show Log' },
     ]);
     expect(manifest.activationEvents).toEqual(['onWebviewPanel:cpg.graph']);
     const { seen } = activate();
-    expect(new Set(seen.commands.keys())).toEqual(new Set(['cpg.openGraph', 'cpg.verify']));
+    expect(new Set(seen.commands.keys())).toEqual(
+      new Set(['cpg.openGraph', 'cpg.verify', 'cpg.showLog']),
+    );
     expect([...seen.serializers.keys()]).toEqual(['cpg.graph']);
     expect(seen.panels).toEqual([]);
   });
@@ -395,6 +415,46 @@ describe('cpg.openGraph', () => {
     const { seen, run } = activate(null);
     await run('cpg.openGraph');
     expect([seen.errors, seen.panels]).toEqual([['CPG: open a folder first'], []]);
+  });
+});
+
+// The log: one LogOutputChannel named CPG, which VS Code timestamps and filters by the user's log level.
+const lines = (seen, level) =>
+  seen.channels[0].lines.filter(([recorded]) => level === undefined || recorded === level);
+
+describe('the log', () => {
+  it('is one log channel named CPG, opened by cpg.showLog, that starts with the activation line', async () => {
+    const { seen, run } = activate();
+    expect(seen.channels.map(({ name, options }) => [name, options])).toEqual([
+      ['CPG', { log: true }],
+    ]);
+    expect(lines(seen, 'info')[0][1]).toMatch(
+      /^activated: cpg \S+ in VS Code 1\.148\.0; workspace /,
+    );
+    await run('cpg.showLog');
+    expect(seen.channels[0].shown).toBe(1);
+  });
+
+  it('records each command, the index and the verdict', async () => {
+    const { seen, run } = activate();
+    await run('cpg.verify');
+    const info = lines(seen, 'info').map(([, message]) => message);
+    expect(info).toContain('cpg.verify');
+    expect(
+      info.some((message) => /^indexed \d+ files: \d+ nodes, \d+ edges in \d+ ms/.test(message)),
+    ).toBe(true);
+    expect(
+      info.some((message) => /^verify at seq -?\d+: (pass|fail|stale|unavailable)/.test(message)),
+    ).toBe(true);
+  });
+
+  it('records an error it shows, and the error offers the log', async () => {
+    const { seen, run } = activate(null);
+    await run('cpg.openGraph');
+    expect(lines(seen, 'error').map(([, message]) => message)).toEqual([
+      'CPG: open a folder first',
+    ]);
+    expect(seen.errorButtons).toEqual([['Show Log']]);
   });
 });
 
@@ -592,7 +652,7 @@ describe('deactivation', () => {
     const before = panel.posted.length;
     deactivate();
     expect(vi.getTimerCount()).toBe(0);
-    expect(new Set(seen.disposed)).toEqual(new Set(['diagnostics', 'status bar']));
+    expect(new Set(seen.disposed)).toEqual(new Set(['diagnostics', 'status bar', 'log']));
     expect([seen.commands.size, seen.serializers.size, seen.themeListeners.length]).toEqual([
       0, 0, 0,
     ]);

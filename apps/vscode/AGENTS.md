@@ -6,3 +6,5 @@ Layout and rules: `docs/outline/03-architecture.md` §2. Root `AGENTS.md` applie
 - The only place `vscode` may be imported, and here only `extension.ts` and the three adapters (check-deps rule 10). Imports `@cpg/*` front doors only.
 - `host-tests/` is built into `dist/host-tests` by `tsc -b` and run by `@vscode/test-cli`, never by vitest. Never start VS Code with a display you did not make: `bun run test:vscode-host` is headless unless `CPG_HOST_DISPLAY=1`. A `pass` of render-reconciliation there proves the bundle loaded and the page reported, not that a picture was drawn (stop-list 124).
 - `host-tests/spikes/` are measurements (`bun run spike:vscode-host`), not tests: their numbers live in `docs/outline/06-measurements.yaml`.
+
+- Logging: plain-node modules take a `Logger` (`src/log.ts`); `extension.ts` passes VS Code's `LogOutputChannel` "CPG" (Output panel, or **CPG: Show Log**). Every message shown to the user is logged too, errors with their stack. Use `info` for what a user would want to follow, `debug` for detail, `trace` for noise; never `console.*` in extension code. The user picks the level with "Developer: Set Log Level...".

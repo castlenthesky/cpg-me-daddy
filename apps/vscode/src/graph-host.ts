@@ -50,6 +50,8 @@ export interface GraphHostOptions {
    * accepted (controller decision 36): VerifyScheduler.changed. Nothing else calls it.
    */
   readonly onChange: () => void;
+  /** Each fault as it is recorded (faults() keeps them all), for the extension's log. */
+  readonly onFault?: (fault: ProtocolFault) => void;
 }
 
 const EMPTY_PAYLOAD: GraphPayload = { seq: -1, nodes: [], edges: [] };
@@ -138,7 +140,7 @@ export class PanelGraphHost implements GraphHost {
       case 'already-applied':
         return;
       case 'gap':
-        this.recordedFaults.push({
+        this.record({
           kind: 'seq-gap',
           expected: result.expected,
           received: result.got,
@@ -309,6 +311,15 @@ export class PanelGraphHost implements GraphHost {
     });
   }
 
+  private record(fault: ProtocolFault): void {
+    this.recordedFaults.push(fault);
+    try {
+      this.options.onFault?.(fault);
+    } catch {
+      // The log's trouble is not the protocol's.
+    }
+  }
+
   /** The one place a message leaves: dropped unless the attached page is ready (I-2). */
   private post(message: HostToWebview): void {
     if (this.transport === undefined || !this.ready) return;
@@ -316,20 +327,20 @@ export class PanelGraphHost implements GraphHost {
       this.transport.post(message);
     } catch (thrown) {
       const seq = message.type === 'theme' ? this.seq() : message.seq;
-      this.recordedFaults.push({ kind: 'post-failed', seq, error: serializeError(thrown) });
+      this.record({ kind: 'post-failed', seq, error: serializeError(thrown) });
     }
   }
 
   private handleMessage(raw: unknown): void {
     const parsed = this.options.parse(raw);
     if (parsed === undefined) {
-      this.recordedFaults.push({ kind: 'unknown-message', received: raw });
+      this.record({ kind: 'unknown-message', received: raw });
       return;
     }
     switch (parsed.type) {
       case 'ready':
         if (parsed.protocol !== CPG_PROTOCOL_VERSION) {
-          this.recordedFaults.push({ kind: 'unknown-message', received: raw });
+          this.record({ kind: 'unknown-message', received: raw });
           return;
         }
         this.ready = true;
@@ -342,7 +353,7 @@ export class PanelGraphHost implements GraphHost {
         return;
       case 'render-report':
         if (parsed.epoch !== this.currentEpoch) {
-          this.recordedFaults.push({
+          this.record({
             kind: 'bad-epoch',
             expected: this.currentEpoch,
             received: parsed.epoch,

@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SourceOpener, WebviewTransport } from './contract';
 import type { PanelSurface } from './graph-panel';
 import { GraphSession } from './graph-session';
+import type { Logger } from './log';
 import type { WorkspaceFileSystem } from './workspace-probe';
 
 const directories: string[] = [];
@@ -284,6 +285,7 @@ interface SetUp {
   readonly opener?: SourceOpener;
   readonly closeFails?: boolean;
   readonly onReport?: (report: VerificationReport) => void;
+  readonly log?: Logger;
 }
 
 function setUp(over: SetUp = {}) {
@@ -382,6 +384,7 @@ function setUp(over: SetUp = {}) {
     },
     showWarning: (text) => say(`warning: ${text}`),
     showError: (text) => say(`error: ${text}`),
+    ...(over.log === undefined ? {} : { log: over.log }),
   });
   teardowns.push(async () => {
     session.dispose();
@@ -1275,4 +1278,52 @@ describe('on the real engine and @parcel/watcher', () => {
       await until(() => s.closes.length === 1);
     },
   );
+});
+
+/** A Logger that records `<level> <message>`, and the stack of an Error argument. */
+const recorder = () => {
+  const lines: string[] = [];
+  const at =
+    (level: string) =>
+    (message: string | Error, ...args: unknown[]): void => {
+      const extra = args.find((arg): arg is Error => arg instanceof Error);
+      lines.push(`${level} ${String(message)}${extra === undefined ? '' : ` | ${extra.message}`}`);
+    };
+  const log: Logger = {
+    trace: at('trace'),
+    debug: at('debug'),
+    info: at('info'),
+    warn: at('warn'),
+    error: at('error'),
+  };
+  return { log, lines };
+};
+
+describe('the log', () => {
+  it('says what the session does, and logs each message it shows', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { log, lines } = recorder();
+    const s = setUp({ root, log });
+    await s.opened(['one warning']);
+    expect(lines).toContain('info cpg.openGraph');
+    expect(lines).toContain(`info watch 1: starting in ${root}`);
+    expect(lines).toContain('warn CPG: one warning');
+    expect(s.messages).toContain('warning: CPG: one warning');
+  });
+
+  it('logs a protocol fault from the page as a warning', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const { log, lines } = recorder();
+    const s = setUp({ root, log });
+    await s.opened();
+    s.page().send('not a message');
+    expect(lines).toContain('warn protocol fault: unknown-message');
+  });
+
+  it('logs an error it shows with the cause', async () => {
+    const { log, lines } = recorder();
+    const s = setUp({ log });
+    await s.session.openGraph();
+    expect(lines).toContain('error CPG: open a folder first');
+  });
 });
