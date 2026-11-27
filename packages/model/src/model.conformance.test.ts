@@ -413,6 +413,8 @@ function verifyModelContract(name: string, impl: ModelImpl): void {
       ['an exponent', '1e1:0-1e1:0'],
       ['a line past the safe integers', `${MAX + 1}:0-${MAX + 1}:0`],
       ['a column past the safe integers', `1:0-1:${MAX + 1}`],
+      // Post-implementation (sabotage): a start column the end, on a later line, does not bound.
+      ['a start column past the safe integers', `1:${MAX + 1}-2:0`],
       ['a non-ASCII digit', '1:0-1:٣'],
       ['a SourceRange object (the extractor form)', at(0, 0, 2, 0)],
       ['a number', 5],

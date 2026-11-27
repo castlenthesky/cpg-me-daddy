@@ -93,6 +93,13 @@ describe('copyGrammars', () => {
     ]).toEqual([true, false]);
   });
 
+  // Post-implementation (sabotage): the folder is made, but the grammar cannot be written into it.
+  it('rejects when a grammar cannot be written', async () => {
+    const outdir = join(dir, 'occupied');
+    mkdirSync(join(outdir, 'tree-sitter-python.wasm'), { recursive: true });
+    await expect(copyGrammars({ outdir })).rejects.toThrow('tree-sitter-python.wasm');
+  });
+
   it('rejects when the folder cannot be made', async () => {
     const blocker = join(dir, 'a-file');
     writeFileSync(blocker, '');
