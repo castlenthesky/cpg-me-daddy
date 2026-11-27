@@ -62,6 +62,11 @@ describe('makeSymbolFqn: the descriptor table', () => {
       '`m.py`/__init__().x2.',
     ],
     ["SCIP's other identifier characters", local('m.ts', term('$a+b-c_')), '`m.ts`/$a+b-c_.'],
+    [
+      'a simple name may start with a digit, + or -',
+      local('m.ts', term('0a'), meth('+b'), ty('-c')),
+      '`m.ts`/0a.+b().-c#',
+    ],
   ];
   it.each(rows)('%s', (_name, parts, want) => {
     expect(makeSymbolFqn(parts)).toBe(want);
@@ -79,6 +84,9 @@ describe('makeSymbolFqn: hostile names are escaped, so the rendering is injectiv
     ['a non-ASCII identifier', local('m.py', term('café')), '`m.py`/`café`.'],
     ['a backtick in the path is doubled', local('we`ird.py', ty('T')), '`we``ird.py`/T#'],
     ['a path ending in a backtick', local('a`', ty('T')), '`a```/T#'],
+    ['every backtick in a name is doubled', local('m.ts', ty('a`b`c')), '`m.ts`/`a``b``c`#'],
+    ['every backtick in a path is doubled', local('a`b`.py', ty('T')), '`a``b``.py`/T#'],
+    ['other ASCII punctuation is escaped', local('m.py', meth('<lambda>')), '`m.py`/`<lambda>`().'],
   ];
   it.each(rows)('%s', (_name, parts, want) => {
     expect(makeSymbolFqn(parts)).toBe(want);
@@ -122,6 +130,10 @@ describe('makeSymbolFqn: invalid parts throw (a producer bug)', () => {
     ['an absolute local path', local('/abs/m.py')],
     ['an empty local path', local('')],
     ["a './' local path", local('./m.py')],
+    ["a '..' segment", local('../m.py')],
+    ['an empty segment', local('a//b.py')],
+    ['a trailing slash', local('a/')],
+    ["an interior '.' segment", local('a/./b.py')],
     ['NUL in the path', local('a\u0000.py')],
     ['an empty scheme', ext('', 'node', term('x'))],
     ['a colon in the scheme', ext('a:b', 'node', term('x'))],

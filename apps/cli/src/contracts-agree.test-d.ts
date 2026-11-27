@@ -163,6 +163,8 @@ describe('extract <-> parse', () => {
   it('a parse tree node is an extract SyntaxNode and back', () => {
     assertType<ExtractSyntaxNode>(parseNode);
     assertType<ParseSyntaxNode>(extractNode);
+    // identical, not only assignable: assignability ignores a dropped `readonly`
+    expectTypeOf<ExtractSyntaxNode>().toEqualTypeOf<ParseSyntaxNode>();
     expectTypeOf<ExtractSyntaxPoint>().toEqualTypeOf<ParseSyntaxPoint>();
     expectTypeOf<ExtractSyntaxNode['text']>().toEqualTypeOf<ParseSyntaxNode['text']>();
   });
@@ -184,6 +186,9 @@ describe('extract <-> resolve', () => {
   it('a RefSite is the same shape on both sides', () => {
     assertType<ExtractRefSite>(resolveSite);
     assertType<RefSite>(extractSite);
+    // identical, not only assignable: assignability ignores a dropped `readonly`
+    expectTypeOf<ExtractRefSite>().toEqualTypeOf<RefSite>();
+    expectTypeOf<ExtractRefSite['position']>().toEqualTypeOf<RefSite['position']>();
     expectTypeOf<ExtractRefKind>().toEqualTypeOf<RefKind>();
     expectTypeOf<ExtractReason>().toEqualTypeOf<ResolutionReason>();
     expectTypeOf<NonNullable<ExtractRefSite['importBinding']>>().toEqualTypeOf<

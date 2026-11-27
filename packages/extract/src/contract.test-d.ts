@@ -17,9 +17,11 @@ import type {
   CoverageManifest,
   DeclarationInfo,
   Disposition,
+  EdgeElement,
   EndpointRef,
   ExtractedFile,
   ExtractedFileSet,
+  ExpressionVerdict,
   ExtractErrorCode,
   ExtractOutcome,
   ExtractRequest,
@@ -35,6 +37,8 @@ import type {
   SealExtractedFiles,
   SealOutcome,
   SymbolElement,
+  SyntaxNode,
+  Tier,
 } from './index';
 
 declare const node: NodeElement;
@@ -128,6 +132,39 @@ describe('the extractor and its outcomes', () => {
     >();
     assertType<ExtractRequest['budget']>({});
     assertType<ExtractRequest['budget']>(undefined);
+    assertType<ExtractRequest['tiers']>({});
+    assertType<ExtractRequest['tiers']>(undefined);
+  });
+
+  it('elements carry their tier, endpoints and the file-level digests', () => {
+    expectTypeOf<NodeElement['tier']>().toEqualTypeOf<Tier>();
+    expectTypeOf<Tier>().toEqualTypeOf<'structural' | 'expression'>();
+    expectTypeOf<ExtractedFile['edges']>().toEqualTypeOf<readonly EdgeElement[]>();
+    expectTypeOf<EdgeElement['type']>().toEqualTypeOf<EdgeType>();
+    expectTypeOf<EdgeElement['from']>().toEqualTypeOf<EndpointRef>();
+    expectTypeOf<
+      Pick<ExtractedFile, 'revision_id' | 'elementDigest' | 'interfaceHash'>
+    >().toEqualTypeOf<{
+      readonly revision_id: string;
+      readonly elementDigest: string;
+      readonly interfaceHash: string;
+    }>();
+    expectTypeOf<keyof ExtractedFile['stats']>().toEqualTypeOf<
+      'astNodesVisited' | 'structuralNodes' | 'expressionNodes' | 'lineCount'
+    >();
+  });
+
+  it('a budget hit is truncated with a report (I17), and coverage is per grammar', () => {
+    expectTypeOf<Extract<ExtractOutcome, { kind: 'truncated' }>['truncation']>().toEqualTypeOf<{
+      readonly limit: 'maxNodes' | 'maxDepth';
+      readonly limitValue: number;
+      readonly droppedAtNodeType: string;
+      readonly droppedRange: SourceRange;
+    }>();
+    expectTypeOf<
+      Extract<ExtractOutcome, { kind: 'truncated' }>['file']
+    >().toEqualTypeOf<ExtractedFile>();
+    expectTypeOf<Extractor['coverage']>().toEqualTypeOf<(grammarId: string) => CoverageManifest>();
   });
 
   it('every element is readonly', () => {
@@ -141,6 +178,21 @@ describe('the extractor and its outcomes', () => {
 });
 
 describe('the language adapter', () => {
+  it('has the contract members, the expression half optional', () => {
+    expectTypeOf<LanguageAdapter['moduleName']>().toEqualTypeOf<(path: WorkspacePath) => string>();
+    expectTypeOf<LanguageAdapter['coverage']>().toEqualTypeOf<() => CoverageManifest>();
+    expectTypeOf<LanguageAdapter['classifyExpression']>().toEqualTypeOf<
+      ((node: SyntaxNode) => ExpressionVerdict | undefined) | undefined
+    >();
+    expectTypeOf<LanguageAdapter['localBindings']>().toEqualTypeOf<
+      ((regionRoot: SyntaxNode) => readonly string[] | undefined) | undefined
+    >();
+    expectTypeOf<Exclude<ExpressionVerdict, CallInfo>>().toEqualTypeOf<
+      | { readonly emits: 'none'; readonly descend: 'transparent' }
+      | { readonly emits: 'none'; readonly descend: 'stop' }
+    >();
+  });
+
   it('classifies the direct children of a MODULE or a TYPE_DECL into the three declarations', () => {
     expectTypeOf<Parameters<LanguageAdapter['classify']>[1]>().toEqualTypeOf<ContainerKind>();
     expectTypeOf<ContainerKind>().toEqualTypeOf<'MODULE' | 'TYPE_DECL'>();

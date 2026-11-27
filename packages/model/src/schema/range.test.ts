@@ -40,6 +40,7 @@ describe('formatRange', () => {
     ['a negative start column', r(0, -1, 0, 0)],
     ['a negative end row', r(0, 0, -1, 0)],
     ['a negative end column', r(0, 0, 0, -1)],
+    ['a negative end column on a later row', r(0, 0, 1, -1)],
     ['a fractional start row', r(0.5, 0, 1, 0)],
     ['a fractional start column', r(0, 1.5, 1, 0)],
     ['a fractional end row', r(0, 0, 1.5, 0)],
