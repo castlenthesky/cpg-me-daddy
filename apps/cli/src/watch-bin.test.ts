@@ -88,6 +88,12 @@ describe('cpg watch, the built bin (decisions 79, 80)', () => {
 
     run.proc.kill('SIGHUP');
     await until(run, () => run.events().some((e) => e['kind'] === 'batch'), 'rescan batch');
+    // After the implementation (sabotage #1 of the bin group): every SIGHUP is a command, not just the
+    // first. The second rescan finds nothing, so it brings no event.
+    const asked = (): number => run.stderr().split('cpg: rescan requested\n').length - 1;
+    run.proc.kill('SIGHUP');
+    await until(run, () => asked() === 2, 'the second rescan request');
+    await sleep(200);
     run.proc.kill('SIGINT');
     expect(await run.exited).toEqual({ code: 130, signal: null });
     await run.closed;
