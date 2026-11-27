@@ -6,7 +6,9 @@ import {
   LINK_DISTANCE,
   ROOT_POINT_SIZE,
   SPACE_SIZE,
+  edgeEnds,
   type LayoutResult,
+  type ParentTable,
 } from './layout';
 import {
   hexToRgba,
@@ -22,25 +24,24 @@ function isFiniteNumber(value: number | undefined): value is number {
   return Number.isFinite(value);
 }
 
-/** First incoming hierarchy edge per target, else first incoming fallback-type edge (matches buildHierarchy). */
+/**
+ * Each delta-added child's parent under `table` (the layout's table, BMO-100): the first row,
+ * hierarchy rows then fallback rows, with an edge naming the node as its child; within a row, the
+ * first such edge in `addedEdges` order. No anchor or cycle check: a parent that cannot be located
+ * seeds at the centre (`BufferStore.applyDelta`).
+ */
 export function deltaParents(
   addedEdges: readonly GraphEdge[],
-  hierarchyEdgeType: string,
-  fallbackParentEdgeTypes: ReadonlySet<string>,
+  table: ParentTable,
 ): ReadonlyMap<string, string> {
   const parents = new Map<string, string>();
-  for (const edge of addedEdges) {
-    if (edge.type === hierarchyEdgeType && !parents.has(edge.target)) {
-      parents.set(edge.target, edge.source);
-    }
-  }
-  for (const edge of addedEdges) {
-    if (
-      edge.type !== undefined &&
-      fallbackParentEdgeTypes.has(edge.type) &&
-      !parents.has(edge.target)
-    ) {
-      parents.set(edge.target, edge.source);
+  for (const rule of [...table.hierarchy, ...table.fallback]) {
+    for (const edge of addedEdges) {
+      if (edge.type !== rule.type) continue;
+      const [parentId, childId] = edgeEnds(edge, rule);
+      if (!parents.has(childId)) {
+        parents.set(childId, parentId);
+      }
     }
   }
   return parents;
@@ -101,33 +102,21 @@ export class BufferStore {
       }
     }
 
+    const addedById = new Map<string, GraphNode>();
     for (const node of delta.addedNodes) {
-      const color = hexToRgba(nodeTypeColor(this.nodeColors, node.type));
-      const existing = this.indexById.get(node.id);
-      if (existing !== undefined && this.nodes.has(node.id)) {
-        // A still-live id keeps its position and size (no random draw) and refreshes metadata.
-        this.nodes.set(node.id, node);
-        this.types[existing] = node.type;
-        this.writeColor(existing, color);
-        continue;
-      }
-
-      const [x, y, size] = this.seedPoint(parents.get(node.id), random);
-      this.nodes.set(node.id, node);
-      if (existing !== undefined) {
-        this.basePositions[existing * 2] = x;
-        this.basePositions[existing * 2 + 1] = y;
-        this.types[existing] = node.type;
-        this.baseSizes[existing] = size;
-        this.writeColor(existing, color);
-      } else {
-        this.indexById.set(node.id, this.ids.length);
-        this.ids.push(node.id);
-        this.types.push(node.type);
-        this.basePositions.push(x, y);
-        this.baseColors.push(...color);
-        this.baseSizes.push(size);
-      }
+      if (!addedById.has(node.id)) addedById.set(node.id, node);
+    }
+    const handled = new Set<GraphNode>();
+    const visit = (node: GraphNode): void => {
+      if (handled.has(node)) return;
+      handled.add(node);
+      const parentId = parents.get(node.id);
+      const parentNode = parentId === undefined ? undefined : addedById.get(parentId);
+      if (parentNode !== undefined) visit(parentNode);
+      this.addNode(node, parentId, random);
+    };
+    for (const node of delta.addedNodes) {
+      visit(node);
     }
   }
 
@@ -194,6 +183,35 @@ export class BufferStore {
       if (type !== undefined && this.nodes.has(id)) result.push(type);
     }
     return result;
+  }
+
+  private addNode(node: GraphNode, parentId: string | undefined, random: () => number): void {
+    const color = hexToRgba(nodeTypeColor(this.nodeColors, node.type));
+    const existing = this.indexById.get(node.id);
+    if (existing !== undefined && this.nodes.has(node.id)) {
+      // A still-live id keeps its position and size (no random draw) and refreshes metadata.
+      this.nodes.set(node.id, node);
+      this.types[existing] = node.type;
+      this.writeColor(existing, color);
+      return;
+    }
+
+    const [x, y, size] = this.seedPoint(parentId, random);
+    this.nodes.set(node.id, node);
+    if (existing !== undefined) {
+      this.basePositions[existing * 2] = x;
+      this.basePositions[existing * 2 + 1] = y;
+      this.types[existing] = node.type;
+      this.baseSizes[existing] = size;
+      this.writeColor(existing, color);
+    } else {
+      this.indexById.set(node.id, this.ids.length);
+      this.ids.push(node.id);
+      this.types.push(node.type);
+      this.basePositions.push(x, y);
+      this.baseColors.push(...color);
+      this.baseSizes.push(size);
+    }
   }
 
   /** Requires finite parent coordinates for size as well as position so tombstones never leak size. */

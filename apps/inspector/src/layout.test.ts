@@ -7,8 +7,7 @@
 import type { GraphEdge, GraphNode, GraphPayload } from '@cpg/model';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  DEFAULT_FALLBACK_PARENT_EDGE_TYPES,
-  DEFAULT_HIERARCHY_EDGE_TYPE,
+  DEFAULT_PARENT_TABLE,
   LINK_DISTANCE,
   ROOT_POINT_SIZE,
   SPACE_SIZE,
@@ -16,6 +15,8 @@ import {
   layoutPayload,
   linkWidthForSizes,
   type LayoutResult,
+  type ParentEnd,
+  type ParentTable,
 } from './layout';
 
 const C = 2048;
@@ -30,6 +31,11 @@ const node = (id: string, type = 'FILE'): GraphNode => ({ id, type });
 const edge = (source: string, target: string, type?: string): GraphEdge =>
   type === undefined ? { source, target } : { source, target, type };
 const entry = (source: string, target: string): GraphEdge => edge(source, target, 'HAS_ENTRY');
+const rule = (type: string, parent: ParentEnd = 'source') => ({ type, parent });
+const table = (hierarchy: string[], fallback: string[] = []): ParentTable => ({
+  hierarchy: hierarchy.map((type) => rule(type)),
+  fallback: fallback.map((type) => rule(type)),
+});
 const payload = (nodes: GraphNode[], edges: GraphEdge[] = []): GraphPayload => ({
   seq: 0,
   nodes,
@@ -157,9 +163,20 @@ describe('constants', () => {
     expect(ROOT_POINT_SIZE).toBe(20);
   });
 
-  it('seed the tree on HAS_ENTRY (the schema name for the archive CONTAINS) and adopt on DEFINES', () => {
-    expect(DEFAULT_HIERARCHY_EDGE_TYPE).toBe('HAS_ENTRY');
-    expect([...DEFAULT_FALLBACK_PARENT_EDGE_TYPES]).toEqual(['DEFINES']);
+  // Sprint 33 (BMO-100, controller decision 103): reworked from "HAS_ENTRY, and adopt on DEFINES".
+  // Every fallback row points at a SYMBOL (packages/model/src/schema/edges.ts), so its source is
+  // the parent (the PR names this; decision 103 lists the fallbacks without an end).
+  it("place by BMO-100's parent table, in its order", () => {
+    expect(DEFAULT_PARENT_TABLE).toEqual({
+      hierarchy: [
+        rule('HAS_ENTRY'),
+        rule('DECLARES'),
+        rule('HAS_PARAM'),
+        rule('SOURCE_FILE', 'target'),
+        rule('IN_SCOPE', 'target'),
+      ],
+      fallback: [rule('DEFINES'), rule('IMPORTS'), rule('CALLS'), rule('INHERITS_FROM')],
+    });
   });
 });
 
@@ -347,10 +364,14 @@ describe('the hierarchy', () => {
     expect(result.ids.slice(1)).toEqual(['R', 'A']);
   });
 
-  it('follows the edge type named by hierarchyEdgeType', () => {
+  // Sprint 33 rework: DECLARES is a default row now, and a table row's end is read from the table.
+  it("follows the rows of the table it is given, each row's parent end included", () => {
     const p = payload([node('M', 'MODULE'), node('f', 'METHOD')], [edge('M', 'f', 'DECLARES')]);
-    expect(layoutPayload(p, { seed: 1, hierarchyEdgeType: 'DECLARES' }).ids).toEqual(['M', 'f']);
-    expect(layoutPayload(p, { seed: 1 }).ids).toHaveLength(3);
+    expect(layoutPayload(p, { seed: 1 }).ids).toEqual(['M', 'f']);
+    expect(layoutPayload(p, { seed: 1, parentTable: table(['HAS_ENTRY']) }).ids).toHaveLength(3);
+    const owns = payload([node('M', 'MODULE'), node('f', 'METHOD')], [edge('f', 'M', 'OWNS')]);
+    const byTarget = { hierarchy: [rule('OWNS', 'target')], fallback: [] };
+    expect(layoutPayload(owns, { seed: 1, parentTable: byTarget }).ids).toEqual(['M', 'f']);
   });
 
   it("keeps a node's first hierarchy parent", () => {
@@ -395,20 +416,20 @@ describe('the hierarchy', () => {
     expect(misplaced(result, 'G', ring(20))).toEqual([]);
   });
 
-  it('adopts along fallbackParentEdgeTypes only', () => {
+  it("adopts along the table's fallback rows only", () => {
     const p = payload(
       [node('R', 'DIRECTORY'), node('F'), node('S', 'SYMBOL')],
       [entry('R', 'F'), edge('F', 'S', 'DEFINES')],
     );
-    const none = layoutPayload(p, { seed: 1, fallbackParentEdgeTypes: new Set() });
+    const none = layoutPayload(p, { seed: 1, parentTable: table(['HAS_ENTRY']) });
     expect(none.ids).toHaveLength(4);
     expect(none.ids.slice(1)).toEqual(['R', 'F', 'S']);
     const calls = payload(
       [node('R', 'DIRECTORY'), node('F'), node('S', 'SYMBOL')],
-      [entry('R', 'F'), edge('F', 'S', 'CALLS')],
+      [entry('R', 'F'), edge('F', 'S', 'REF')],
     );
-    const viaCalls = layoutPayload(calls, { seed: 1, fallbackParentEdgeTypes: new Set(['CALLS']) });
-    expect(viaCalls.ids).toEqual(['R', 'F', 'S']);
+    const viaRef = layoutPayload(calls, { seed: 1, parentTable: table(['HAS_ENTRY'], ['REF']) });
+    expect(viaRef.ids).toEqual(['R', 'F', 'S']);
   });
 
   it('never adopts along a fallback edge that would close a cycle', () => {
@@ -581,7 +602,7 @@ describe('a custom hierarchy edge type (review a4)', () => {
       [node('M', 'MODULE'), node('f', 'METHOD'), node('g', 'METHOD')],
       [edge('M', 'f', 'DECLARES'), edge('M', 'g', 'DECLARES'), entry('f', 'g')],
     );
-    const result = layoutPayload(p, { seed: 1, hierarchyEdgeType: 'DECLARES' });
+    const result = layoutPayload(p, { seed: 1, parentTable: table(['DECLARES']) });
     expect(result.ids).toEqual(['M', 'f', 'g']);
     expect(Array.from(result.links)).toEqual([0, 1, 0, 2, 1, 2]);
   });
@@ -679,5 +700,160 @@ describe('the clamp threshold is MAX_RADIUS itself (sabotage)', () => {
       .slice(1)
       .flatMap((id) => misplaced(result, id, ring((800 * 12) / (2 * PI))));
     expect(bad).toEqual([]);
+  });
+});
+
+// Sprint 33 (BMO-100, controller decision 103): the code tier reaches its file through the table.
+
+/** Each placed point's tree parent: the tree links come first in `links`, one per non-root point. */
+function treeParents(result: LayoutResult): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < result.ids.length - 1; i++) {
+    const parent = result.ids[result.links[2 * i] ?? -1];
+    const child = result.ids[result.links[2 * i + 1] ?? -1];
+    if (parent !== undefined && child !== undefined) out[child] = parent;
+  }
+  return out;
+}
+
+const HIERARCHY_ROWS = ['HAS_ENTRY', 'DECLARES', 'HAS_PARAM', 'SOURCE_FILE', 'IN_SCOPE'];
+/** The edge of a hierarchy row that makes `parent` the parent of `child` (two rows point up). */
+const parented = (type: string, parent: string, child: string): GraphEdge =>
+  type === 'SOURCE_FILE' || type === 'IN_SCOPE'
+    ? edge(child, parent, type)
+    : edge(parent, child, type);
+
+describe('the parent table (BMO-100)', () => {
+  it("places a Python file's code tier under its FILE, from the one root", () => {
+    const p = payload(
+      [
+        node('.', 'DIRECTORY'),
+        node('pkg', 'DIRECTORY'),
+        node('pkg/a.py'),
+        node('mod', 'MODULE'),
+        node('A', 'TYPE_DECL'),
+        node('A.f', 'METHOD'),
+        node('A.f.x', 'PARAM'),
+        node('call', 'CALL'),
+        node('imp', 'IMPORT'),
+        node('sym:a', 'SYMBOL'),
+        node('sym:os', 'SYMBOL'),
+        node('sym:print', 'SYMBOL'),
+        node('sym:Base', 'SYMBOL'),
+      ],
+      [
+        // Fallbacks first and the filesystem last: edge order alone would place nothing.
+        edge('mod', 'sym:a', 'DEFINES'),
+        edge('imp', 'sym:os', 'IMPORTS'),
+        edge('call', 'sym:print', 'CALLS'),
+        edge('A', 'sym:Base', 'INHERITS_FROM'),
+        edge('call', 'A.f', 'IN_SCOPE'),
+        edge('A.f', 'A.f.x', 'HAS_PARAM'),
+        edge('A', 'A.f', 'DECLARES'),
+        edge('mod', 'A', 'DECLARES'),
+        edge('mod', 'imp', 'DECLARES'),
+        edge('mod', 'pkg/a.py', 'SOURCE_FILE'),
+        entry('pkg', 'pkg/a.py'),
+        entry('.', 'pkg'),
+      ],
+    );
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toHaveLength(13);
+    expect(result.ids[0]).toBe('.');
+    expect(treeParents(result)).toEqual({
+      pkg: '.',
+      'pkg/a.py': 'pkg',
+      mod: 'pkg/a.py',
+      A: 'mod',
+      imp: 'mod',
+      'A.f': 'A',
+      'A.f.x': 'A.f',
+      call: 'A.f',
+      'sym:a': 'mod',
+      'sym:os': 'imp',
+      'sym:print': 'call',
+      'sym:Base': 'A',
+    });
+  });
+
+  it('takes the hierarchy rows in table order, whatever order the edges come in', () => {
+    // x1 has an edge of each of the five rows, x2 of the last four, ..., x5 of IN_SCOPE alone,
+    // always listed last row first; ek is the parent row k offers.
+    const edges = HIERARCHY_ROWS.map((_, i) => entry('R', `e${i + 1}`));
+    for (let k = 1; k <= 5; k++) {
+      for (let j = 5; j >= k; j--)
+        edges.push(parented(HIERARCHY_ROWS[j - 1] ?? '', `e${j}`, `x${k}`));
+    }
+    const nodes = [1, 2, 3, 4, 5].flatMap((i) => [node(`e${i}`), node(`x${i}`)]);
+    const result = layoutPayload(payload([node('R', 'DIRECTORY'), ...nodes], edges), { seed: 1 });
+    const offered = Object.fromEntries([1, 2, 3, 4, 5].map((i) => [`x${i}`, `e${i}`]));
+    const anchors = Object.fromEntries([1, 2, 3, 4, 5].map((i) => [`e${i}`, 'R']));
+    expect(treeParents(result)).toEqual({ ...anchors, ...offered });
+  });
+
+  it('takes the fallback rows in table order, whatever order the edges come in', () => {
+    // s1 has all four fallbacks, s2 the last three, s3 the last two, s4 one; last row first.
+    const p = payload(
+      [
+        node('R', 'DIRECTORY'),
+        ...['a1', 'a2', 'a3', 'a4', 's1', 's2', 's3', 's4'].map((id) => node(id)),
+      ],
+      [
+        ...['a1', 'a2', 'a3', 'a4'].map((id) => entry('R', id)),
+        ...['s1', 's2', 's3', 's4'].map((s) => edge('a4', s, 'INHERITS_FROM')),
+        ...['s1', 's2', 's3'].map((s) => edge('a3', s, 'CALLS')),
+        ...['s1', 's2'].map((s) => edge('a2', s, 'IMPORTS')),
+        edge('a1', 's1', 'DEFINES'),
+      ],
+    );
+    const offered = Object.fromEntries([1, 2, 3, 4].map((i) => [`s${i}`, `a${i}`]));
+    const anchors = Object.fromEntries([1, 2, 3, 4].map((i) => [`a${i}`, 'R']));
+    expect(treeParents(layoutPayload(p, { seed: 1 }))).toEqual({ ...anchors, ...offered });
+  });
+
+  // Round two (review 2): the rejected anchor is the root, which has a child but no parent.
+  it('passes a fallback whose anchor has no parent of its own to the next row', () => {
+    const p = payload(
+      [node('R', 'DIRECTORY'), node('F'), node('s', 'SYMBOL')],
+      [entry('R', 'F'), edge('R', 's', 'IMPORTS'), edge('F', 's', 'CALLS')],
+    );
+    expect(treeParents(layoutPayload(p, { seed: 1 }))).toEqual({ F: 'R', s: 'F' });
+  });
+
+  // Round two (review 6).
+  it("reads a fallback row's parent end from the table", () => {
+    const p = payload(
+      [node('R', 'DIRECTORY'), node('F'), node('S', 'SYMBOL')],
+      [entry('R', 'F'), edge('S', 'F', 'BACK')],
+    );
+    const parentTable = { hierarchy: [rule('HAS_ENTRY')], fallback: [rule('BACK', 'target')] };
+    expect(treeParents(layoutPayload(p, { seed: 1, parentTable }))).toEqual({ F: 'R', S: 'F' });
+  });
+
+  it('links each hierarchy-row edge once, as its tree link, then every other edge in order', () => {
+    const p = payload(
+      [
+        node('R', 'DIRECTORY'),
+        node('F'),
+        node('M', 'MODULE'),
+        node('k', 'CALL'),
+        node('S', 'SYMBOL'),
+      ],
+      [
+        entry('R', 'F'),
+        edge('M', 'F', 'SOURCE_FILE'),
+        edge('k', 'M', 'IN_SCOPE'),
+        // Round two (review 1): a second IN_SCOPE edge places nothing and is not listed either.
+        edge('k', 'R', 'IN_SCOPE'),
+        edge('M', 'S', 'DEFINES'),
+        edge('k', 'S', 'CALLS'),
+        edge('F', 'M', 'IMPORTS'),
+      ],
+    );
+    const result = layoutPayload(p, { seed: 1 });
+    expect(result.ids).toEqual(['R', 'F', 'M', 'k', 'S']);
+    // Tree links are (parent, child); then DEFINES (listed twice, as before: stop-list 49), CALLS,
+    // IMPORTS. SOURCE_FILE and IN_SCOPE are not listed again, in either direction.
+    expect(Array.from(result.links)).toEqual([0, 1, 1, 2, 2, 3, 2, 4, 2, 4, 3, 4, 1, 2]);
   });
 });

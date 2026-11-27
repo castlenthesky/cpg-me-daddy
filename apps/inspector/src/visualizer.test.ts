@@ -161,10 +161,7 @@ interface Mounted {
   readonly setNow: (ms: number) => void;
 }
 
-function mount(
-  seed = 7,
-  layout: Pick<GraphVisualizerOptions, 'hierarchyEdgeType' | 'fallbackParentEdgeTypes'> = {},
-): Mounted {
+function mount(seed = 7, layout: Pick<GraphVisualizerOptions, 'parentTable'> = {}): Mounted {
   const surface = new FakeSurface();
   const legend = new FakeLegend();
   const tooltip = new FakeTooltip();
@@ -557,8 +554,14 @@ describe('GraphVisualizer.applyDelta', () => {
   });
 
   // round two (review b1): the hierarchy and fallback options reach the layout and the delta seeding.
-  it('lays out and seeds deltas by the configured hierarchy and fallback edge types', () => {
-    const options = { hierarchyEdgeType: 'CONTAINS', fallbackParentEdgeTypes: new Set(['REF']) };
+  // Sprint 33 rework (BMO-100): the two options are one parent table.
+  it("lays out and seeds deltas by the configured parent table's rows", () => {
+    const options = {
+      parentTable: {
+        hierarchy: [{ type: 'CONTAINS', parent: 'source' as const }],
+        fallback: [{ type: 'REF', parent: 'source' as const }],
+      },
+    };
     const m = mount(7, options);
     const chain: GraphPayload = {
       seq: 0,
@@ -594,6 +597,46 @@ describe('GraphVisualizer.applyDelta', () => {
     );
     expect(Math.abs((surface.positions[6] ?? NaN) - 500)).toBeLessThanOrEqual(20);
     expect(Math.abs((surface.positions[7] ?? NaN) - 600)).toBeLessThanOrEqual(20);
+  });
+
+  // Sprint 33 (BMO-100, controller decisions 85 and 103): by default the code tier is placed by
+  // the parent table, both in the layout and when a save re-adds the file's code nodes.
+  it('places a MODULE by its FILE, and seeds a code delta listed child first beside its parents', () => {
+    const { viz, surface } = mount();
+    const code: GraphPayload = {
+      seq: 0,
+      nodes: [D, F, node('m', 'MODULE')],
+      edges: [entry('d', 'f'), edge('m', 'f', 'SOURCE_FILE')],
+    };
+    viz.render(code);
+    // d, f, m and no synthetic centre: m is not a root.
+    expect(surface.positions).toEqual(Array.from(layoutPayload(code, { seed: 7 }).positions));
+    expect(surface.positions).toHaveLength(6);
+    surface.live = [100, 100, 500, 600, 900, 900];
+    const before = { framed: surface.framed.length, starts: [...surface.starts] };
+    viz.applyDelta(
+      delta({
+        removedNodeIds: ['m'],
+        addedNodes: [node('c', 'CALL'), node('t', 'METHOD'), node('m', 'MODULE')],
+        addedEdges: [
+          edge('c', 't', 'IN_SCOPE'),
+          edge('m', 't', 'DECLARES'),
+          edge('m', 'f', 'SOURCE_FILE'),
+        ],
+      }),
+    );
+    // m beside f (500, 600), t beside m, c beside t: within 20, 40 and 60 of f on each axis.
+    expect(surface.positions).toHaveLength(10);
+    expect(surface.positions.slice(0, 4)).toEqual([100, 100, 500, 600]);
+    const far = [4, 6, 8].filter((at) => {
+      const dx = Math.abs((surface.positions[at] ?? NaN) - 500);
+      const dy = Math.abs((surface.positions[at + 1] ?? NaN) - 600);
+      return !(dx <= 60 && dy <= 60);
+    });
+    expect(far).toEqual([]);
+    expect(Math.abs((surface.positions[4] ?? NaN) - 500)).toBeLessThanOrEqual(20);
+    expect(Math.abs((surface.positions[5] ?? NaN) - 600)).toBeLessThanOrEqual(20);
+    expect({ framed: surface.framed.length, starts: surface.starts }).toEqual(before);
   });
 
   // round two (review b2)
