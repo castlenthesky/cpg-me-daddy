@@ -22,11 +22,12 @@ function copyProperties(
  * The one replace-file for `file` at `seq`: `file`, `seq` and `revision_id` from the file, then
  *
  * - nodes: one row per NodeElement (label, key = its id; properties = its properties plus `file`,
- *   its own `revision_id` and `range` formatted by `formatRange`; these fields win over a property of
- *   the same name), then one SYMBOL row per SymbolElement (key = fqn; its properties plus `fqn` and
- *   `language`), then one FILE row carrying the FILE's code-owned half only (`interface_hash` from
- *   `interfaceHash`, `loc` from `stats.lineCount`). `tier`, `nameRange` and `origin` are not
- *   written: the schema has no property for them.
+ *   its own `revision_id`, `range` formatted by `formatRange`, and `name_range` formatted by
+ *   `formatRange` when `nameRange` is present; these fields win over a property of the same name),
+ *   then one SYMBOL row per SymbolElement (key = fqn; its properties plus `fqn` and `language`),
+ *   then one FILE row carrying the FILE's code-owned half only (`interface_hash` from
+ *   `interfaceHash`, `loc` from `stats.lineCount`). `tier` and `origin` are not written: the schema
+ *   has no property for them.
  * - edges: the file's own edges, then `edges` (the resolve pass's), each endpoint's label and key
  *   copied from its EndpointRef.
  *
@@ -49,6 +50,7 @@ export function toWriteOp(
         file: node.file,
         revision_id: node.revision_id,
         range: formatRange(node.range),
+        ...(node.nameRange !== undefined ? { name_range: formatRange(node.nameRange) } : {}),
       },
     })),
     ...file.symbols.map((symbol): NodeRow => ({

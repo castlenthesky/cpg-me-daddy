@@ -12,8 +12,9 @@ import type {
   LanguageAdapter,
   MemberInfo,
   MethodInfo,
-  TypeDeclInfo,
+  ParamInfo,
   SyntaxNode,
+  TypeDeclInfo,
 } from './contract';
 import { EXTRACT_CONTRACT_VERSION } from './version';
 
@@ -34,23 +35,47 @@ const PYTHON_COVERAGE: CoverageManifest = Object.freeze({
     DIRECTORY: notMine('filesystem-tier'),
     FILE: notMine('filesystem-tier'),
     MODULE: emits('module'),
-    TYPE_DECL: later('Pass A declarations land in U6a.2-3', 'U6a.2-3'),
-    METHOD: later('Pass A declarations land in U6a.2-3', 'U6a.2-3'),
-    PARAM: later('Pass A declarations land in U6a.2-3', 'U6a.2-3'),
-    MEMBER: later('Pass A declarations land in U6a.2-3', 'U6a.2-3'),
+    TYPE_DECL: emits('class_definition', 'decorated_definition'),
+    METHOD: emits('function_definition', 'decorated_definition'),
+    PARAM: emits(
+      'identifier',
+      'typed_parameter',
+      'default_parameter',
+      'typed_default_parameter',
+      'list_splat_pattern',
+      'dictionary_splat_pattern',
+    ),
+    MEMBER: emits('expression_statement'),
     CALL: later('Pass B calls land in U6a.2-4', 'U6a.2-4'),
     IMPORT: later('Pass B imports land in U6a.2-4', 'U6a.2-4'),
-    SYMBOL: emits('module'),
+    SYMBOL: emits(
+      'module',
+      'class_definition',
+      'function_definition',
+      'expression_statement',
+      'decorated_definition',
+    ),
     COMMUNITY: notMine('analysis-pass'),
     TAG: notMine('meta'),
-    UNKNOWN: later('syntax-error regions (decision 95) land in U6a.2-3', 'U6a.2-3'),
+    UNKNOWN: emits('ERROR'),
     META_DATA: notMine('meta'),
   }),
   edges: Object.freeze({
     HAS_ENTRY: notMine('filesystem-tier'),
-    DECLARES: later('Pass A declarations land in U6a.2-3', 'U6a.2-3'),
-    HAS_PARAM: later('Pass A parameter edges land in U6a.2-3', 'U6a.2-3'),
-    DEFINES: emits('module'),
+    DECLARES: emits(
+      'class_definition',
+      'function_definition',
+      'expression_statement',
+      'decorated_definition',
+    ),
+    HAS_PARAM: emits('function_definition', 'decorated_definition'),
+    DEFINES: emits(
+      'module',
+      'class_definition',
+      'function_definition',
+      'expression_statement',
+      'decorated_definition',
+    ),
     CALLS: later('Pass B same-file CALLS (decision 93) land in U6a.2-4', 'U6a.2-4'),
     IN_SCOPE: later('Pass B call scopes land in U6a.2-4', 'U6a.2-4'),
     IMPORTS: notMine('resolve-pass'),
@@ -87,6 +112,89 @@ function moduleName(path: WorkspacePath): string {
   return segments.join('.');
 }
 
+/** Strips a Python string literal's prefix letters and matching quote delimiters. */
+function stripStringQuotes(text: string): string {
+  const match = /^[a-zA-Z]*("""|'''|"|')([\s\S]*)\1$/.exec(text);
+  return match?.[2] ?? text;
+}
+
+/** First non-blank line of a docstring, trimmed. `undefined` when empty or whitespace-only. */
+function docstringHead(text: string): string | undefined {
+  const body = stripStringQuotes(text).trim();
+  if (body === '') return undefined;
+  const newline = body.indexOf('\n');
+  return (newline === -1 ? body : body.slice(0, newline)).trim();
+}
+
+/** The bare string literal a class or function body opens with, if any — its docstring. */
+function leadingDocstring(body: SyntaxNode | null): string | undefined {
+  const first = body?.namedChildren[0];
+  if (first?.type !== 'expression_statement') return undefined;
+  const inner = first.namedChildren[0];
+  if (inner?.type !== 'string') return undefined;
+  return docstringHead(inner.text);
+}
+
+function isExported(name: string): boolean {
+  return !name.startsWith('_');
+}
+
+/** Extracts the parameter identifier name from an identifier or a splat pattern. */
+function paramName(node: SyntaxNode | null | undefined): string | undefined {
+  if (node?.type === 'identifier') return node.text;
+  if (node?.type === 'list_splat_pattern' || node?.type === 'dictionary_splat_pattern') {
+    return node.namedChildren.find((child) => child.type === 'identifier')?.text;
+  }
+  return undefined;
+}
+
+function buildParam(
+  name: string | undefined,
+  node: SyntaxNode,
+  typeText?: string,
+  defaultText?: string,
+): ParamInfo | undefined {
+  if (name === undefined) return undefined;
+  return {
+    name,
+    node,
+    ...(typeText !== undefined ? { typeText } : {}),
+    ...(defaultText !== undefined ? { defaultText } : {}),
+  };
+}
+
+function paramInfo(node: SyntaxNode): ParamInfo | undefined {
+  switch (node.type) {
+    case 'identifier':
+      return buildParam(node.text, node);
+    case 'typed_parameter':
+      return buildParam(
+        paramName(node.namedChildren[0]),
+        node,
+        node.childForFieldName('type')?.text,
+      );
+    case 'default_parameter':
+      return buildParam(
+        paramName(node.childForFieldName('name')),
+        node,
+        undefined,
+        node.childForFieldName('value')?.text,
+      );
+    case 'typed_default_parameter':
+      return buildParam(
+        paramName(node.childForFieldName('name')),
+        node,
+        node.childForFieldName('type')?.text,
+        node.childForFieldName('value')?.text,
+      );
+    case 'list_splat_pattern':
+    case 'dictionary_splat_pattern':
+      return buildParam(paramName(node), node);
+    default:
+      return undefined;
+  }
+}
+
 /**
  * A `function_definition` (`name`, `parameters`, `body`, optional `return_type` fields; undefined
  * without a name or a parameters field):
@@ -103,30 +211,89 @@ function moduleName(path: WorkspacePath): string {
  *   whose first named child is a `string`; that text without its prefix letters and matching quotes
  *   (`"""`, `'''`, `"`, `'`), trimmed, then its first line trimmed. None when absent or blank.
  * - nameNode: the `name` field; body: the `body` field.
- * SEAT until U6a.2-3's implementation.
  */
-function classifyFunction(_node: SyntaxNode, _container: ContainerKind): MethodInfo | undefined {
-  throw new Error('SEAT: python function declarations land in U6a.2-3');
+function classifyFunction(node: SyntaxNode, container: ContainerKind): MethodInfo | undefined {
+  const nameNode = node.childForFieldName('name');
+  const paramsNode = node.childForFieldName('parameters');
+  if (nameNode === null || paramsNode === null) return undefined;
+
+  const name = nameNode.text;
+  const params = paramsNode.namedChildren
+    .map((param) => paramInfo(param))
+    .filter((param): param is ParamInfo => param !== undefined);
+
+  const returnType = node.childForFieldName('return_type')?.text;
+  const paramList = params
+    .map((param) =>
+      param.typeText !== undefined ? `${param.name}: ${param.typeText}` : param.name,
+    )
+    .join(', ');
+  const signature = `${name}(${paramList})${returnType !== undefined ? ` -> ${returnType}` : ''}`;
+
+  const isAsync = /^async\s/.test(node.text);
+  const kind =
+    container === 'TYPE_DECL' ? (name === '__init__' ? 'constructor' : 'method') : 'function';
+  const body = node.childForFieldName('body');
+  const head = leadingDocstring(body);
+
+  return {
+    declares: 'METHOD',
+    name,
+    nameNode,
+    kind,
+    signature,
+    exported: isExported(name),
+    async: isAsync,
+    ...(head !== undefined ? { docstringHead: head } : {}),
+    params,
+    ...(body !== null ? { body } : {}),
+  };
 }
 
 /**
  * A `class_definition`: undefined without a `name`; else `{ declares: 'TYPE_DECL', name, kind:
  * 'class', exported (no leading `_`), structural: true, docstringHead?, body: the body field }`.
- * SEAT until U6a.2-3's implementation.
  */
-function classifyClass(_node: SyntaxNode): TypeDeclInfo | undefined {
-  throw new Error('SEAT: python class declarations land in U6a.2-3');
+function classifyClass(node: SyntaxNode): TypeDeclInfo | undefined {
+  const nameNode = node.childForFieldName('name');
+  if (nameNode === null) return undefined;
+
+  const name = nameNode.text;
+  const body = node.childForFieldName('body');
+  const head = leadingDocstring(body);
+
+  return {
+    declares: 'TYPE_DECL',
+    name,
+    kind: 'class',
+    exported: isExported(name),
+    structural: true,
+    ...(head !== undefined ? { docstringHead: head } : {}),
+    body: body ?? undefined,
+  };
 }
 
 /**
  * An `expression_statement` whose first named child is an `assignment` with an `identifier` `left`
  * (`X = 1`, `X: int = 1`, `X: int`, the first name of `a = b = 1`): a MEMBER named by it, typeText its
  * `type` field, value its `right` field, each when present. A tuple, attribute or augmented
- * assignment, or any other statement, is undefined. SEAT until U6a.2-3's implementation.
+ * assignment, or any other statement, is undefined.
  */
 function classifyAssignment(node: SyntaxNode): MemberInfo | undefined {
-  if (node.namedChildren[0]?.type !== 'assignment') return undefined;
-  throw new Error('SEAT: python member declarations land in U6a.2-3');
+  const inner = node.namedChildren[0];
+  if (inner?.type !== 'assignment') return undefined;
+  const left = inner.childForFieldName('left');
+  if (left?.type !== 'identifier') return undefined;
+
+  const typeText = inner.childForFieldName('type')?.text;
+  const value = inner.childForFieldName('right') ?? undefined;
+
+  return {
+    declares: 'MEMBER',
+    name: left.text,
+    ...(typeText !== undefined ? { typeText } : {}),
+    ...(value !== undefined ? { value } : {}),
+  };
 }
 
 /**
@@ -143,8 +310,10 @@ function classify(node: SyntaxNode, container: ContainerKind): DeclarationInfo |
       return classifyClass(node);
     case 'expression_statement':
       return classifyAssignment(node);
-    case 'decorated_definition':
-      throw new Error('SEAT: python decorated definitions land in U6a.2-3');
+    case 'decorated_definition': {
+      const definition = node.childForFieldName('definition');
+      return definition === null ? undefined : classify(definition, container);
+    }
     default:
       return undefined;
   }

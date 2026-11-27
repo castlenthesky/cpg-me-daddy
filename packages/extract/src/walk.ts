@@ -4,9 +4,24 @@
 // module frame in children's scopes (decision 92), fqns from `makeSymbolFqn` (decisions 90, 91), and
 // resolveCallee is gone (U6a.2 acceptance). Pass B (calls, imports, ref sites) is U6a.2-4.
 
-import { makeNodeId, makeSymbolFqn, MODULE_SCOPE, type SourceRange } from '@cpg/model';
+import {
+  makeNodeId,
+  makeSymbolFqn,
+  MODULE_SCOPE,
+  type SourceRange,
+  type SymbolDescriptor,
+} from '@cpg/model';
 import type { ElementBuilder } from './builder';
-import type { ExtractOutcome, ExtractRequest, LanguageAdapter, SyntaxNode } from './contract';
+import type {
+  ContainerKind,
+  ExtractOutcome,
+  ExtractRequest,
+  LanguageAdapter,
+  MemberInfo,
+  MethodInfo,
+  SyntaxNode,
+  TypeDeclInfo,
+} from './contract';
 
 /** The truncation report of an `ExtractOutcome` of kind `truncated`. */
 type Truncation = Extract<ExtractOutcome, { kind: 'truncated' }>['truncation'];
@@ -18,6 +33,14 @@ export interface WalkResult {
   readonly truncation?: Truncation;
 }
 
+interface ContainerContext {
+  readonly containerKind: ContainerKind;
+  readonly parentId: string;
+  readonly scope: readonly string[];
+  readonly descriptors: readonly SymbolDescriptor[];
+  readonly depth: number;
+}
+
 function nodeRange(node: SyntaxNode): SourceRange {
   return {
     startRow: node.startPosition.row,
@@ -25,6 +48,16 @@ function nodeRange(node: SyntaxNode): SourceRange {
     endRow: node.endPosition.row,
     endColumn: node.endPosition.column,
   };
+}
+
+function appendScope(parent: readonly string[], name: string): readonly [string, ...string[]] {
+  const [first, ...rest] = parent;
+  return first === undefined ? [name] : [first, ...rest, name];
+}
+
+function unknownScope(containerScope: readonly string[]): readonly [string, ...string[]] {
+  const [first, ...rest] = containerScope;
+  return first === undefined ? [MODULE_SCOPE] : [first, ...rest];
 }
 
 /**
@@ -118,36 +151,258 @@ export function walkFile(
   let astNodesVisited = 1;
   const maxDepth = budget?.maxDepth;
   const maxNodes = budget?.maxNodes;
-  const childDepth = 1;
+  const idCounts = new Map<string, number>();
+  const unknownCounts = new Map<string, number>();
 
-  for (const child of root.namedChildren) {
-    if (maxDepth !== undefined && childDepth > maxDepth) {
-      return {
-        astNodesVisited,
-        truncation: {
+  function mintId(
+    kind: 'TYPE_DECL' | 'METHOD' | 'MEMBER' | 'PARAM',
+    scope: readonly [string, ...string[]],
+  ): string {
+    const base = makeNodeId({ form: 'scoped', path, kind, scope });
+    const count = idCounts.get(base) ?? 0;
+    idCounts.set(base, count + 1);
+    return count === 0 ? base : makeNodeId({ form: 'scoped', path, kind, scope, ordinal: count });
+  }
+
+  function mintUnknownId(containerScope: readonly string[]): string {
+    const scope = unknownScope(containerScope);
+    const scopeKey = makeNodeId({ form: 'scoped', path, kind: 'UNKNOWN', scope });
+    const count = unknownCounts.get(scopeKey) ?? 0;
+    unknownCounts.set(scopeKey, count + 1);
+    return makeNodeId({ form: 'scoped', path, kind: 'UNKNOWN', scope, ordinal: count });
+  }
+
+  function defineSymbol(
+    fromLabel: 'TYPE_DECL' | 'METHOD' | 'MEMBER',
+    fromKey: string,
+    descriptors: readonly SymbolDescriptor[],
+    symbolKind: 'class' | 'method' | 'function' | 'variable',
+  ): void {
+    const fqn = makeSymbolFqn({ form: 'local', path, descriptors });
+    builder.addSymbol({
+      fqn,
+      origin: 'local',
+      language: adapter.language,
+      properties: { kind: symbolKind },
+    });
+    builder.addEdge({
+      type: 'DEFINES',
+      from: { by: 'id', label: fromLabel, key: fromKey },
+      to: { by: 'fqn', label: 'SYMBOL', key: fqn },
+      properties: {},
+    });
+  }
+
+  function emitTypeDecl(
+    node: SyntaxNode,
+    info: TypeDeclInfo,
+    ctx: ContainerContext,
+    childDepth: number,
+  ): Truncation | undefined {
+    const scope = appendScope(ctx.scope, info.name);
+    const descriptors: readonly SymbolDescriptor[] = [
+      ...ctx.descriptors,
+      { kind: 'type', name: info.name },
+    ];
+    const id = mintId('TYPE_DECL', scope);
+
+    builder.addNode({
+      label: 'TYPE_DECL',
+      id,
+      file: path,
+      revision_id,
+      tier: 'structural',
+      range: nodeRange(node),
+      properties: {
+        name: info.name,
+        kind: info.kind,
+        exported: info.exported,
+        status: 'ready',
+        structural: info.structural,
+        ...(info.docstringHead !== undefined ? { docstring_head: info.docstringHead } : {}),
+      },
+    });
+    builder.addEdge({
+      type: 'DECLARES',
+      from: { by: 'id', label: ctx.containerKind, key: ctx.parentId },
+      to: { by: 'id', label: 'TYPE_DECL', key: id },
+      properties: {},
+    });
+    defineSymbol('TYPE_DECL', id, descriptors, 'class');
+
+    if (info.body === undefined) return undefined;
+    return walkContainer(info.body.namedChildren, {
+      containerKind: 'TYPE_DECL',
+      parentId: id,
+      scope,
+      descriptors,
+      depth: childDepth,
+    });
+  }
+
+  function emitMethod(node: SyntaxNode, info: MethodInfo, ctx: ContainerContext): void {
+    const scope = appendScope(ctx.scope, info.name);
+    const descriptors: readonly SymbolDescriptor[] = [
+      ...ctx.descriptors,
+      { kind: 'method', name: info.name },
+    ];
+    const id = mintId('METHOD', scope);
+
+    builder.addNode({
+      label: 'METHOD',
+      id,
+      file: path,
+      revision_id,
+      tier: 'structural',
+      range: nodeRange(node),
+      ...(info.nameNode !== undefined ? { nameRange: nodeRange(info.nameNode) } : {}),
+      properties: {
+        name: info.name,
+        kind: info.kind,
+        signature: info.signature,
+        params_count: info.params.length,
+        exported: info.exported,
+        async: info.async,
+        status: 'ready',
+        ...(info.docstringHead !== undefined ? { docstring_head: info.docstringHead } : {}),
+      },
+    });
+    builder.addEdge({
+      type: 'DECLARES',
+      from: { by: 'id', label: ctx.containerKind, key: ctx.parentId },
+      to: { by: 'id', label: 'METHOD', key: id },
+      properties: {},
+    });
+    defineSymbol(
+      'METHOD',
+      id,
+      descriptors,
+      ctx.containerKind === 'TYPE_DECL' ? 'method' : 'function',
+    );
+
+    for (const [ordinal, param] of info.params.entries()) {
+      const paramScope = appendScope(scope, param.name);
+      const paramId = mintId('PARAM', paramScope);
+      builder.addNode({
+        label: 'PARAM',
+        id: paramId,
+        file: path,
+        revision_id,
+        tier: 'structural',
+        range: nodeRange(param.node),
+        properties: {
+          name: param.name,
+          ordinal,
+          ...(param.typeText !== undefined ? { type_text: param.typeText } : {}),
+          ...(param.defaultText !== undefined ? { default: param.defaultText } : {}),
+        },
+      });
+      builder.addEdge({
+        type: 'HAS_PARAM',
+        from: { by: 'id', label: 'METHOD', key: id },
+        to: { by: 'id', label: 'PARAM', key: paramId },
+        properties: {},
+      });
+    }
+  }
+
+  function emitMember(node: SyntaxNode, info: MemberInfo, ctx: ContainerContext): void {
+    const scope = appendScope(ctx.scope, info.name);
+    const descriptors: readonly SymbolDescriptor[] = [
+      ...ctx.descriptors,
+      { kind: 'term', name: info.name },
+    ];
+    const id = mintId('MEMBER', scope);
+
+    builder.addNode({
+      label: 'MEMBER',
+      id,
+      file: path,
+      revision_id,
+      tier: 'structural',
+      range: nodeRange(node),
+      properties: {
+        name: info.name,
+        ...(info.typeText !== undefined ? { type_text: info.typeText } : {}),
+        ...(info.visibility !== undefined ? { visibility: info.visibility } : {}),
+      },
+    });
+    builder.addEdge({
+      type: 'DECLARES',
+      from: { by: 'id', label: ctx.containerKind, key: ctx.parentId },
+      to: { by: 'id', label: 'MEMBER', key: id },
+      properties: {},
+    });
+    defineSymbol('MEMBER', id, descriptors, 'variable');
+  }
+
+  function walkContainer(
+    children: readonly SyntaxNode[],
+    ctx: ContainerContext,
+  ): Truncation | undefined {
+    const childDepth = ctx.depth + 1;
+    for (const child of children) {
+      if (maxDepth !== undefined && childDepth > maxDepth) {
+        return {
           limit: 'maxDepth',
           limitValue: maxDepth,
           droppedAtNodeType: child.type,
           droppedRange: nodeRange(child),
-        },
-      };
-    }
-    if (maxNodes !== undefined && astNodesVisited + 1 > maxNodes) {
-      return {
-        astNodesVisited,
-        truncation: {
+        };
+      }
+      if (maxNodes !== undefined && astNodesVisited + 1 > maxNodes) {
+        return {
           limit: 'maxNodes',
           limitValue: maxNodes,
           droppedAtNodeType: child.type,
           droppedRange: nodeRange(child),
-        },
-      };
+        };
+      }
+      astNodesVisited += 1;
+
+      if (child.type === 'ERROR') {
+        builder.addNode({
+          label: 'UNKNOWN',
+          id: mintUnknownId(ctx.scope),
+          file: path,
+          revision_id,
+          tier: 'structural',
+          range: nodeRange(child),
+          properties: {
+            reason: 'syntax-error',
+            status: 'ready',
+          },
+        });
+        continue;
+      }
+
+      const info = adapter.classify(child, ctx.containerKind);
+      if (info === undefined) continue;
+
+      switch (info.declares) {
+        case 'TYPE_DECL': {
+          const truncated = emitTypeDecl(child, info, ctx, childDepth);
+          if (truncated !== undefined) return truncated;
+          break;
+        }
+        case 'METHOD':
+          emitMethod(child, info, ctx);
+          break;
+        case 'MEMBER':
+          emitMember(child, info, ctx);
+          break;
+      }
     }
-    astNodesVisited += 1;
-    if (child.type === 'ERROR' || adapter.classify(child, 'MODULE') !== undefined) {
-      throw new Error('SEAT: Pass A declarations land in U6a.2-3');
-    }
+    return undefined;
   }
 
-  return { astNodesVisited };
+  const truncation = walkContainer(root.namedChildren, {
+    containerKind: 'MODULE',
+    parentId: moduleId,
+    scope: [],
+    descriptors: [],
+    depth: 0,
+  });
+
+  return truncation === undefined ? { astNodesVisited } : { astNodesVisited, truncation };
 }
