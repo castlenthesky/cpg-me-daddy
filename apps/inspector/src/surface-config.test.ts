@@ -23,6 +23,7 @@ function events(): SurfaceEvents {
     onPointClick: () => {},
     onLinkMouseOver: () => {},
     onLinkMouseOut: () => {},
+    onTransitionEnd: () => {},
   };
 }
 
@@ -39,6 +40,8 @@ describe('graphConfig', () => {
       'onPointClick',
       'onLinkMouseOver',
       'onLinkMouseOut',
+      // Sprint 26 (decision 85): a delta's simulation restarts when its transition ends.
+      'onTransitionEnd',
     ] as const;
     expect(Object.keys(handlers).toSorted()).toEqual([...names].toSorted());
     expect(names.filter((name) => config[name] !== handlers[name])).toEqual([]);

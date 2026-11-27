@@ -2,14 +2,26 @@
 // decisions, C-CLI (WatchEvent, I-23 seq dense and closed last, I-30 the injected clock), C-SINK
 // INV-19 (known state advances only on confirmed writes), C-WATCH (INV-19 an unknown changed is an
 // upsert, OQ-8 a move is a remove and an add, budget_boundary's three intervals), F-1 (no seq on a
-// node) and filesystemTier's row shapes. The disk is real (the engine's own probe); the backend,
+// node) and filesystemTier's row shapes. Sprint 26: controller decisions 81 and 82 (one delta per
+// change from the op, one graph seq), C-MODEL I-10 (a delta at seq + 1 applies), the store's
+// merge-filesystem removal (a directory takes its subtree) and S26-1 (a changed file re-sends no
+// link). The disk is real (the engine's own probe); the backend,
 // the clock and the timers are fakes, except in the one case that runs the real @parcel/watcher.
 
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { isWorkspacePath, makeNodeId, type WorkspacePath } from '@cpg/model';
+import {
+  applyGraphDelta,
+  isWorkspacePath,
+  makeNodeId,
+  type GraphDelta,
+  type GraphEdge,
+  type GraphNode,
+  type GraphPayload,
+  type WorkspacePath,
+} from '@cpg/model';
 import { createMemoryStore, type MemoryStore } from '@cpg/sink';
 import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
 import type {
@@ -30,7 +42,7 @@ import type {
   WatchEvent,
   WatchRequest,
 } from './port';
-import { toBatchOp } from './watch';
+import { HeldPaths, toBatchDeltas, toBatchOp } from './watch';
 
 const roots: string[] = [];
 const controllers: AbortController[] = [];
@@ -102,6 +114,67 @@ function sorted(op: WriteOp | undefined): unknown {
 }
 const languageOf = (p: string): string | undefined =>
   p.endsWith('.ts') ? 'typescript' : p.endsWith('.py') ? 'python' : undefined;
+
+// ── the graph form of those rows, as the store holds them (it drops null properties) ──
+const fileNode = (path: string, revision: string, language: string | null): GraphNode => ({
+  id: fileId(path),
+  type: 'FILE',
+  name: basename(path),
+  data: {
+    path,
+    name: basename(path),
+    ...(language !== null && { language }),
+    content_hash: revision,
+    revision_id: revision,
+  },
+});
+const dirNode = (path: string): GraphNode => ({
+  id: dirId(path),
+  type: 'DIRECTORY',
+  name: basename(path),
+  data: { path, name: basename(path), status: 'ready' },
+});
+const hasEntry = (from: string, to: string): GraphEdge => ({
+  source: dirId(from),
+  target: to,
+  type: 'HAS_ENTRY',
+});
+/** A delta that adds one node (with its link, when given) and removes nothing. */
+function added(seq: number, node: GraphNode, edge?: GraphEdge): GraphDelta {
+  const revision = node.data?.['revision_id'];
+  return {
+    seq,
+    file: wp(String(node.data?.['path'])),
+    revision_id: typeof revision === 'string' ? revision : '',
+    producer: 'filesystem',
+    addedNodes: [node],
+    addedEdges: edge === undefined ? [] : [edge],
+    removedNodeIds: [],
+  };
+}
+/** A delta that only removes `ids` (in any order) for `file`. */
+const removed = (seq: number, file: string, ids: readonly string[]): GraphDelta => ({
+  seq,
+  file: wp(file),
+  revision_id: '',
+  producer: 'filesystem',
+  addedNodes: [],
+  addedEdges: [],
+  removedNodeIds: ids.toSorted(byText),
+});
+/** removedNodeIds carries no order: sort it, so a comparison does not depend on one. */
+const sortedRemovals = (deltas: readonly GraphDelta[]): GraphDelta[] =>
+  deltas.map((d) => ({ ...d, removedNodeIds: d.removedNodeIds.toSorted(byText) }));
+const aChange = (
+  kind: ChangeKind,
+  entry: 'file' | 'directory',
+  path: string,
+  extra: Partial<NormalizedChange> = {},
+): NormalizedChange => ({ kind, entry, path: wp(path), observedAt: 1, ...extra });
+const edgeKey = (e: GraphEdge): string => `${e.source} ${String(e.type)} ${e.target}`;
+const nodesById = (p: GraphPayload): GraphNode[] => p.nodes.toSorted((a, b) => byText(a.id, b.id));
+const held = (files: readonly string[], dirs: readonly string[]): HeldPaths =>
+  new HeldPaths(files.map(wp), dirs.map(wp));
 
 // ── the fake clock: TimerApi plus now ──
 interface Clock extends TimerApi {
@@ -220,6 +293,8 @@ interface RecorderOptions {
   readonly rejects?: (n: number) => boolean;
   /** Runs inside each write, before it lands. */
   readonly during?: () => Promise<void> | void;
+  /** Gets the store's id on each readAll (sprint 26). */
+  readonly reads?: string[];
 }
 function recorder(o: RecorderOptions = {}): Recorder {
   const id = o.id ?? 'memory';
@@ -239,6 +314,10 @@ function recorder(o: RecorderOptions = {}): Recorder {
         recorded.landed += 1;
         o.log?.push(`${id}.landed`);
         return { ...receipt, ...o.receipt };
+      },
+      async readAll() {
+        o.reads?.push(id);
+        return memory.readAll();
       },
     },
   };
@@ -371,6 +450,7 @@ describe('start: index, then ready (decision 60)', () => {
         at: 5000,
         root,
         report: { ...report, durationMs: expect.any(Number) },
+        graphSeq: 0,
       },
     ]);
     const [event] = run.events;
@@ -486,6 +566,15 @@ describe('live batches (decisions 62, 63)', () => {
       ],
       write: { nodesWritten: 2, edgesWritten: 2, statementCount: 1 },
       latencyMs: { t0_t1: null, t1_t2: 70, t2_t3: 57, total: 127 },
+      deltas: [
+        added(1, fileNode('notes.txt', sha256('n'), null), hasEntry('.', fileId('notes.txt'))),
+        added(
+          2,
+          fileNode('src/new.ts', sha256('hello'), 'typescript'),
+          hasEntry('src', fileId('src/new.ts')),
+        ),
+      ],
+      graphSeq: 2,
     });
     const expectedOp = {
       kind: 'merge-filesystem',
@@ -1303,6 +1392,285 @@ describe('toBatchOp (decision 62)', () => {
     for (const change of bare) {
       expect(() => toBatchOp([change], languageOf)).toThrow(/revision_id/);
     }
+  });
+});
+
+describe('toBatchDeltas (decisions 81, 82)', () => {
+  it('one delta per change, in order, from firstSeq: exactly what the op writes for that path', () => {
+    const h = held(['a.ts', 'keep.py', 'old.ts', 'd/x.ts', 'd/e/y.ts'], ['.', 'd', 'd/e']);
+    const deltas = toBatchDeltas(
+      [
+        aChange('created', 'directory', 'lib'),
+        aChange('created', 'file', 'lib/n.ts', { revision_id: 'r1' }),
+        aChange('changed', 'file', 'keep.py', { revision_id: 'r2' }),
+        aChange('deleted', 'file', 'a.ts'),
+        aChange('deleted', 'directory', 'd'),
+        aChange('moved', 'file', 'm.ts', { fromPath: wp('old.ts'), revision_id: 'r3' }),
+        aChange('deleted', 'file', 'ghost.ts'),
+        aChange('created', 'file', 'notes.txt', { revision_id: 'r4' }),
+      ],
+      languageOf,
+      h,
+      7,
+    );
+    expect(sortedRemovals(deltas)).toEqual([
+      added(7, dirNode('lib'), hasEntry('.', dirId('lib'))),
+      added(8, fileNode('lib/n.ts', 'r1', 'typescript'), hasEntry('lib', fileId('lib/n.ts'))),
+      // S26-1: the link of a changed file is already held; it is not sent again.
+      added(9, fileNode('keep.py', 'r2', 'python')),
+      removed(10, 'a.ts', [fileId('a.ts')]),
+      // The store drops a directory's subtree; its delta names every id that goes.
+      removed(11, 'd', [dirId('d'), dirId('d/e'), fileId('d/x.ts'), fileId('d/e/y.ts')]),
+      // A move belongs to its new path: the old one's node goes, the new one arrives attached.
+      {
+        ...added(12, fileNode('m.ts', 'r3', 'typescript'), hasEntry('.', fileId('m.ts'))),
+        removedNodeIds: [fileId('old.ts')],
+      },
+      // Nothing held there: nothing to remove.
+      removed(13, 'ghost.ts', []),
+      added(14, fileNode('notes.txt', 'r4', null), hasEntry('.', fileId('notes.txt'))),
+    ]);
+  });
+
+  it('a directory takes only what is under it, never a sibling that shares its prefix', () => {
+    const h = held(['d.ts', 'dx/z.ts', 'd/in.ts'], ['.', 'd', 'dx']);
+    const [delta] = toBatchDeltas([aChange('deleted', 'directory', 'd')], languageOf, h, 1);
+    expect(delta?.removedNodeIds.toSorted(byText)).toEqual([dirId('d'), fileId('d/in.ts')]);
+  });
+
+  it('held paths advance change by change, within a call and across calls', () => {
+    const h = held([], ['.']);
+    const first = toBatchDeltas(
+      [
+        aChange('created', 'directory', 'w'),
+        aChange('created', 'file', 'w/f.ts', { revision_id: 'f' }),
+        aChange('created', 'file', 'q.ts', { revision_id: 'q' }),
+        // Within the call: q.ts is held once its own change has been seen.
+        aChange('moved', 'file', 'r.ts', { fromPath: wp('q.ts'), revision_id: 'q' }),
+      ],
+      languageOf,
+      h,
+      1,
+    );
+    expect(first.map((d) => [d.seq, d.removedNodeIds])).toEqual([
+      [1, []],
+      [2, []],
+      [3, []],
+      [4, [fileId('q.ts')]],
+    ]);
+    const second = toBatchDeltas(
+      [aChange('deleted', 'directory', 'w'), aChange('deleted', 'file', 'q.ts')],
+      languageOf,
+      h,
+      5,
+    );
+    expect(sortedRemovals(second)).toEqual([
+      removed(5, 'w', [dirId('w'), fileId('w/f.ts')]),
+      // The move forgot q.ts.
+      removed(6, 'q.ts', []),
+    ]);
+    const third = toBatchDeltas(
+      [
+        aChange('deleted', 'file', 'r.ts'),
+        // Round two (R3): a deleted directory and what was in it are no longer held.
+        aChange('deleted', 'directory', 'w'),
+        aChange('deleted', 'file', 'w/f.ts'),
+      ],
+      languageOf,
+      h,
+      7,
+    );
+    expect(third).toEqual([
+      removed(7, 'r.ts', [fileId('r.ts')]),
+      removed(8, 'w', []),
+      removed(9, 'w/f.ts', []),
+    ]);
+  });
+
+  // Post-implementation (sabotage A#10): a deleted folder's subfolders are forgotten with it.
+  it('a deleted folder forgets its subfolders too: deleting one later removes nothing', () => {
+    const h = held(['d/e/y.ts'], ['.', 'd', 'd/e']);
+    toBatchDeltas([aChange('deleted', 'directory', 'd')], languageOf, h, 1);
+    const [later] = toBatchDeltas([aChange('deleted', 'directory', 'd/e')], languageOf, h, 2);
+    expect(later?.removedNodeIds).toEqual([]);
+  });
+
+  // Round two (R4): a move removes what the store drops for its old path, as a deletion does.
+  it('a move from a held directory takes its subtree; a move from a path not held removes nothing', () => {
+    const h = held(['dm/z.ts'], ['.', 'dm']);
+    const deltas = toBatchDeltas(
+      [
+        aChange('moved', 'directory', 'dn', { fromPath: wp('dm') }),
+        aChange('moved', 'file', 'b.ts', { fromPath: wp('nowhere.ts'), revision_id: 'b' }),
+        aChange('deleted', 'file', 'dm/z.ts'),
+      ],
+      languageOf,
+      h,
+      1,
+    );
+    expect(sortedRemovals(deltas)).toEqual([
+      {
+        ...added(1, dirNode('dn'), hasEntry('.', dirId('dn'))),
+        removedNodeIds: [dirId('dm'), fileId('dm/z.ts')].toSorted(byText),
+      },
+      added(2, fileNode('b.ts', 'b', 'typescript'), hasEntry('.', fileId('b.ts'))),
+      removed(3, 'dm/z.ts', []),
+    ]);
+  });
+
+  it('an empty batch is no delta; a file change without revision_id throws (INV-26)', () => {
+    expect(toBatchDeltas([], languageOf, held([], ['.']), 3)).toEqual([]);
+    expect(() =>
+      toBatchDeltas([aChange('created', 'file', 'x.ts')], languageOf, held([], ['.']), 3),
+    ).toThrow('x.ts');
+  });
+});
+
+describe('the batch events carry deltas and the graph seq (decisions 81, 82)', () => {
+  it('ready is graph seq 0; each delta takes the next, and a batch says the last; other events take none', async () => {
+    const root = await tree({ 'a.ts': 'a', 'b.ts': 'b' });
+    const reads: string[] = [];
+    const run = await start(root, { memory: recorder({ reads }) });
+    await ready(run);
+    await writeFile(join(root, 'c.ts'), 'c');
+    run.backend.fire(raw(root, 'created', 'c.ts', 5001));
+    run.clock.advance(100);
+    await until(() => batches(run.events).length === 1, 'a batch');
+    run.backend.fail(failure('permission', false));
+    await writeFile(join(root, 'a.ts'), 'A');
+    await rm(join(root, 'b.ts'));
+    run.backend.fire(raw(root, 'changed', 'a.ts', 5200), raw(root, 'deleted', 'b.ts', 5201));
+    run.clock.advance(100);
+    await until(() => batches(run.events).length === 2, 'a second batch');
+
+    expect(run.events.map((e) => [e.kind, e.seq, 'graphSeq' in e ? e.graphSeq : '-'])).toEqual([
+      ['ready', 0, 0],
+      ['batch', 1, 1],
+      ['warning', 2, '-'],
+      ['batch', 3, 3],
+    ]);
+    // Round two (R1): C-WATCH INV-16, batch order deleted < changed, so b.ts's delta comes first.
+    expect(sortedRemovals(batches(run.events)[1]?.deltas ?? [])).toEqual([
+      removed(2, 'b.ts', [fileId('b.ts')]),
+      added(3, fileNode('a.ts', sha256('A'), 'typescript')),
+    ]);
+    // C-EXT may_not: no delta is derived by reading the store; index() read it once (decision 77).
+    expect(reads).toEqual(['memory']);
+  });
+
+  // Round two (R3): the initial batch also creates a folder and deletes a file inside one.
+  it('what the initial batch wrote is held: folders made or changed before ready are removed whole', async () => {
+    const root = await tree({ 'keep/k.ts': 'k', 'keep/old.ts': 'o', 'gone.ts': 'g' });
+    const backend = backendFor(async () => {
+      await writeFile(join(root, 'keep', 'new.ts'), 'fresh');
+      await rm(join(root, 'keep', 'old.ts'));
+      await rm(join(root, 'gone.ts'));
+      await mkdir(join(root, 'fresh'));
+      await writeFile(join(root, 'fresh', 'f.ts'), 'f');
+    });
+    const run = await start(root, { backend });
+    await ready(run);
+    await rm(join(root, 'keep'), { recursive: true });
+    await rm(join(root, 'fresh'), { recursive: true });
+    run.backend.fire(raw(root, 'deleted', 'keep', 5001), raw(root, 'deleted', 'fresh', 5002));
+    run.clock.advance(100);
+    await until(() => batches(run.events).length === 1, 'a batch');
+
+    expect(sortedRemovals(batches(run.events)[0]?.deltas ?? [])).toEqual([
+      removed(1, 'fresh', [dirId('fresh'), fileId('fresh/f.ts')]),
+      removed(2, 'keep', [dirId('keep'), fileId('keep/k.ts'), fileId('keep/new.ts')]),
+    ]);
+  });
+
+  it('a batch that was never written takes no graph seq; the next one starts at 1', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    let refusing = false;
+    const run = await start(root, { memory: recorder({ rejects: () => refusing }) });
+    await ready(run);
+    refusing = true;
+    await writeFile(join(root, 'lost.ts'), 'l');
+    run.backend.fire(raw(root, 'created', 'lost.ts', 5001));
+    run.clock.advance(100);
+    await drainRetries(run.clock);
+    await until(() => run.events.some((e) => e.kind === 'warning'), 'the warning');
+    refusing = false;
+    await writeFile(join(root, 'kept.ts'), 'k');
+    run.backend.fire(raw(root, 'created', 'kept.ts', 9000));
+    run.clock.advance(100);
+    await until(() => batches(run.events).length === 1, 'a batch');
+
+    const [batch] = batches(run.events);
+    expect([batch?.graphSeq, batch?.deltas.map((d) => [d.seq, d.file])]).toEqual([
+      1,
+      [[1, 'kept.ts']],
+    ]);
+  });
+
+  // The proof of decision 81: a host that holds the snapshot read after ready and applies every
+  // batch's deltas holds what the store holds, with no duplicate edge, through a new folder of two
+  // files, a save, a rename, a deleted folder, and a rescan that finds an edit no event reported.
+  it('the snapshot after ready plus every delta, applied in order, is what the store holds', async () => {
+    const root = await tree({ 'a.ts': 'a', 'd/x.ts': 'x', 'd/e/y.py': 'y', 'r.ts': 'r' });
+    const t = commands();
+    const run = await start(root, { rescan: t.trigger });
+    await ready(run);
+    let picture: GraphPayload = { ...(await run.memory.store.readAll()), seq: 0 };
+    const outcomes: string[] = [];
+    let applied = 0;
+    const follow = (): void => {
+      for (const batch of batches(run.events).slice(applied)) {
+        for (const delta of batch.deltas) {
+          const result = applyGraphDelta(picture, delta);
+          outcomes.push(result.outcome);
+          if (result.outcome === 'applied') picture = result.payload;
+        }
+      }
+      applied = batches(run.events).length;
+    };
+    const step = async (fire: () => void, what: string): Promise<void> => {
+      const before = batches(run.events).length;
+      fire();
+      run.clock.advance(100);
+      await until(() => batches(run.events).length > before, what);
+      follow();
+    };
+
+    await mkdir(join(root, 'lib'));
+    await writeFile(join(root, 'lib', 'one.ts'), '1');
+    await writeFile(join(root, 'lib', 'two.py'), '2');
+    await step(() => run.backend.fire(raw(root, 'created', 'lib', 5001)), 'the new folder');
+    await writeFile(join(root, 'a.ts'), 'saved');
+    await step(() => run.backend.fire(raw(root, 'changed', 'a.ts', 5101)), 'the save');
+    await rename(join(root, 'r.ts'), join(root, 'lib', 'r2.ts'));
+    await step(
+      () =>
+        run.backend.fire(
+          raw(root, 'deleted', 'r.ts', 5201),
+          raw(root, 'created', 'lib/r2.ts', 5202),
+        ),
+      'the rename',
+    );
+    await rm(join(root, 'd'), { recursive: true });
+    await step(() => run.backend.fire(raw(root, 'deleted', 'd', 5301)), 'the deleted folder');
+    await writeFile(join(root, 'lib', 'one.ts'), 'drifted');
+    await writeFile(join(root, 'quiet.ts'), 'q');
+    await step(() => t.fire(), 'the rescan');
+
+    const store = await run.memory.store.readAll();
+    expect(batches(run.events).map((b) => [b.cause, b.deltas.length])).toEqual([
+      ['live', 3],
+      ['live', 1],
+      ['live', 1],
+      ['live', 1],
+      ['rescan', 2],
+    ]);
+    expect(outcomes.every((o) => o === 'applied')).toBe(true);
+    expect(outcomes).toHaveLength(8);
+    expect(nodesById(picture)).toEqual(nodesById(store));
+    expect(picture.edges.map(edgeKey).toSorted(byText)).toEqual(
+      store.edges.map(edgeKey).toSorted(byText),
+    );
+    expect(picture.seq).toBe(batches(run.events).at(-1)?.graphSeq);
   });
 });
 

@@ -10,6 +10,7 @@
 // - Controller decision 22: a saved payload's five workspace checks are `unavailable`.
 // - Controller decision 23: the verification's seq is the lowest asOfSeq.
 // - C-EXT I-10: a duplicate id is a failing render-reconciliation, so the payload is not refused.
+// - Sprint 26 (controller decision 84): the one graph line says cause 'initial'.
 // - 08-verification §3.3: the graph is never shown without its verdict.
 // Expected values come from those sources and the design notes, never from running the code.
 
@@ -217,7 +218,7 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     const l = live(['inspect', file]);
     await until(() => l.inspector.sent.length >= 2, 'the graph and the verification');
     expect(l.inspector.sent).toEqual([
-      { type: 'graph', payload: PAYLOAD },
+      { type: 'graph', payload: PAYLOAD, cause: 'initial' },
       {
         type: 'verification',
         report: {
@@ -252,7 +253,7 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     const file = await payloadFile(envelope(PAYLOAD), 'saved.json');
     const l = live(['inspect', 'saved.json'], { cwd: join(file, '..') });
     await until(() => l.inspector.sent.length >= 1, 'the graph');
-    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: PAYLOAD });
+    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: PAYLOAD, cause: 'initial' });
     l.abort();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
   });
@@ -260,7 +261,7 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
   it('- reads the document from stdin', async () => {
     const l = live(['inspect', '-'], { stdin: envelope(PAYLOAD) });
     await until(() => l.inspector.sent.length >= 1, 'the graph');
-    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: PAYLOAD });
+    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: PAYLOAD, cause: 'initial' });
     l.abort();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
   });
@@ -377,7 +378,7 @@ describe('cpg inspect <payload.json|-> (controller decisions 20 and 22)', () => 
     const dup = { ...PAYLOAD, nodes: [...PAYLOAD.nodes, { id: 'f', type: 'FILE' }] };
     const l = live(['inspect', await payloadFile(envelope(dup))]);
     await until(() => l.inspector.sent.length >= 2, 'the verification');
-    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: dup });
+    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: dup, cause: 'initial' });
     expect(
       l.io.stderr.some((line) =>
         line.startsWith('cpg: warning: payload defect duplicate-node-id: '),
@@ -736,7 +737,7 @@ describe('cpg index --inspect (controller decisions 20, 21, 23)', () => {
     expect(s.verified).toEqual([read]);
     expect(s.inspected.map((i) => i.session)).toEqual([read]);
     expect(s.inspected[0]?.config.root).toBe('/w');
-    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: PAYLOAD });
+    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: PAYLOAD, cause: 'initial' });
     l.abort();
     await l.done;
   });
@@ -886,7 +887,7 @@ describe('cpg inspect and cpg index --inspect: round two', () => {
     const fresh = { ...PAYLOAD, seq: -1 };
     const l = live(['inspect', await payloadFile(envelope(fresh))]);
     await until(() => l.inspector.sent.length >= 2, 'the verification');
-    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: fresh });
+    expect(l.inspector.sent[0]).toEqual({ type: 'graph', payload: fresh, cause: 'initial' });
     expect(verificationAt(l.inspector, 1).seq).toBe(-1);
     expect(renderAt(l.inspector, 1)).toEqual(waiting(-1));
     l.abort();

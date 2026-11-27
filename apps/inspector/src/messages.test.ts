@@ -312,6 +312,9 @@ describe('parseInspectorInput (stdin, decision 9a)', () => {
   });
   it.each([
     ['graph', { type: 'graph', payload: P }],
+    // Sprint 26 (controller decision 84): a graph says whether it starts an epoch.
+    ["graph with cause 'initial'", { type: 'graph', payload: P, cause: 'initial' }],
+    ["graph with cause 'catch-up'", { type: 'graph', payload: P, cause: 'catch-up' }],
     ['graph-delta', { type: 'graph-delta', delta: D }],
     [
       'verification with all six checks in enum order (C-EXT I-18)',
@@ -338,6 +341,12 @@ describe('parseInspectorInput (stdin, decision 9a)', () => {
       { type: 'graph-delta', delta: { ...D, producer: 'parser' } },
     ],
     ['a graph line carrying a delta', { type: 'graph', delta: D }],
+    ["a graph with cause 'live'", { type: 'graph', payload: P, cause: 'live' }],
+    ['a graph with cause 1', { type: 'graph', payload: P, cause: 1 }],
+    // Round two (R11): a falsy cause is not an absent one.
+    ['a graph with cause null', { type: 'graph', payload: P, cause: null }],
+    ["a graph with cause ''", { type: 'graph', payload: P, cause: '' }],
+    ['a graph with cause false', { type: 'graph', payload: P, cause: false }],
     ['a verification with no report', { type: 'verification' }],
     ['a report with no seq', { type: 'verification', report: withField(report, 'seq', undefined) }],
     ["a report at seq '0' (review a10)", { type: 'verification', report: { ...report, seq: '0' } }],

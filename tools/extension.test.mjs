@@ -317,9 +317,22 @@ async function until(done) {
   }
 }
 const ofType = (panel, type) => panel.posted.filter((message) => message.type === type);
+/** What a page holds (sprint 26): its latest graph's node ids with each delta after it applied. */
+function picture(panel) {
+  const graph = ofType(panel, 'graph').at(-1);
+  const ids = new Set(graph.payload.nodes.map(({ id }) => id));
+  let { seq } = graph;
+  for (const message of panel.posted.slice(panel.posted.indexOf(graph) + 1)) {
+    if (message.type !== 'graph-delta') continue;
+    for (const id of message.delta.removedNodeIds) ids.delete(id);
+    for (const { id } of message.delta.addedNodes) ids.add(id);
+    seq = message.seq;
+  }
+  return { epoch: graph.epoch, seq, ids };
+}
 function draw(panel, over = {}) {
-  const { epoch, seq, payload } = ofType(panel, 'graph').at(-1);
-  const count = payload.nodes.length;
+  const { epoch, seq, ids } = picture(panel);
+  const count = ids.size;
   const report = {
     payloadNodeCount: count,
     renderedNodeCount: count,
@@ -381,10 +394,16 @@ describe('cpg.rescan (decision 79)', () => {
     const said = [...seen.warnings];
     writeFileSync(join(root, 'b.py'), '#'.repeat(61));
     await run('cpg.rescan');
-    await until(() => ofType(panel, 'graph').length === 2);
-    expect(ofType(panel, 'graph').map((graph) => filePaths(graph).includes('b.py'))).toEqual([
-      true,
-      false,
+    // Sprint 26 (decision 83): the crawl's batch reaches the page as its delta, not a second graph.
+    await until(() => ofType(panel, 'graph-delta').length === 1);
+    const [graph] = ofType(panel, 'graph');
+    const [delta] = ofType(panel, 'graph-delta');
+    expect([filePaths(graph).includes('b.py'), ofType(panel, 'graph').length]).toEqual([true, 1]);
+    expect([delta.epoch, delta.seq, delta.delta.file, delta.delta.removedNodeIds]).toEqual([
+      graph.epoch,
+      graph.seq + 1,
+      'b.py',
+      ['file:b.py'],
     ]);
     expect([said.length, seen.warnings, seen.errors]).toEqual([1, said, []]);
   });
@@ -528,17 +547,22 @@ describe('verify in the editor', () => {
     panel.dispose();
     expect([status.text, seen.diagnostics.size]).toEqual(['$(error) CPG 2', 1]);
     // U4.2.2: the watch is live, so cpg.openGraph only shows a new panel, sent the graph held. The watch
-    // sees the write once its debounce (the faked timers) fires, and a catch-up graph follows.
+    // sees the write once its debounce (the faked timers) fires, and its delta follows (sprint 26).
     await run('cpg.openGraph');
     const [, again] = seen.panels;
     again.send(READY);
     expect(ofType(again, 'graph').map(({ epoch, seq }) => [epoch, seq])).toEqual([[1, 0]]);
     await until(() => {
       vi.advanceTimersByTime(100);
-      return ofType(again, 'graph').length === 2;
+      return ofType(again, 'graph-delta').length === 1;
     });
-    const [, caughtUp] = ofType(again, 'graph');
-    expect([caughtUp.epoch, caughtUp.seq > 0]).toEqual([1, true]);
+    const [saved] = ofType(again, 'graph-delta');
+    expect([saved.epoch, saved.seq, saved.delta.file, ofType(again, 'graph').length]).toEqual([
+      1,
+      1,
+      'a.ts',
+      1,
+    ]);
     draw(again);
     vi.advanceTimersByTime(500);
     await until(() => !status.text.startsWith('$(error)'));

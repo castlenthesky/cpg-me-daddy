@@ -141,10 +141,16 @@ export function parsePageMessage(value: unknown): PageMessage | undefined {
 
 /**
  * One NDJSON line on the inspector's stdin (owner decision 9a): a payload, a delta or a verify
- * report. The host assigns `protocol` and `epoch` itself, so the line carries neither.
+ * report. The host assigns `protocol` and `epoch` itself, so the line carries neither. A graph's
+ * `cause` (controller decision 84) says whether it starts a new epoch; absent, it is the host's to
+ * decide (InspectorHost: the first graph does, a later one is a catch-up).
  */
 export type InspectorInput =
-  | { readonly type: 'graph'; readonly payload: GraphPayload }
+  | {
+      readonly type: 'graph';
+      readonly payload: GraphPayload;
+      readonly cause?: 'initial' | 'catch-up';
+    }
   | { readonly type: 'graph-delta'; readonly delta: GraphDelta }
   | { readonly type: 'verification'; readonly report: Omit<VerificationReport, 'epoch'> };
 
@@ -211,11 +217,15 @@ function isVerificationInputReport(value: unknown): value is Omit<VerificationRe
   );
 }
 
+function isGraphCause(value: unknown): value is 'initial' | 'catch-up' | undefined {
+  return value === undefined || value === 'initial' || value === 'catch-up';
+}
+
 function isInspectorInput(value: unknown): value is InspectorInput {
   if (!isRecord(value)) return false;
   switch (value['type']) {
     case 'graph':
-      return isGraphPayload(value['payload']);
+      return isGraphPayload(value['payload']) && isGraphCause(value['cause']);
     case 'graph-delta':
       return isGraphDelta(value['delta']);
     case 'verification':
@@ -227,8 +237,9 @@ function isInspectorInput(value: unknown): value is InspectorInput {
 
 /**
  * A stdin line (already JSON-parsed) in one of InspectorInput's three shapes, or undefined. A
- * verification must carry all six checks, once each, in enum order (C-EXT I-18), since the host
- * posts it as a VerificationReport. Node and edge fields are not checked (stop-list 55). Never throws.
+ * graph's `cause`, when present, is `'initial'` or `'catch-up'` (sprint 26). A verification must
+ * carry all six checks, once each, in enum order (C-EXT I-18), since the host posts it as a
+ * VerificationReport. Node and edge fields are not checked (stop-list 55). Never throws.
  */
 export function parseInspectorInput(value: unknown): InspectorInput | undefined {
   return isInspectorInput(value) ? value : undefined;

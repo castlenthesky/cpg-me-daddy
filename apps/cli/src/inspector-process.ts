@@ -7,15 +7,28 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { GraphPayload, RenderReport, VerificationReport, WebviewToHost } from '@cpg/model';
+import type {
+  GraphDelta,
+  GraphPayload,
+  RenderReport,
+  VerificationReport,
+  WebviewToHost,
+} from '@cpg/model';
 
 /**
- * One NDJSON line on the inspector's stdin, one of the bin's InspectorInput shapes. The CLI sends
- * one full graph and no deltas (controller decision 23). A verification carries all six checks,
+ * One NDJSON line on the inspector's stdin, one of the bin's InspectorInput shapes. `cpg inspect`
+ * and `cpg index --inspect` send one full graph (controller decision 23); `cpg watch --inspect`
+ * sends a graph at start and on a fallback, and each batch's deltas between (decision 84). A graph's
+ * `cause` tells the inspector whether it starts a new epoch. A verification carries all six checks,
  * once each, in enum order.
  */
 export type InspectorLine =
-  | { readonly type: 'graph'; readonly payload: GraphPayload }
+  | {
+      readonly type: 'graph';
+      readonly payload: GraphPayload;
+      readonly cause?: 'initial' | 'catch-up';
+    }
+  | { readonly type: 'graph-delta'; readonly delta: GraphDelta }
   | { readonly type: 'verification'; readonly report: Omit<VerificationReport, 'epoch'> };
 
 /** A render-report the page sent, as the inspector prints it on stdout (C-EXT WebviewToHost). */

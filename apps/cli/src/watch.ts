@@ -1,6 +1,6 @@
 // `cpg watch`'s event stream (U4.2.1 part b, BMO-60; controller decisions 65-67): every WatchEvent
-// on stdout as it arrives, the human lines on stderr, and with the inspector on, a full graph per
-// refresh. run() turns the WatchEnd into an exit code (decision 66).
+// on stdout as it arrives, the human lines on stderr, and with the inspector on, a full graph at start
+// and each batch's deltas after it (decision 84). run() turns the WatchEnd into an exit code (decision 66).
 
 import type {
   CpgEngine,
@@ -10,6 +10,7 @@ import type {
   WatchFailure,
   WatchRequest,
 } from '@cpg/engine';
+import type { GraphDelta } from '@cpg/model';
 import type { InspectorProcess, StartInspector } from './inspector-process';
 import type { Io } from './io';
 import { livePicture } from './live';
@@ -43,7 +44,12 @@ interface WatchState {
   inspectorFailure: string | undefined;
   watchResolved: boolean;
   proc: InspectorProcess | undefined;
-  pending: number | undefined;
+  graphShown: boolean;
+  graphSeq: number;
+  snapshotWanted: boolean;
+  snapshotRunning: boolean;
+  verifyWanted: boolean;
+  readonly held: GraphDelta[];
   pumping: boolean;
   pumpPromise: Promise<void> | undefined;
 }
@@ -82,17 +88,24 @@ function inspectorExitMessage(code: number | null, signal: string | null): strin
  * is no stdin mode). `closed { reason: 'error' }` with no `error` event before it, or a watch that
  * resolves with no `closed`, is `error` with an `engine-rejected` failure.
  *
- * With `inspector` (decision 67): after `ready`, the inspector starts once and
- * `cpg: inspector at <url> (open it in a browser; Ctrl-C stops it)` is printed. `ready` (seq 0) and
- * each `batch` (its seq) trigger a refresh: `engine.verify(session, config, null)` and
- * `engine.inspect(session, config)` on the request's session, then a `graph` whose payload has `seq`
- * set to the trigger's seq, and a `verification`. Refreshes are latest-wins: one in flight, at most
- * one queued; a newer trigger replaces the queued one, and a refresh takes its seq when it starts
- * reading. A refresh that throws prints `cpg: warning: inspector refresh at seq <n> failed:
- * <message>` and the watch goes on. Render-reconciliation is judged against the payload last sent;
- * the verification sent with a graph uses the latest render-report received so far (`stale` for an
- * older graph, `unavailable` before any), and a render-report that changes the check re-sends the
- * verification (serveLive's rule).
+ * With `inspector` (decisions 67, 84): after `ready`, the inspector starts once and
+ * `cpg: inspector at <url> (open it in a browser; Ctrl-C stops it)` is printed. The store is read
+ * whole only by a snapshot: `engine.verify(session, config, null)` and `engine.inspect(session,
+ * config)` on the request's session, then a `graph` (LivePicture.show) whose payload has `seq` set to
+ * the `graphSeq` of the latest event seen when the snapshot calls `engine.inspect`, and its
+ * `verification`.
+ * `ready` asks for one. Sprint 26 (decision 84): each `batch`'s deltas go to the picture at once,
+ * inside `onEvent` (LivePicture.apply), unless a snapshot is asked for or in flight, or none has been
+ * shown: then they wait, and are applied in arrival order right after the next snapshot is shown
+ * (already-applied ones are skipped). Each batch whose deltas were applied asks for a verify:
+ * `engine.verify`, then LivePicture.reverify. A batch whose deltas do not apply (a gap, a malformed
+ * delta) asks for a snapshot instead, and so does one that arrives before any. Snapshots and verifies
+ * are latest-wins: one in flight, at most one queued; a queued snapshot replaces a queued verify (it
+ * verifies too). A snapshot or verify that throws prints `cpg: warning: inspector refresh at seq <n>
+ * failed: <message>` (`<n>` the graph seq it was for) and the watch goes on. Render-reconciliation is
+ * judged against the picture the inspector holds; the verification sent uses the latest render-report
+ * received so far (`stale` for an older graph seq, `unavailable` before any), and a render-report that
+ * changes the check re-sends the verification (serveLive's rule).
  *
  * The inspector ending: an exit by SIGINT aborts the watch (the same Ctrl-C), and the end is the
  * watch's. Any other exit, or a start that rejects, aborts the watch, and the end is `inspector`
@@ -123,7 +136,12 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
     inspectorFailure: undefined,
     watchResolved: false,
     proc: undefined,
-    pending: undefined,
+    graphShown: false,
+    graphSeq: 0,
+    snapshotWanted: false,
+    snapshotRunning: false,
+    verifyWanted: false,
+    held: [],
     pumping: false,
     pumpPromise: undefined,
   };
@@ -132,6 +150,28 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
     if (stopper.signal.aborted || state.watchResolved) return;
     state.inspectorFailure = message;
     stopper.abort();
+  };
+
+  const startPump = (): void => {
+    if (inspector === undefined || stopper.signal.aborted || state.watchResolved) return;
+    if (!state.pumping) {
+      state.pumping = true;
+      state.pumpPromise = runPump();
+    }
+  };
+
+  const askSnapshot = (): void => {
+    if (inspector === undefined || stopper.signal.aborted || state.watchResolved) return;
+    state.snapshotWanted = true;
+    state.verifyWanted = false;
+    startPump();
+  };
+
+  const askVerify = (): void => {
+    if (inspector === undefined || stopper.signal.aborted || state.watchResolved) return;
+    if (state.snapshotWanted) return;
+    state.verifyWanted = true;
+    startPump();
   };
 
   const runPump = async (): Promise<void> => {
@@ -158,32 +198,52 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
         });
       }
       const active = state.proc;
-      while (!state.watchResolved && !stopper.signal.aborted && state.pending !== undefined) {
-        const seq = state.pending;
-        state.pending = undefined;
-        try {
-          // oxlint-disable-next-line no-await-in-loop
-          const verified = await engine.verify(request.session, inspector.config, null);
-          // oxlint-disable-next-line no-await-in-loop
-          const payload = await engine.inspect(request.session, inspector.config);
-          picture.show(active, { ...payload, seq }, verified.checks);
-        } catch (error: unknown) {
-          io.err(
-            `cpg: warning: inspector refresh at seq ${String(seq)} failed: ${errorMessage(error)}`,
-          );
+      while (
+        !state.watchResolved &&
+        !stopper.signal.aborted &&
+        (state.snapshotWanted || state.verifyWanted)
+      ) {
+        if (state.snapshotWanted) {
+          state.snapshotWanted = false;
+          state.snapshotRunning = true;
+          let seq = state.graphSeq;
+          try {
+            // oxlint-disable-next-line no-await-in-loop
+            const verified = await engine.verify(request.session, inspector.config, null);
+            seq = state.graphSeq;
+            // oxlint-disable-next-line no-await-in-loop
+            const payload = await engine.inspect(request.session, inspector.config);
+            picture.show(active, { ...payload, seq }, verified.checks);
+            state.graphShown = true;
+            const drained = state.held.splice(0);
+            if (!picture.apply(drained)) {
+              askSnapshot();
+            } else if (drained.some((delta) => delta.seq > seq)) {
+              askVerify();
+            }
+          } catch (error: unknown) {
+            io.err(
+              `cpg: warning: inspector refresh at seq ${String(seq)} failed: ${errorMessage(error)}`,
+            );
+          } finally {
+            state.snapshotRunning = false;
+          }
+        } else {
+          state.verifyWanted = false;
+          const seq = state.graphSeq;
+          try {
+            // oxlint-disable-next-line no-await-in-loop
+            const verified = await engine.verify(request.session, inspector.config, null);
+            picture.reverify(verified.checks);
+          } catch (error: unknown) {
+            io.err(
+              `cpg: warning: inspector refresh at seq ${String(seq)} failed: ${errorMessage(error)}`,
+            );
+          }
         }
       }
     } finally {
       state.pumping = false;
-    }
-  };
-
-  const trigger = (seq: number): void => {
-    if (inspector === undefined || stopper.signal.aborted || state.watchResolved) return;
-    state.pending = seq;
-    if (!state.pumping) {
-      state.pumping = true;
-      state.pumpPromise = runPump();
     }
   };
 
@@ -198,7 +258,8 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
         io.err(
           `cpg: watching ${event.root}: indexed ${String(event.report.walk.filesIndexed)} files in ${String(Math.round(event.report.durationMs))} ms; consumers: ${state.consumers}`,
         );
-        trigger(event.seq);
+        state.graphSeq = event.graphSeq;
+        askSnapshot();
         break;
       }
       case 'batch': {
@@ -208,7 +269,31 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
             `cpg: ${label} ${String(event.seq)}: ${String(event.changes.length)} change(s) in ${String(Math.round(event.latencyMs.total))} ms; consumers: ${state.consumers}`,
           );
         }
-        trigger(event.seq);
+        state.graphSeq = event.graphSeq;
+        if (
+          inspector !== undefined &&
+          picture !== undefined &&
+          !stopper.signal.aborted &&
+          !state.watchResolved
+        ) {
+          if (
+            state.proc !== undefined &&
+            state.graphShown &&
+            !state.snapshotWanted &&
+            !state.snapshotRunning
+          ) {
+            if (picture.apply(event.deltas)) {
+              askVerify();
+            } else {
+              askSnapshot();
+            }
+          } else {
+            state.held.push(...event.deltas);
+            if (!state.snapshotWanted && !state.snapshotRunning) {
+              askSnapshot();
+            }
+          }
+        }
         break;
       }
       case 'warning': {
@@ -244,7 +329,9 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
     await engine.watch(watchRequest, onEvent, stopper.signal);
   } finally {
     state.watchResolved = true;
-    state.pending = undefined;
+    state.snapshotWanted = false;
+    state.verifyWanted = false;
+    state.held.length = 0;
     options.signal?.removeEventListener('abort', onSignalAbort);
     if (state.pumpPromise !== undefined) {
       await state.pumpPromise;

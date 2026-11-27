@@ -1,10 +1,10 @@
 // REAL (U3.1.1 part 4, BMO-52): the extension's flows (controller decision 38), in plain node. Owns the host,
 // the verify scheduler and the panel; extension.ts gives it VS Code. U4.2.2 (BMO-132): one watch keeps the
-// graph current (controller decisions 70 to 74).
+// graph current (controller decisions 70 to 74); sprint 26 sends each batch's deltas (decision 83).
 
 import type { CpgEngine, EngineConfig, EngineSession, WatchEvent } from '@cpg/engine';
 import { parseWebviewMessage } from '@cpg/inspector';
-import type { GraphPayload, ThemeSnapshot, VerificationReport } from '@cpg/model';
+import type { GraphDelta, GraphPayload, ThemeSnapshot, VerificationReport } from '@cpg/model';
 import type { FilesystemProbe, SourceOpener } from './contract';
 import { serializeError } from './errors';
 import { PanelGraphHost } from './graph-host';
@@ -55,6 +55,11 @@ interface WatchResources {
   readonly session: EngineSession;
 }
 
+/** One unit of work a watch queues for the host (decision 83). */
+type WatchJob =
+  | { readonly kind: 'refresh' }
+  | { readonly kind: 'deltas'; readonly deltas: readonly GraphDelta[] };
+
 /** One watch (decisions 70 and 71). */
 interface Watch {
   /** Its refreshes deliver only while this is the session's latest (and it is not disposed). */
@@ -63,21 +68,25 @@ interface Watch {
   readonly stop: AbortController;
   /** From its start until its `closed`, or the end of a start that failed (decision 72). */
   live: boolean;
+  /** Set once engine.watch has resolved and teardown begins: no new queued jobs start. */
+  closing: boolean;
   /** A snapshot was delivered: the next one is a catch-up. */
   delivered: boolean;
-  /** The seq of the one refresh queued (latest-wins). */
-  pending: number | undefined;
-  /** A refresh is in flight; `pump` settles when the last one has. */
+  /** The latest graphSeq seen on this watch (ready's, then each batch's). */
+  graphSeq: number;
+  /** Queued work for the host, run one at a time in order. */
+  readonly queue: WatchJob[];
+  /** A job is in flight; `pump` settles when the last one has. */
   pumping: boolean;
   pump: Promise<void> | undefined;
   /** ready's IndexReport warnings, said after the first snapshot. */
   readyWarnings: readonly string[];
-  /** Settles after the first refresh settles, or when the watch has ended. */
+  /** Settles after the first job settles, or when the watch has ended. */
   firstGraph: Promise<void>;
   settleFirst: (() => void) | undefined;
   /** Listeners subscribed on this watch's rescan trigger (decision 79). */
   readonly rescanListeners: Set<() => void>;
-  /** Settles when watch() has resolved, the refresh settled and the session closed. */
+  /** Settles when watch() has resolved, the job in flight settled and the session closed. */
   ended: Promise<void>;
 }
 
@@ -90,10 +99,17 @@ interface Watch {
  * debounce window and rescan interval coming from the configuration's `watch.*`. Its session is
  * closed once `watch()` has resolved and its refresh has settled. VS Code's own file events are not
  * used (VD-33, P-A).
- * - `ready` and each `batch` ask for a refresh at the event's seq: `engine.inspect` on the watch's
- *   session, then `host.onSnapshot({ ...payload, seq }, { seq, cause })`. Refreshes are latest-wins:
- *   one in flight, at most one queued, and a newer request replaces the queued one. There are no
- *   graph deltas (decision 67's reasons).
+ * - Sprint 26 (controller decision 83): the watch's work for the host runs as one queue of jobs, one at a
+ *   time, in order. `ready` asks for a refresh; each `batch` queues its `deltas`. The store is read only
+ *   by a refresh, never per batch.
+ * - A refresh: `engine.inspect` on the watch's session, then `host.onSnapshot({ ...payload, seq }, { seq,
+ *   cause })`, `seq` being the `graphSeq` of the latest event this watch has seen when it calls
+ *   `engine.inspect` (decision 82). Asking for one drops every job still queued (the read covers them) and queues one.
+ * - A batch's deltas go through `host.onDelta(delta, { seq: delta.seq, cause: 'live' })`, one after
+ *   another. The job falls back to one refresh, and its remaining deltas are dropped, when the watch has
+ *   delivered no graph yet, when onDelta rejects (a malformed delta), or when the host's seq is still
+ *   below the delta's once onDelta resolves (a gap: the host recorded seq-gap). BMO-102 is settled for
+ *   the panel by that fallback, and BMO-103's answer is the same fallback: onDelta's answers are kept.
  * - The first snapshot a watch delivers is `initial` (a new epoch, C-EXT I-13); verify then judges by
  *   that watch's scope, and the warnings follow it. Every later one is `catch-up`: the epoch is kept and
  *   the seq grows (I-12). When ready's refresh succeeds, as it normally does, ready is the initial one.
@@ -262,8 +278,10 @@ export class GraphSession {
       generation: this.generation,
       stop: new AbortController(),
       live: true,
+      closing: false,
       delivered: false,
-      pending: undefined,
+      graphSeq: 0,
+      queue: [],
       pumping: false,
       pump: undefined,
       readyWarnings: [],
@@ -346,7 +364,8 @@ export class GraphSession {
       }
     } finally {
       watch.live = false;
-      watch.pending = undefined;
+      watch.closing = true;
+      watch.queue.length = 0;
       if (watch.pump !== undefined) await watch.pump;
       if (session !== undefined) {
         try {
@@ -374,7 +393,8 @@ export class GraphSession {
           `indexed ${String(report.files.length)} files: ${String(report.nodesWritten)} nodes, ${String(report.edgesWritten)} edges in ${String(Math.round(report.durationMs))} ms (seq ${String(event.seq)})`,
         );
         watch.readyWarnings = report.warnings;
-        this.refresh(watch, resources, event.seq);
+        watch.graphSeq = event.graphSeq;
+        this.requestRefresh(watch, resources);
         return;
       }
       case 'batch':
@@ -382,7 +402,8 @@ export class GraphSession {
           `changes at seq ${String(event.seq)}: ${String(event.changes.length)} file(s); ${String(event.write.nodesWritten)} nodes, ${String(event.write.edgesWritten)} edges written`,
         );
         this.log.debug('batch', { changes: event.changes, latencyMs: event.latencyMs });
-        this.refresh(watch, resources, event.seq);
+        watch.graphSeq = event.graphSeq;
+        this.enqueue(watch, resources, { kind: 'deltas', deltas: event.deltas });
         return;
       case 'warning':
         this.warn(`CPG: ${event.message}`);
@@ -397,21 +418,32 @@ export class GraphSession {
     }
   }
 
-  private refresh(watch: Watch, resources: WatchResources, seq: number): void {
-    watch.pending = seq;
+  private enqueue(watch: Watch, resources: WatchResources, job: WatchJob): void {
+    if (watch.closing) return;
+    watch.queue.push(job);
     if (!watch.pumping) {
       watch.pumping = true;
       watch.pump = this.pump(watch, resources);
     }
   }
 
+  private requestRefresh(watch: Watch, resources: WatchResources): void {
+    watch.queue.length = 0;
+    this.enqueue(watch, resources, { kind: 'refresh' });
+  }
+
   private async pump(watch: Watch, resources: WatchResources): Promise<void> {
     try {
-      while (this.isCurrent(watch) && watch.pending !== undefined) {
-        const seq = watch.pending;
-        watch.pending = undefined;
-        // oxlint-disable-next-line no-await-in-loop -- refreshes run one at a time, latest-wins
-        await this.refreshOnce(watch, resources, seq);
+      while (this.isCurrent(watch) && !watch.closing) {
+        const job = watch.queue.shift();
+        if (job === undefined) break;
+        if (job.kind === 'refresh') {
+          // oxlint-disable-next-line no-await-in-loop -- jobs run one at a time, in order
+          await this.refreshOnce(watch, resources);
+        } else {
+          // oxlint-disable-next-line no-await-in-loop -- jobs run one at a time, in order
+          await this.applyDeltas(watch, resources, job.deltas);
+        }
         watch.settleFirst?.();
       }
     } finally {
@@ -419,7 +451,44 @@ export class GraphSession {
     }
   }
 
-  private async refreshOnce(watch: Watch, resources: WatchResources, seq: number): Promise<void> {
+  private async applyDeltas(
+    watch: Watch,
+    resources: WatchResources,
+    deltas: readonly GraphDelta[],
+  ): Promise<void> {
+    if (!watch.delivered) {
+      this.log.info(
+        `watch ${String(watch.generation)}: deltas before first graph; falling back to refresh`,
+      );
+      this.requestRefresh(watch, resources);
+      return;
+    }
+    for (const delta of deltas) {
+      if (!this.isCurrent(watch)) return;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- deltas apply one after another in seq order
+        await this.host.onDelta(delta, { seq: delta.seq, cause: 'live' });
+      } catch (thrown) {
+        if (!this.isCurrent(watch)) return;
+        this.log.info(
+          `watch ${String(watch.generation)}: delta at seq ${String(delta.seq)} rejected (${serializeError(thrown).message}); falling back to refresh`,
+        );
+        this.requestRefresh(watch, resources);
+        return;
+      }
+      if (!this.isCurrent(watch)) return;
+      if (this.host.seq() < delta.seq) {
+        this.log.info(
+          `watch ${String(watch.generation)}: delta at seq ${String(delta.seq)} did not advance host (at ${String(this.host.seq())}); falling back to refresh`,
+        );
+        this.requestRefresh(watch, resources);
+        return;
+      }
+    }
+  }
+
+  private async refreshOnce(watch: Watch, resources: WatchResources): Promise<void> {
+    const seq = watch.graphSeq;
     const start = performance.now();
     try {
       const payload = await resources.engine.inspect(resources.session, resources.workspace.config);

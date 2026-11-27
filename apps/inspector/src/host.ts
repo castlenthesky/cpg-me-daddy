@@ -58,7 +58,10 @@ function verificationMessage(report: VerificationReport): HostToWebview {
  * Holds the merged payload, the epoch and the latest verify report, and keeps one page in step.
  *
  * From stdin (`input`):
- * - `graph` replaces the payload and bumps the epoch (C-EXT I-13);
+ * - `graph` (controller decision 84, C-EXT I-12 and I-13, the panel's rule): the first graph, and one
+ *   that says `cause: 'initial'`, replaces the payload and bumps the epoch. Any other is a catch-up: it
+ *   keeps the epoch, and replaces the payload when its seq is ahead of the one held, else changes
+ *   nothing and posts nothing;
  * - `graph-delta` merges through applyGraphDelta (I-8). Applied: posted as itself (edge-only
  *   included, I-6). Already-applied: dropped (at-least-once). A gap, a malformed delta or a delta
  *   before any graph: a fault, not posted, and the payload is kept;
@@ -103,11 +106,16 @@ export class InspectorHost {
   /** One stdin line, already parsed. */
   input(input: InspectorInput): void {
     switch (input.type) {
-      case 'graph':
+      case 'graph': {
+        if (this.currentPayload === undefined || input.cause === 'initial') {
+          this.currentEpoch += 1;
+        } else if (input.payload.seq <= this.currentPayload.seq) {
+          return;
+        }
         this.currentPayload = input.payload;
-        this.currentEpoch += 1;
         this.post(this.graphMessage(this.currentPayload));
         return;
+      }
       case 'graph-delta': {
         if (this.currentPayload === undefined) {
           this.options.onFault(`delta before any graph at seq ${String(input.delta.seq)}`);

@@ -4,7 +4,9 @@
 // edge-only deltas (I-6), records a seq gap as a fault (I-12) and passes render-reports on. A graph
 // message's seq is its payload's and a delta's is the delta's (controller decision 18). A fake
 // transport records what would cross the WebSocket; fault lines are the stub's documented formats,
-// and every merged payload is @cpg/model's applyGraphDelta (the one shared merge).
+// and every merged payload is @cpg/model's applyGraphDelta (the one shared merge). Sprint 26
+// (controller decision 84): only the first graph and one that says cause 'initial' bump the epoch;
+// any other is a catch-up, taken when its seq is ahead (C-EXT I-12, I-13, the panel's rule).
 
 import {
   applyGraphDelta,
@@ -200,17 +202,59 @@ describe('InspectorHost: stdin and ready', () => {
     expect(t.posted).toStrictEqual([verificationOf(0)]);
   });
 
-  it('bumps the epoch on every graph, replaces the payload and posts the graph alone (I-13)', () => {
+  // Reworked in sprint 26: the cause, not every graph, bumps the epoch (decision 84).
+  it("bumps the epoch on a graph that says cause 'initial', replaces the payload and posts the graph alone (I-13)", () => {
     const { host, t } = readyHost();
     host.input({ type: 'verification', report: VERIFY });
     const next: GraphPayload = { seq: 9, nodes: [{ id: 'x', type: 'FILE' }], edges: [] };
-    host.input({ type: 'graph', payload: next });
+    host.input({ type: 'graph', payload: next, cause: 'initial' });
     expect(host.epoch()).toBe(2);
     expect(host.snapshot()).toBe(next);
     expect(t.posted).toStrictEqual([graphOf(P), verificationOf(1), graphOf(next, 2)]);
     // The verification keeps the epoch it arrived in; a resync now re-posts it as it was.
     t.send({ type: 'resync', epoch: 2, seq: 9, reason: 'gap' });
     expect(t.posted.slice(3)).toStrictEqual([graphOf(next, 2), verificationOf(1)]);
+  });
+
+  it.each([undefined, 'catch-up'] as const)(
+    'a later graph with cause %s is a catch-up: ahead, it replaces the payload in the same epoch',
+    (cause) => {
+      const { host, t } = readyHost();
+      const next: GraphPayload = { seq: 9, nodes: [{ id: 'x', type: 'FILE' }], edges: [] };
+      host.input({ type: 'graph', payload: next, ...(cause !== undefined && { cause }) });
+      host.input({ type: 'graph-delta', delta: delta(10) });
+      expect([host.epoch(), host.snapshot()]).toStrictEqual([1, merged(next, delta(10))]);
+      expect(t.posted).toStrictEqual([
+        graphOf(P),
+        graphOf(next),
+        { type: 'graph-delta', protocol: 1, epoch: 1, seq: 10, delta: delta(10) },
+      ]);
+    },
+  );
+
+  // Round two (R10): with no cause too, a later graph is a catch-up.
+  it.each([
+    [4, 'catch-up'],
+    [2, 'catch-up'],
+    [4, undefined],
+    [2, undefined],
+  ] as const)(
+    'a catch-up at seq %i (cause %s), not ahead of the payload held, changes nothing',
+    (seq, cause) => {
+      const { host, t } = readyHost();
+      const behind: GraphPayload = { ...P, seq, nodes: [] };
+      host.input({ type: 'graph', payload: behind, ...(cause !== undefined && { cause }) });
+      expect([host.epoch(), host.snapshot(), t.posted]).toStrictEqual([1, P, [graphOf(P)]]);
+    },
+  );
+
+  it("the first graph starts epoch 1 whatever its cause, and a later 'initial' starts the next, even behind", () => {
+    const { host, faults } = makeHost();
+    host.input({ type: 'graph', payload: P, cause: 'catch-up' });
+    expect(host.epoch()).toBe(1);
+    const behind: GraphPayload = { ...P, seq: 0 };
+    host.input({ type: 'graph', payload: behind, cause: 'initial' });
+    expect([host.epoch(), host.snapshot(), faults]).toStrictEqual([2, behind, []]);
   });
 
   it('posts a verification at once to a ready page, built from the four report fields only', () => {
@@ -328,7 +372,8 @@ describe('InspectorHost: messages from the page', () => {
   it('answers a resync whatever epoch and seq it carries', () => {
     const { host, t } = readyHost();
     const next: GraphPayload = { seq: 9, nodes: [{ id: 'x', type: 'FILE' }], edges: [] };
-    host.input({ type: 'graph', payload: next });
+    // Round two (R2): a new epoch is a graph that says so (decision 84).
+    host.input({ type: 'graph', payload: next, cause: 'initial' });
     t.send({ type: 'resync', epoch: 0, seq: -1, reason: 'stale-epoch' });
     t.send({ type: 'resync', epoch: 7, seq: 99, reason: 'gap' });
     expect(t.posted.slice(2)).toStrictEqual([graphOf(next, 2), graphOf(next, 2)]);
