@@ -99,9 +99,9 @@ export interface IndexedFile {
   readonly path: WorkspacePath;
   /** Lowercase hex sha256 of the raw bytes (C-CLI spells it sha256:<hex>; stop-list #9). */
   readonly revision_id: string;
-  /** Code-tier nodes the file owns, not its FILE node; 0 until the extractor (U6a). */
+  /** Code-tier nodes the file owns (its NodeElements), not its FILE node or a SYMBOL; 0 when none. */
   readonly nodes: number;
-  /** Code-tier edges leaving those nodes; 0 until the extractor (U6a). */
+  /** The edge rows of the file's replace-file, SOURCE_FILE included (stop-list 16); 0 when none. */
   readonly edges: number;
 }
 
@@ -248,7 +248,11 @@ export type WatchEvent =
       /** The session batch's cause: a settled window, or a rescan (decision 80). */
       readonly cause: 'live' | 'rescan';
       readonly changes: readonly NormalizedChange[];
-      /** The first sink's receipt (the built-in memory store), as IndexReport counts it. */
+      /**
+       * Every write of the batch, summed (controller decision 102): its delete-files, its
+       * merge-filesystem op and its replace-files, each the first sink's receipt (the built-in memory
+       * store), as IndexReport counts them.
+       */
       readonly write: {
         readonly nodesWritten: number;
         readonly edgesWritten: number;
@@ -256,8 +260,10 @@ export type WatchEvent =
       };
       readonly latencyMs: WatchLatency;
       /**
-       * One per entry of `changes`, in that order (controller decision 81), built from the op this
-       * batch wrote, never from a read of the store (C-EXT may_not). Each takes the next graph seq.
+       * One per entry of `changes`, in that order (controller decision 81), each followed by that
+       * change's code deltas (decision 102: one `producer: 'code'` delta per delete-file and
+       * replace-file it wrote), all built from the ops this batch wrote, never from a read of the
+       * store (C-EXT may_not). Each takes the next graph seq.
        */
       readonly deltas: readonly GraphDelta[];
       /** The graph seq after this batch: its last delta's (decision 82). */
