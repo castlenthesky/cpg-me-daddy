@@ -1,8 +1,9 @@
 // MemoryStore's GraphStore half (C-STORE). It shares one graph with the GraphSink half through a
 // GraphCell, so a FILE written by merge-filesystem and the code tier's delta onto it merge in place.
-// REAL: merge-filesystem (directories, files, links, removals) and every read.
-// SEAT, each with its first caller: replace-file and delete-file (U6a), merge-filesystem moves (U4),
-// merge-singleton (bootstrap, U5), overlayWriter (U10).
+// REAL: merge-filesystem (directories, files, links, removals), replace-file and delete-file
+// (file-writes.ts, U6a.3-1) and every read.
+// SEAT, each with its first caller: merge-filesystem moves (U4), merge-singleton (bootstrap, U5),
+// overlayWriter (U10).
 
 import type {
   EdgeType,
@@ -28,6 +29,7 @@ import type {
   WriteReceipt,
 } from '@cpg/store';
 import { storeError } from '@cpg/store';
+import { writeFileOp, type CodeTierFile } from './file-writes';
 
 export interface GraphCell {
   get(): GraphPayload;
@@ -105,6 +107,9 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
   // REAL
   let isOpen = false;
   const audit: AuditEntry[] = [];
+  // Per file, the code tier's last seq and revision (INV-13, decision 97). It outlives the FILE, so
+  // a file's seq stays monotone across its removal and return.
+  const codeTier = new Map<WorkspacePath, CodeTierFile>();
 
   function assertOpen(): void {
     if (!isOpen) {
@@ -124,12 +129,18 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
     async write(op: WriteOp): Promise<WriteReceipt> {
       assertOpen();
       const start = now();
+      if (op.kind === 'replace-file' || op.kind === 'delete-file') {
+        const result = writeFileOp(cell.get(), op, codeTier.get(op.file));
+        cell.set(result.graph);
+        codeTier.set(op.file, result.file);
+        if (result.audit !== undefined) audit.push({ at: now(), ...result.audit });
+        return { ...result.receipt, durationMs: Math.max(0, now() - start) };
+      }
       if (op.kind !== 'merge-filesystem') {
-        // SEAT: replace-file and delete-file (U6a), merge-singleton (U5)
-        const caller = op.kind === 'merge-singleton' ? 'U5' : 'U6a';
+        // SEAT: merge-singleton (U5)
         throw storeError(
           'WRITE_SHAPE_VIOLATION',
-          `SEAT: ${op.kind} lands with its first caller (${caller})`,
+          `SEAT: ${op.kind} lands with its first caller (U5)`,
         );
       }
       if (op.moves.length > 0) {
@@ -296,7 +307,7 @@ export function createStoreHalf(cell: GraphCell, now: () => number): StoreHalf {
         const revision = node.data?.['revision_id'];
         states.push({
           file: path,
-          seq: -1,
+          seq: codeTier.get(path)?.seq ?? -1,
           revision_id: typeof revision === 'string' ? revision : '',
           nodeCount: ownedCounts.get(path) ?? 0,
         });

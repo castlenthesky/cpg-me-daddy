@@ -451,9 +451,8 @@ describe('MemoryStore as a GraphStore', () => {
     const store = await opened();
     await store.write(TREE);
     const before = await store.inspect();
+    // replace-file and delete-file are REAL since U6a.3-1 (file-writes.test.ts).
     const seats: WriteOp[] = [
-      { kind: 'replace-file', file: wp('a.py'), seq: 0, revision_id: 'r', nodes: [], edges: [] },
-      { kind: 'delete-file', file: wp('a.py'), seq: 0 },
       { kind: 'merge-singleton', metadata: { schema_version: '1' } },
       {
         kind: 'merge-filesystem',
@@ -465,7 +464,7 @@ describe('MemoryStore as a GraphStore', () => {
       },
     ];
     const codes = await Promise.all(seats.map((op) => rejection(store.write(op))));
-    expect(codes).toEqual(Array(4).fill('WRITE_SHAPE_VIOLATION'));
+    expect(codes).toEqual(Array(2).fill('WRITE_SHAPE_VIOLATION'));
     expect(() => store.overlayWriter('communities')).toThrow(/SEAT/);
     expect(await store.inspect()).toEqual(before);
   });
