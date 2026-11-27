@@ -417,6 +417,9 @@ function verifyModelContract(name: string, impl: ModelImpl): void {
       ['a SourceRange object (the extractor form)', at(0, 0, 2, 0)],
       ['a number', 5],
       ['an array', ['1:0-2:0']],
+      // Round two (review 6): falsy but present.
+      ['zero', 0],
+      ['false', false],
     ])('range: %s is malformed', (_n, text) => {
       expect(read({ range: text })).toStrictEqual(badKey('range'));
     });
@@ -429,6 +432,12 @@ function verifyModelContract(name: string, impl: ModelImpl): void {
       ['climbing', { file: '../m.py' }],
       ['empty', { file: '' }],
       ['a number', { file: 5 }],
+      // Round two (review 7): what only isWorkspacePath refuses.
+      ['dot-slash', { file: './m.py' }],
+      ['an empty segment', { file: 'a//b.py' }],
+      ['a .. segment', { file: 'a/../b.py' }],
+      ['a trailing slash', { file: 'a/' }],
+      ['a NUL', { file: 'a\u0000b.py' }],
     ])('file: %s is malformed', (_n, data) => {
       expect(read({ range: '1:0-2:0', ...data })).toStrictEqual(badKey('file'));
     });
@@ -439,8 +448,25 @@ function verifyModelContract(name: string, impl: ModelImpl): void {
       ['not a range', 'name'],
       ['a SourceRange object', at(1, 4, 1, 9)],
       ['a number', 7],
+      // Round two (review 6): falsy but present.
+      ['empty', ''],
+      ['zero', 0],
+      ['false', false],
     ])('name_range: %s is malformed', (_n, nameRange) => {
       expect(read({ range: '1:0-2:0', name_range: nameRange })).toStrictEqual(badKey('name_range'));
+    });
+
+    // Round two (review 8): the id is JSON, as data.location's detail has it.
+    it('names the node by its id in JSON', () => {
+      const quoted = impl.readNodeLocation(node('a"b', { file: 'pkg/m.py', range: 'x' }));
+      expect(quoted).toStrictEqual({
+        state: 'malformed',
+        defect: {
+          code: 'malformed-location',
+          detail: 'node "a\\"b" data.range is malformed',
+          nodeId: 'a"b',
+        },
+      });
     });
 
     it('names the first key that fails: range, then file, then name_range', () => {

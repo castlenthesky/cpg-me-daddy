@@ -29,6 +29,7 @@ const PACKAGE_JSON = createRequire(import.meta.url).resolve(
 const PYTHON = readFileSync(join(dirname(PACKAGE_JSON), 'wasm', 'tree-sitter-python.wasm'));
 // Inside the repository (dist is git-ignored), so a cwd-relative resolution lands somewhere else.
 const RELATIVE = `apps/vscode/dist/copy-grammars-test-${String(process.pid)}`;
+const RELATIVE_CALL = `${RELATIVE}-call`;
 
 let dir = '';
 let elsewhere = '';
@@ -40,6 +41,7 @@ beforeAll(() => {
 afterAll(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
   rmSync(join(REPO, RELATIVE), { recursive: true, force: true });
+  rmSync(join(REPO, RELATIVE_CALL), { recursive: true, force: true });
 });
 
 const runCli = (args, cwd) => {
@@ -70,6 +72,25 @@ describe('copyGrammars', () => {
     writeFileSync(join(outdir, 'tree-sitter-python.wasm'), 'not a grammar');
     await copyGrammars({ outdir });
     expect(sameAsPackage(join(outdir, 'tree-sitter-python.wasm'))).toBe(true);
+  });
+
+  // Round two (review 9): the function itself resolves, from any cwd, and answers absolute paths.
+  it('takes a relative outdir against the repository root, not the cwd', async () => {
+    const cwd = process.cwd();
+    const outdir = join(REPO, RELATIVE_CALL);
+    process.chdir(elsewhere);
+    try {
+      expect(await copyGrammars({ outdir: RELATIVE_CALL })).toEqual({
+        outdir,
+        files: [join(outdir, 'tree-sitter-python.wasm')],
+      });
+    } finally {
+      process.chdir(cwd);
+    }
+    expect([
+      sameAsPackage(join(outdir, 'tree-sitter-python.wasm')),
+      existsSync(join(elsewhere, RELATIVE_CALL)),
+    ]).toEqual([true, false]);
   });
 
   it('rejects when the folder cannot be made', async () => {

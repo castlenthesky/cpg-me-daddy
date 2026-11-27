@@ -36,8 +36,13 @@ const STALE = 'shapes/square.py';
 const ADDED = 'shapes/live.py';
 /** What ADDED brings to the graph: its FILE, its MODULE and its module SYMBOL. */
 const ADDED_NODES = 3;
+/**
+ * A python file only the code-tier suite writes. A deleted file's module SYMBOL stays in the graph (decision
+ * 104, stop-list 188), so a name another test had used would bring 2 nodes, not 3.
+ */
+const SAVED = 'shapes/saved.py';
 /** One line and its newline: by the ladder (rung 07's two-line file is `1:0-3:0`) its MODULE spans `1:0-2:0`. */
-const ADDED_TEXT = 'side = 4\n';
+const SAVED_TEXT = 'side = 4\n';
 /** Where `bun run compile` copies the python grammar, in the extension's install (controller decision 112). */
 const GRAMMARS = join('apps', 'vscode', 'dist', 'grammars');
 const REPORT_MS = 20_000;
@@ -103,6 +108,21 @@ async function verdict(
     const report = await verify();
     if (done(report) || Date.now() > deadline) return report;
     await delay(200);
+  }
+}
+/**
+ * Round two (review 3): a verdict once the graph has stopped moving, the same epoch and seq a second apart,
+ * or the last one after FOLLOW_MS. A batch's deltas land one by one, so a count read between two of them is
+ * not the graph's.
+ */
+async function quiet(): Promise<VerificationReport> {
+  const deadline = Date.now() + FOLLOW_MS;
+  let last = await verify();
+  for (;;) {
+    await delay(1000);
+    const next = await verify();
+    if ((next.seq === last.seq && next.epoch === last.epoch) || Date.now() > deadline) return next;
+    last = next;
   }
 }
 /**
@@ -263,27 +283,59 @@ suite('the graph in VS Code', () => {
       assert.equal(graphPanels().length, 1);
     });
 
-    // Controller decision 112: the code tier's grammar is the copy in the extension's install, which the
-    // locator's explicit rule never trades for node_modules' (C-PARSE I11). The payload's node count needs
-    // no WebGL, so this holds on both pins.
-    test('a saved python file brings its MODULE and module SYMBOL, the grammar read from the install', async () => {
-      const before = await verify();
-      assert.equal(check(before, 'id-uniqueness').observed, NODES);
-      await writeFile(join(root, ADDED), ADDED_TEXT);
-      const more = NODES + ADDED_NODES;
-      const grown = await verdict((report) => check(report, 'id-uniqueness').observed === more);
+    // A reloaded page draws the graph it is then sent. The file is written after the reload, so a
+    // render-report of the graph that holds it can only come from the page that came back.
+    test('a webview that is reloaded is kept in step with the graph', async function () {
+      needsWebGL(this);
+      await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction');
+      await delay(1000);
+      await writeFile(join(root, ADDED), 'side = 4\n');
+      const report = await verdict((candidate) => {
+        const render = check(candidate, 'render-reconciliation');
+        return render.state === 'pass' && render.expected === NODES + ADDED_NODES;
+      }, REPORT_MS);
+      const render = check(report, 'render-reconciliation');
       assert.deepEqual(
-        [check(grown, 'id-uniqueness').observed, fileCount(grown)],
-        [more, `pass ${String(FILES + 1)}/${String(FILES + 1)}`],
+        [render.state, render.observed, render.expected],
+        ['pass', NODES + ADDED_NODES, NODES + ADDED_NODES],
+      );
+    });
+  });
+
+  // U6a.3-3 part 2. Controller decision 112: the code tier's grammar is the copy in the extension's install,
+  // which the locator's explicit rule never trades for node_modules' (C-PARSE I11). Decision 108: a code node
+  // carries `file` and the schema's `range`, and reveal opens it there. After the U4.2.2 suite, so the module
+  // SYMBOL its file leaves behind changes none of that suite's counts.
+  suite('the code tier (U6a.3-3)', () => {
+    setup(fresh);
+    teardown(async () => {
+      await rm(join(root, SAVED), { force: true });
+      const back = `pass ${String(FILES)}/${String(FILES)}`;
+      const settled = await verdict((report) => fileCount(report) === back);
+      assert.equal(fileCount(settled), back, 'the fixture is back');
+    });
+
+    // The payload's node count needs no WebGL, so this holds on both pins.
+    test('a saved python file brings its FILE, MODULE and module SYMBOL, the grammar read from the install', async () => {
+      const before = check(await quiet(), 'id-uniqueness').observed;
+      await writeFile(join(root, SAVED), SAVED_TEXT);
+      const grown = await verdict(
+        (report) => check(report, 'id-uniqueness').observed === before + ADDED_NODES,
+      );
+      assert.deepEqual(
+        [check(grown, 'id-uniqueness').observed - before, fileCount(grown)],
+        [ADDED_NODES, `pass ${String(FILES + 1)}/${String(FILES + 1)}`],
       );
     });
 
-    // Controller decision 108: a code node carries `file` and the schema's `range`, and reveal opens it
-    // there. The panel's reveals come from a click in its page, which no test can make (decision 40: no
-    // test-only hook), so the extension's own host and opener reveal the MODULE that an engine with the
-    // install's grammar wrote for the saved file, in this VS Code.
+    // The panel's reveals come from a click in its page, which no test can make (decision 40: no test-only
+    // hook), so the extension's own host and opener reveal the MODULE that an engine with the install's
+    // grammar wrote for the saved file, in this VS Code.
     test("revealing a saved file's MODULE opens the file at the MODULE's range", async () => {
-      await writeFile(join(root, ADDED), ADDED_TEXT);
+      await writeFile(join(root, SAVED), SAVED_TEXT);
+      // Round two (review 5): the live graph holds it first, so the teardown's delete is a plain delete.
+      const more = `pass ${String(FILES + 1)}/${String(FILES + 1)}`;
+      assert.equal(fileCount(await verdict((report) => fileCount(report) === more)), more);
       const engine = createEngine({
         version: '0.0.0',
         consumers: { inspect: false, store: 'memory', vscode: false },
@@ -316,29 +368,11 @@ suite('the graph in VS Code', () => {
         onChange: () => undefined,
       });
       await host.onSnapshot(payload, { seq: payload.seq, cause: 'initial' });
-      const outcome = await host.reveal('file:shapes/live.py:MODULE:$root');
-      assert.deepEqual(outcome, { ok: true, filePath: ADDED, target: 'range' });
+      const outcome = await host.reveal('file:shapes/saved.py:MODULE:$root');
+      assert.deepEqual(outcome, { ok: true, filePath: SAVED, target: 'range' });
       const editor = vscode.window.activeTextEditor;
-      assert.equal(editor?.document.uri.fsPath, uri(ADDED).fsPath);
-      assert.equal(editor?.document.getText(editor.selection), ADDED_TEXT);
-    });
-
-    // A reloaded page draws the graph it is then sent. The file is written after the reload, so a
-    // render-report of the graph that holds it can only come from the page that came back.
-    test('a webview that is reloaded is kept in step with the graph', async function () {
-      needsWebGL(this);
-      await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction');
-      await delay(1000);
-      await writeFile(join(root, ADDED), 'side = 4\n');
-      const report = await verdict((candidate) => {
-        const render = check(candidate, 'render-reconciliation');
-        return render.state === 'pass' && render.expected === NODES + ADDED_NODES;
-      }, REPORT_MS);
-      const render = check(report, 'render-reconciliation');
-      assert.deepEqual(
-        [render.state, render.observed, render.expected],
-        ['pass', NODES + ADDED_NODES, NODES + ADDED_NODES],
-      );
+      assert.equal(editor?.document.uri.fsPath, uri(SAVED).fsPath);
+      assert.equal(editor?.document.getText(editor.selection), SAVED_TEXT);
     });
   });
 

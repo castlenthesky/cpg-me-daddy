@@ -13,6 +13,8 @@ import { REGISTRY_NODE_COLORS } from './node-types';
 const GREY = [0.6, 0.6, 0.6, 1];
 const FILE_RGBA = [77 / 255, 179 / 255, 1, 1];
 const DIRECTORY_RGBA = [1, 153 / 255, 51 / 255, 1];
+// Stop-list 186 (U6a.3-3 part 2): MODULE is registered, #B5CEA8.
+const MODULE_RGBA = [181 / 255, 206 / 255, 168 / 255, 1];
 const VIRTUAL_ROOT = String.fromCharCode(0) + 'inspector/virtual-root';
 
 interface Point {
@@ -324,7 +326,8 @@ describe('BufferStore.applyDelta additions', () => {
 
   it('colours a registered type from the registry and an unregistered one grey', () => {
     const store = loaded();
-    store.applyDelta(add(node('m', 'MODULE'), node('e', 'DIRECTORY')), new Map(), always(0.5));
+    // Round two (review 2): MODULE is registered now; PARAM is not.
+    store.applyDelta(add(node('m', 'PARAM'), node('e', 'DIRECTORY')), new Map(), always(0.5));
     expect(rgba(store, 3)).toEqual(f32(GREY));
     expect(rgba(store, 4)).toEqual(f32(DIRECTORY_RGBA));
   });
@@ -518,7 +521,7 @@ describe('BufferStore.applyDelta additions', () => {
     expect(store.length).toBe(3);
     expect(xy(store, 1)).toEqual([300, 400]);
     expect(store.sizes[1]).toBe(9);
-    expect(rgba(store, 1)).toEqual(f32(GREY));
+    expect(rgba(store, 1)).toEqual(f32(MODULE_RGBA));
     expect(store.nodeAt(1)).toBe(again);
     expect(store.liveIndex('f')).toBe(1);
     expect([xy(store, 2), store.liveIndex('g'), store.node('g')]).toEqual([
@@ -552,7 +555,7 @@ describe('BufferStore.applyDelta additions', () => {
     expect(store.length).toBe(3);
     expect(xy(store, 1)).toEqual([300, 400]);
     expect(store.sizes[1]).toBe(9);
-    expect(rgba(store, 1)).toEqual(f32(GREY));
+    expect(rgba(store, 1)).toEqual(f32(MODULE_RGBA));
     expect(store.nodeAt(1)).toBe(again);
     expect(store.liveTypes()).toEqual(['DIRECTORY', 'MODULE', 'FILE']);
   });
@@ -650,7 +653,7 @@ describe('BufferStore.recolour', () => {
     store.recolour(THEME);
     store.recolour(REGISTRY_NODE_COLORS);
     expect(rgba(store, 0)).toEqual(f32(DIRECTORY_RGBA));
-    store.applyDelta(add(node('n'), node('m', 'MODULE')), new Map(), always(0.5));
+    store.applyDelta(add(node('n'), node('m', 'PARAM')), new Map(), always(0.5));
     expect([rgba(store, 3), rgba(store, 4)]).toEqual([f32(FILE_RGBA), f32(GREY)]);
   });
 });
