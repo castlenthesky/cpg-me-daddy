@@ -811,12 +811,23 @@ describe('the parent table (BMO-100)', () => {
     expect(treeParents(layoutPayload(p, { seed: 1 }))).toEqual({ ...anchors, ...offered });
   });
 
+  // Round two (review 2): the rejected anchor is the root, which has a child but no parent.
   it('passes a fallback whose anchor has no parent of its own to the next row', () => {
     const p = payload(
-      [node('R', 'DIRECTORY'), node('F'), node('U', 'IMPORT'), node('s', 'SYMBOL')],
-      [entry('R', 'F'), edge('U', 's', 'IMPORTS'), edge('F', 's', 'CALLS')],
+      [node('R', 'DIRECTORY'), node('F'), node('s', 'SYMBOL')],
+      [entry('R', 'F'), edge('R', 's', 'IMPORTS'), edge('F', 's', 'CALLS')],
     );
-    expect(treeParents(layoutPayload(p, { seed: 1 }))).toMatchObject({ F: 'R', s: 'F' });
+    expect(treeParents(layoutPayload(p, { seed: 1 }))).toEqual({ F: 'R', s: 'F' });
+  });
+
+  // Round two (review 6).
+  it("reads a fallback row's parent end from the table", () => {
+    const p = payload(
+      [node('R', 'DIRECTORY'), node('F'), node('S', 'SYMBOL')],
+      [entry('R', 'F'), edge('S', 'F', 'BACK')],
+    );
+    const parentTable = { hierarchy: [rule('HAS_ENTRY')], fallback: [rule('BACK', 'target')] };
+    expect(treeParents(layoutPayload(p, { seed: 1, parentTable }))).toEqual({ F: 'R', S: 'F' });
   });
 
   it('links each hierarchy-row edge once, as its tree link, then every other edge in order', () => {
@@ -832,6 +843,8 @@ describe('the parent table (BMO-100)', () => {
         entry('R', 'F'),
         edge('M', 'F', 'SOURCE_FILE'),
         edge('k', 'M', 'IN_SCOPE'),
+        // Round two (review 1): a second IN_SCOPE edge places nothing and is not listed either.
+        edge('k', 'R', 'IN_SCOPE'),
         edge('M', 'S', 'DEFINES'),
         edge('k', 'S', 'CALLS'),
         edge('F', 'M', 'IMPORTS'),

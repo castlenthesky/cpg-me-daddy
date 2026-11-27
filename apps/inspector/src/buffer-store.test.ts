@@ -119,15 +119,25 @@ describe('deltaParents', () => {
       edge('b', 'x', 'CONTAINS'),
       edge('c', 'y', 'REF'),
       edge('z', 'd', 'OWNS'),
+      edge('k', 'j', 'BACK'),
     ];
+    // Round two (review 6): a fallback row whose parent is the target.
     const custom: ParentTable = {
       hierarchy: [
         { type: 'CONTAINS', parent: 'source' },
         { type: 'OWNS', parent: 'target' },
       ],
-      fallback: [{ type: 'REF', parent: 'source' }],
+      fallback: [
+        { type: 'REF', parent: 'source' },
+        { type: 'BACK', parent: 'target' },
+      ],
     };
-    expect(Object.fromEntries(deltaParents(edges, custom))).toEqual({ x: 'b', y: 'c', z: 'd' });
+    expect(Object.fromEntries(deltaParents(edges, custom))).toEqual({
+      x: 'b',
+      y: 'c',
+      z: 'd',
+      k: 'j',
+    });
   });
 
   it("reads each default row's parent end: SOURCE_FILE and IN_SCOPE point at the parent", () => {
@@ -175,8 +185,38 @@ describe('deltaParents', () => {
       edge('c4', 'w', 'INHERITS_FROM'),
       edge('c3', 'w', 'CALLS'),
       edge('c2', 'w', 'IMPORTS'),
+      // Round two (review 3): each pair is listed later row first.
+      edge('d6', 'v', 'DEFINES'),
+      edge('v', 'd5', 'IN_SCOPE'),
+      edge('q', 'e5', 'IN_SCOPE'),
+      edge('q', 'e4', 'SOURCE_FILE'),
+      edge('r', 'g4', 'SOURCE_FILE'),
+      edge('g3', 'r', 'HAS_PARAM'),
+      edge('h9', 'o', 'INHERITS_FROM'),
+      edge('h8', 'o', 'CALLS'),
+      edge('i7', 'y', 'IMPORTS'),
+      edge('i6', 'y', 'DEFINES'),
     ];
-    expect(Object.fromEntries(deltaParents(edges, T))).toEqual({ x: 'a1', z: 'b2', w: 'c2' });
+    expect(Object.fromEntries(deltaParents(edges, T))).toEqual({
+      x: 'a1',
+      z: 'b2',
+      w: 'c2',
+      v: 'd5',
+      q: 'e4',
+      r: 'g3',
+      o: 'h8',
+      y: 'i6',
+    });
+  });
+
+  // Round two (review 7): no cycle check, so a loop and a self-loop keep their parents.
+  it('maps a parent loop and a self-loop as listed', () => {
+    const edges = [
+      edge('a', 'b', 'HAS_ENTRY'),
+      edge('b', 'a', 'DEFINES'),
+      edge('z', 'z', 'SOURCE_FILE'),
+    ];
+    expect(Object.fromEntries(deltaParents(edges, T))).toEqual({ b: 'a', a: 'b', z: 'z' });
   });
 });
 
@@ -354,23 +394,44 @@ describe('BufferStore.applyDelta additions', () => {
     ]);
   });
 
+  // Round two (review 4): the chain's top has a parent no one can locate.
+  it('seeds a chain listed child first beside its parents when its top is unlocatable', () => {
+    const store = loaded();
+    store.applyDelta(
+      add(node('k'), node('h')),
+      new Map([
+        ['k', 'h'],
+        ['h', 'nope'],
+      ]),
+      always(0.75),
+    );
+    const at = (id: string): number[] => xy(store, store.liveIndex(id) ?? -1);
+    expect([at('h'), at('k')]).toEqual([
+      [2058, 2058],
+      [2068, 2068],
+    ]);
+    expect(store.sizes[store.liveIndex('k') ?? -1]).toBeCloseTo(17.6 * 0.88, 4);
+  });
+
+  // Round two (review 5): a three-node loop as well.
   it('seeds a parent loop inside one delta, and a node that is its own parent, at the centre', () => {
     const store = loaded();
     store.applyDelta(
-      add(node('a'), node('b'), node('z')),
+      add(node('a'), node('b'), node('z'), node('c1'), node('c2'), node('c3')),
       new Map([
         ['a', 'b'],
         ['b', 'a'],
         ['z', 'z'],
+        ['c1', 'c2'],
+        ['c2', 'c3'],
+        ['c3', 'c1'],
       ]),
       always(0.5),
     );
     const at = (id: string): number[] => xy(store, store.liveIndex(id) ?? -1);
-    expect([at('a'), at('b'), at('z')]).toEqual([
-      [2048, 2048],
-      [2048, 2048],
-      [2048, 2048],
-    ]);
+    expect(['a', 'b', 'z', 'c1', 'c2', 'c3'].map(at)).toEqual(
+      Array.from({ length: 6 }, () => [2048, 2048]),
+    );
   });
 
   it('treats a parent removed in the same delta as not locatable', () => {
