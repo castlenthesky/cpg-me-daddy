@@ -219,6 +219,8 @@ interface ScriptOptions {
   /** Round two (R14): verify calls (0-based) that wait for the gate, and that reject with `verify-boom-<i>`. */
   readonly verifyGate?: { readonly calls: readonly number[]; readonly promise: Promise<void> };
   readonly failVerify?: readonly number[];
+  /** Post-implementation (sabotage C#7): inspect calls (0-based) that wait for the gate. */
+  readonly inspectGate?: { readonly calls: readonly number[]; readonly promise: Promise<void> };
   /** Default true: an abort emits `closed { signal }` (unless closed was emitted) and resolves. */
   readonly closeOnAbort?: boolean;
   readonly failConnect?: boolean;
@@ -297,6 +299,7 @@ function scripted(o: ScriptOptions = {}) {
       inspects += 1;
       reads.push({ what: 'inspect', session, config });
       if (i === 0 && o.gate !== undefined) await o.gate;
+      if (o.inspectGate?.calls.includes(i) === true) await o.inspectGate.promise;
       if (o.failInspect?.includes(i) === true) throw new Error(`inspect-boom-${String(i)}`);
       const payloads = o.payloads ?? [P2];
       return payloads[Math.min(i, payloads.length - 1)] ?? P2;
@@ -1088,6 +1091,55 @@ describe('cpg watch --inspect (decision 67)', () => {
     await tick();
     // Sprint 26: the graph read after the batch holds its delta, which is then already applied.
     expect([f.graphs().map((p) => p.seq), s.inspects(), f.deltas()]).toEqual([[1], 1, []]);
+    // Post-implementation (sabotage C#5): a delta already in the graph asks for no verify of its own.
+    expect(s.verifies()).toBe(1);
+  });
+
+  // Post-implementation (sabotage C#1): a snapshot takes its graph seq after its verify, just before
+  // it reads, so a batch that lands during the verify is in the graph it shows.
+  it("a batch during a snapshot's verify is in the graph it shows: its delta is already applied", async () => {
+    const gate = gated();
+    const s = scripted({ verifyGate: { calls: [0], promise: gate.promise } });
+    const f = fakeInspector();
+    const l = await watching(['watch', '/w', '--inspect'], s, f);
+    s.emit(ready());
+    await until(l, () => s.verifies() === 1, "the snapshot's verify");
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    gate.open();
+    await until(l, () => f.graphs().length >= 1, 'the first graph');
+    await tick();
+    expect([f.graphs().map((p) => p.seq), f.deltas()]).toEqual([[1], []]);
+  });
+
+  // Post-implementation (sabotage C#7): while a fallback snapshot reads, a batch waits for it.
+  it('a batch during a fallback snapshot waits for it, then follows it', async () => {
+    const gate = gated();
+    const s = scripted({ payloads: [P2, P3], inspectGate: { calls: [1], promise: gate.promise } });
+    const { l, f } = await inspecting(s);
+    s.emit(deltaBatch(1, adds(2, 'n4')));
+    await until(l, () => s.inspects() === 2, 'the fallback snapshot to read');
+    s.emit(deltaBatch(2, adds(3, 'n5')));
+    gate.open();
+    await until(l, () => f.deltas().length >= 1, 'the delta after it');
+    await tick();
+    expect([f.graphs().map((p) => p.seq), f.deltas(), s.inspects()]).toEqual([
+      [0, 2],
+      [adds(3, 'n5')],
+      2,
+    ]);
+  });
+
+  // Post-implementation (sabotage C#9): with no graph shown and none being read, a batch asks for one.
+  it('after a first snapshot that failed, the next batch asks for one', async () => {
+    const s = scripted({ failInspect: [0] });
+    const f = fakeInspector();
+    const l = await watching(['watch', '/w', '--inspect'], s, f);
+    s.emit(ready());
+    const line = 'cpg: warning: inspector refresh at seq 0 failed: inspect-boom-0';
+    await until(l, () => l.io.stderr.includes(line), 'the failed first snapshot');
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    await until(l, () => f.graphs().length >= 1, 'a graph');
+    expect([f.graphs().map((p) => p.seq), f.causes(), s.inspects()]).toEqual([[1], ['initial'], 2]);
   });
 
   // Round two (review 8): design note 7, a failure after the signal keeps 130.

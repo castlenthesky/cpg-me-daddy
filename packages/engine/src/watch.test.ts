@@ -1487,6 +1487,14 @@ describe('toBatchDeltas (decisions 81, 82)', () => {
     ]);
   });
 
+  // Post-implementation (sabotage A#10): a deleted folder's subfolders are forgotten with it.
+  it('a deleted folder forgets its subfolders too: deleting one later removes nothing', () => {
+    const h = held(['d/e/y.ts'], ['.', 'd', 'd/e']);
+    toBatchDeltas([aChange('deleted', 'directory', 'd')], languageOf, h, 1);
+    const [later] = toBatchDeltas([aChange('deleted', 'directory', 'd/e')], languageOf, h, 2);
+    expect(later?.removedNodeIds).toEqual([]);
+  });
+
   // Round two (R4): a move removes what the store drops for its old path, as a deletion does.
   it('a move from a held directory takes its subtree; a move from a path not held removes nothing', () => {
     const h = held(['dm/z.ts'], ['.', 'dm']);
