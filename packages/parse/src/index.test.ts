@@ -9,9 +9,11 @@ describe('@cpg/parse front door', () => {
     expect(Object.keys(contract)).toEqual([]);
   });
 
-  it('index exports the registry and the parse service, nothing else at runtime', () => {
+  it('index exports the registry, the parse service and the locator, nothing else at runtime', () => {
     expect(new Set(Object.keys(api))).toEqual(
       new Set([
+        'AbiNotReadyError',
+        'resolveGrammarDir',
         'BUILTIN_LANGUAGES',
         'createLanguageRegistry',
         'createParseService',

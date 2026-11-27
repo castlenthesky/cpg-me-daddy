@@ -1,7 +1,11 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isWorkspacePath, type WorkspacePath } from '@cpg/model';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Parser } from 'web-tree-sitter';
+import type { ParserRuntime } from './abi';
 import type { GrammarSource, LanguageRegistration, ParseHandle, ParseService } from './contract';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from './registry';
 import { createParseService, HandleReleasedError } from './service';
@@ -36,10 +40,31 @@ function registryOf(languages: readonly LanguageRegistration[] = BUILTIN_LANGUAG
   return registry;
 }
 
+const sha256File = (path: string): string =>
+  createHash('sha256').update(readFileSync(path)).digest('hex');
+
+/** web-tree-sitter's real init with a chosen ABI range; undefined bindings are the pre-init trap. */
+const runtimeWith = (
+  minCompatible?: number,
+  languageVersion?: number,
+  init = (): Promise<void> => Parser.init(),
+): ParserRuntime => ({ init, abiBindings: () => ({ minCompatible, languageVersion }) });
+
 let service: ParseService | undefined;
-afterEach(() => service?.dispose());
-const make = (source: GrammarSource = diskSource(), languages?: readonly LanguageRegistration[]) =>
-  (service = createParseService({ registry: registryOf(languages), source }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  service?.dispose();
+});
+const make = (
+  source: GrammarSource = diskSource(),
+  languages?: readonly LanguageRegistration[],
+  runtime?: ParserRuntime,
+) =>
+  (service = createParseService({
+    registry: registryOf(languages),
+    source,
+    ...(runtime === undefined ? {} : { runtime }),
+  }));
 
 async function ok(s: ParseService, key: string, text: string): Promise<ParseHandle> {
   const outcome = await s.parse({ key: wp(key), text });
@@ -117,6 +142,37 @@ describe('parse', () => {
     expect((await s.parse({ key: wp('script'), text: 'x = 1\n' })).ok).toBe(false);
     const outcome = await s.parse({ key: wp('script'), text: 'x = 1\n', language: 'python' });
     expect(outcome.ok && outcome.handle.rootType).toBe('module');
+    const over = await s.parse({ key: wp('a.ts'), text: 'x = 1\n', language: 'python' });
+    expect(over.ok && [over.handle.language, over.handle.rootType]).toEqual(['python', 'module']);
+  });
+
+  it('routes .jsx to the javascript grammar, which parses JSX the typescript one rejects (I5)', async () => {
+    const handle = await ok(make(), 'view.jsx', 'const el = <div className="x" />;\n');
+    expect([handle.language, handle.hasError]).toEqual(['javascript', false]);
+  });
+
+  it('parses a text past 100,000 characters whole (I21)', async () => {
+    const handle = await ok(make(), 'big.py', 'x = 1\n'.repeat(20_000));
+    expect([handle.root.endIndex, handle.root.namedChildren.length]).toEqual([120_000, 20_000]);
+  });
+
+  it('opens no file while parsing: the text is the request, and nothing is written (I19, I20)', async () => {
+    const s = make();
+    expect(await s.ensureReady(['python'])).toEqual([]);
+    const fs = process.getBuiltinModule('node:fs');
+    const spies = {
+      existsSync: vi.spyOn(fs, 'existsSync'),
+      readFileSync: vi.spyOn(fs, 'readFileSync'),
+      statSync: vi.spyOn(fs, 'statSync'),
+      openSync: vi.spyOn(fs, 'openSync'),
+      writeFileSync: vi.spyOn(fs, 'writeFileSync'),
+      appendFileSync: vi.spyOn(fs, 'appendFileSync'),
+      readFile: vi.spyOn(fs.promises, 'readFile'),
+      writeFile: vi.spyOn(fs.promises, 'writeFile'),
+    };
+    const handle = await ok(s, 'src/main.py', 'x = 1\n');
+    const touched = Object.entries(spies).filter(([, spy]) => spy.mock.calls.length > 0);
+    expect([touched.map(([name]) => name), handle.root.text]).toEqual([[], 'x = 1\n']);
   });
 });
 
@@ -143,10 +199,13 @@ describe('failures are outcomes, never throws', () => {
       describe: () => 'flaky',
       load: (ref) => (broken ? Promise.resolve({ ok: false, message: 'gone' }) : real.load(ref)),
     });
-    expect(await s.parse({ key: wp('a.py'), text: '' })).toMatchObject({
+    const first = await s.parse({ key: wp('a.py'), text: '' });
+    expect(first).toMatchObject({
       ok: false,
       error: { code: 'grammar-unavailable', language: 'python', key: 'a.py' },
     });
+    const message = first.ok ? '' : first.error.message;
+    expect([message.includes('flaky'), message.includes('gone')]).toEqual([true, true]);
     broken = false;
     expect((await s.parse({ key: wp('a.py'), text: '' })).ok).toBe(true);
   });
@@ -163,17 +222,22 @@ describe('failures are outcomes, never throws', () => {
   });
 
   it('a grammar still loading when dispose() runs is dropped, not leaked', async () => {
+    let entered: (() => void) | undefined;
+    const loading = new Promise<void>((r) => (entered = r));
     let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => (release = r));
     const real = diskSource();
     const s = make({
       describe: () => 'slow',
       load: async (ref) => {
-        await new Promise<void>((r) => (release = r));
+        entered?.();
+        await gate;
         return real.load(ref);
       },
     });
     const pending = s.ensureReady(['python']);
-    await new Promise((r) => setTimeout(r, 0));
+    // Wait for the load itself, not a timer: Parser.init takes real time first (BMO-107).
+    await loading;
     s.dispose();
     release?.();
     expect(await pending).toMatchObject([{ code: 'disposed', language: 'python' }]);
@@ -214,11 +278,53 @@ describe('grammar loading', () => {
     const provenance = s.provenance();
     expect(provenance.map((p) => p.language)).toEqual(['python', 'tsx']);
     for (const p of provenance) {
-      expect(p.bytesSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(p.bytesSha256).toBe(sha256File(join(WASM_DIR, p.wasmFile)));
+      expect(p.packageName).toBe('@vscode/tree-sitter-wasm');
       expect(p.abiVersion).toBeGreaterThanOrEqual(p.abiSupported.minCompatible);
       expect(p.abiVersion).toBeLessThanOrEqual(p.abiSupported.languageVersion);
       expect(p.origin).toBe(join(WASM_DIR, p.wasmFile));
     }
+  });
+});
+
+// Through the ParserRuntime seam (controller decision 99). The pinned grammars report ABI 15
+// (python, javascript) and 14 (typescript, tsx); web-tree-sitter 0.27.0 accepts 13..15.
+describe('the runtime and the ABI gate (I13, I15)', () => {
+  it('an unreadable range is abi-unreadable and reads no grammar bytes (DEFECT-ABI-VACUOUS)', async () => {
+    const reads: string[] = [];
+    const s = make(diskSource(reads), undefined, runtimeWith());
+    expect(await s.ensureReady(['python'])).toMatchObject([
+      { code: 'abi-unreadable', language: 'python' },
+    ]);
+    expect(await s.parse({ key: wp('a.py'), text: '' })).toMatchObject({
+      ok: false,
+      error: { code: 'abi-unreadable', key: 'a.py' },
+    });
+    expect([reads, s.provenance()]).toEqual([[], []]);
+  });
+
+  it('a grammar outside the range is abi-out-of-range at either end', async () => {
+    const upTo14 = make(diskSource(), undefined, runtimeWith(13, 14));
+    expect(await upTo14.ensureReady(['python', 'typescript'])).toMatchObject([
+      { code: 'abi-out-of-range', language: 'python' },
+    ]);
+    expect(upTo14.provenance()).toMatchObject([
+      { language: 'typescript', abiSupported: { minCompatible: 13, languageVersion: 14 } },
+    ]);
+    upTo14.dispose();
+    const from15 = make(diskSource(), undefined, runtimeWith(15, 15));
+    expect(await from15.ensureReady(['python', 'typescript'])).toMatchObject([
+      { code: 'abi-out-of-range', language: 'typescript' },
+    ]);
+  });
+
+  it('a failed init is runtime-unavailable and is not memoised (DEFECT-POISONED-INIT)', async () => {
+    let failures = 1;
+    const init = (): Promise<void> =>
+      failures-- > 0 ? Promise.reject(new Error('no wasm runtime')) : Parser.init();
+    const s = make(diskSource(), undefined, runtimeWith(13, 15, init));
+    expect(await s.ensureReady(['python'])).toMatchObject([{ code: 'runtime-unavailable' }]);
+    expect(await s.ensureReady(['python'])).toEqual([]);
   });
 });
 

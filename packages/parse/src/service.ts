@@ -1,5 +1,6 @@
 // REAL: grammar loading with provenance and the ABI gate, parse, handle lifetime, dispose.
 // SEAT: retain/releaseDocument (the retained-tree cache, I25/I26). No caller exists yet, so both throw.
+// SEAT (RED only): `runtime` is accepted and ignored until init and the ABI range go through abi.ts.
 import {
   Language,
   LANGUAGE_VERSION,
@@ -22,6 +23,7 @@ import type {
   ParseService,
   SyntaxNode,
 } from './contract';
+import type { ParserRuntime } from './abi';
 
 /** Reading `root` from a released handle is a caller bug (I24), one of the two throws C-PARSE allows. */
 export class HandleReleasedError extends Error {
@@ -35,6 +37,11 @@ export interface ParseServiceOptions {
   /** Frozen by the composition root before it is handed here. */
   readonly registry: LanguageRegistry;
   readonly source: GrammarSource;
+  /**
+   * The parser runtime (controller decision 99). Omitted: web-tree-sitter's `Parser.init` and its
+   * live ABI bindings. A test passes a stand-in to fail init, or to narrow or blank the ABI range.
+   */
+  readonly runtime?: ParserRuntime;
 }
 
 interface LoadedGrammar {

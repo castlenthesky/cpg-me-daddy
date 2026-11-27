@@ -1,9 +1,10 @@
 // C-PARSE (docs/outline/05-contracts.yaml): text in, a live syntax tree out. Types only, enforced by
-// check-deps rule `contract-types-only`. The registry is REAL (registry.ts); the ParseService and its
-// web-tree-sitter backend are SEAT until the next U6a.1 unit.
+// check-deps rule `contract-types-only`. REAL: the registry (registry.ts), the ParseService over
+// web-tree-sitter (service.ts). SEAT until U6a.1-close's implementation: the ABI gate (abi.ts), the
+// grammar-dir locator (grammar-dir.ts). SEAT: the retained-tree cache (retain / releaseDocument).
 //
 // Shapes the contract names but does not spell out (RegisterOutcome, GrammarBytesOutcome,
-// ParserStats, the per-code ParseError fields) are decided here.
+// GrammarDirOutcome, ParserStats, the per-code ParseError fields) are decided here.
 
 import type { WorkspacePath } from '@cpg/model';
 
@@ -77,6 +78,26 @@ export interface GrammarSource {
   describe(): string;
 }
 
+/** Which rule chose the grammar directory (C-PARSE I11), on success and on failure alike. */
+export type GrammarDirVia = 'explicit' | 'CPG_GRAMMAR_DIR' | 'package-anchor';
+
+/** `dir` is always absolute. A failure names the rule that failed; it never falls through to the next. */
+export type GrammarDirOutcome =
+  | { readonly ok: true; readonly dir: string; readonly via: GrammarDirVia }
+  | { readonly ok: false; readonly via: GrammarDirVia; readonly message: string };
+
+export interface GrammarDirRequest {
+  readonly packageName: string;
+  readonly explicit?: string;
+  /** The host's environment, injected: the locator never reads `process.env` (I10). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /** The host's `require.resolve(`${pkg}/package.json`)`. May throw when the package is absent. */
+  resolvePackageJson(pkg: string): string;
+}
+
+/** explicit > CPG_GRAMMAR_DIR > package anchor (I11). Consults no __dirname, repo root or cwd (I10). */
+export type GrammarDirResolver = (request: GrammarDirRequest) => GrammarDirOutcome;
+
 export interface GrammarProvenance {
   readonly language: LanguageId;
   readonly packageName: string;
@@ -107,6 +128,7 @@ export type ParseErrorCode =
 
 export interface ParseError {
   readonly code: ParseErrorCode;
+  /** Names the cause. grammar-unavailable names the GrammarSource (`describe()`) and its message. */
   readonly message: string;
   readonly language?: LanguageId;
   readonly key?: DocumentKey;
