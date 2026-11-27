@@ -176,6 +176,8 @@ export function resolveConfig(layers: readonly ConfigLayerInput[]): ResolvedConf
       trailingMs: pick('watch.trailingMs', KEY_SCHEMAS['watch.trailingMs']),
       ceilingMs: pick('watch.ceilingMs', KEY_SCHEMAS['watch.ceilingMs']),
       bulkThresholdFiles: pick('watch.bulkThresholdFiles', KEY_SCHEMAS['watch.bulkThresholdFiles']),
+      // SEAT: decision 78's key (default 300000, file watch.rescan_interval_ms) lands in sprint 25.
+      rescanIntervalMs: { value: 0, layer: 'default', source: 'built-in' },
     },
   };
 }
@@ -207,6 +209,7 @@ export function toCpgConfigInput(resolved: ResolvedConfig): CpgConfigInput {
       trailingMs: resolved.watch.trailingMs.value,
       ceilingMs: resolved.watch.ceilingMs.value,
       bulkThresholdFiles: resolved.watch.bulkThresholdFiles.value,
+      rescanIntervalMs: resolved.watch.rescanIntervalMs.value,
     },
   };
 }

@@ -127,6 +127,13 @@ describe('parseConfigFile', () => {
     expect(warnings).toEqual([]);
   });
 
+  // Sprint 25 (controller decision 78): the file key is watch.rescan_interval_ms; 0 turns it off.
+  it.each([0, 60000])('watch.rescan_interval_ms %j maps to watch.rescanIntervalMs', (ms) => {
+    const doc = parseConfigFile(`version: 1\nwatch: { rescan_interval_ms: ${String(ms)} }\n`, SRC);
+    const { layer } = configFileLayer(doc, SRC, { vscodeHost: false });
+    expect(layer.values['watch.rescanIntervalMs']).toBe(ms);
+  });
+
   it('max_file_size_bytes maps to maxFileSizeBytes', () => {
     const doc = parseConfigFile('version: 1\nmax_file_size_bytes: 1024\n', SRC);
     const { layer } = configFileLayer(doc, SRC, { vscodeHost: false });
@@ -194,6 +201,11 @@ describe('parseConfigFile', () => {
     ],
     ['a port above 65535', 'version: 1\nstore: { falkor: { port: 70000 } }\n', 'store.falkor.port'],
     ['a zero debounce', 'version: 1\nwatch: { debounce_ms: 0 }\n', 'watch.debounce_ms'],
+    [
+      'a negative rescan interval',
+      'version: 1\nwatch: { rescan_interval_ms: -1 }\n',
+      'watch.rescan_interval_ms',
+    ],
     ['YAML 1.2: yes is a string', 'version: 1\nlanguages: { python: yes }\n', 'languages.python'],
     ['include not a list', 'version: 1\ninclude: src\n', 'include'],
     [

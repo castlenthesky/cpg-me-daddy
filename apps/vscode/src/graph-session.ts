@@ -168,6 +168,16 @@ export class GraphSession {
     return this.judge?.scheduler.now();
   }
 
+  /**
+   * `cpg.rescan` (controller decision 79): asks the live watch to crawl the workspace now, through
+   * the trigger its request carries. With no live watch it only warns `CPG: no graph is being
+   * watched`. Nothing after dispose.
+   */
+  rescan(): void {
+    // SEAT: decision 79 (sprint 25): fire the live watch's rescan listeners.
+    throw new Error('SEAT: GraphSession.rescan() lands in sprint 25 (decision 79)');
+  }
+
   /** The editor's theme changed. */
   setTheme(theme: ThemeSnapshot): void {
     this.host.setTheme(theme);

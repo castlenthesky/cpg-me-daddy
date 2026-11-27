@@ -138,7 +138,8 @@ class ScriptedWatch {
   batch(): void {
     const seq = this.seq();
     const write = { nodesWritten: 1, edgesWritten: 1, statementCount: 1 };
-    this.onEvent({ kind: 'batch', seq, at: seq, changes: [], write, latencyMs: NO_LATENCY });
+    const event = { kind: 'batch', seq, at: seq, cause: 'live', changes: [], write } as const;
+    this.onEvent({ ...event, latencyMs: NO_LATENCY });
   }
 
   warning(message: string): void {
@@ -987,6 +988,72 @@ describe('what the watch says (decision 74)', () => {
     await s.session.restorePanel(restored);
     expect(restored.html).not.toBe('');
     await until(() => s.messages.length === 3);
+  });
+});
+
+// Sprint 25 (the drift crawl): controller decision 78 (the watch's interval comes from the configuration)
+// and 79 (cpg.rescan fires the live watch's trigger, or says there is none).
+const NONE = 'warning: CPG: no graph is being watched';
+
+describe('cpg.rescan (decisions 78, 79)', () => {
+  it.each([
+    ['the default', undefined, 300000],
+    ["the file's", 'version: 1\nwatch: { rescan_interval_ms: 0 }\n', 0],
+  ] as const)('the watch asks for %s rescan interval', async (_what, file, ms) => {
+    const root = await directory(file === undefined ? {} : { [CONFIG]: file });
+    const s = setUp({ root });
+    void s.session.openGraph();
+    const watch = await s.watching(1);
+    expect(watch.request.config.rescanIntervalMs).toBe(ms);
+  });
+
+  it('during a live watch it reaches every listener the watch subscribed, and says nothing', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    const watch = await s.opened();
+    const said = [...s.messages];
+    const heard: string[] = [];
+    const offFirst = watch.request.rescan?.subscribe(() => heard.push('first'));
+    watch.request.rescan?.subscribe(() => heard.push('second'));
+    s.session.rescan();
+    offFirst?.();
+    s.session.rescan();
+    expect([heard, s.messages]).toEqual([['first', 'second', 'second'], said]);
+  });
+
+  it('with no live watch it only says so: before any, once the watch has closed, with no folder', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    s.session.rescan();
+    const watch = await s.opened();
+    const heard: string[] = [];
+    watch.request.rescan?.subscribe(() => heard.push('closed'));
+    watch.fail('gone');
+    await until(() => watch.ended);
+    s.session.rescan();
+    const none = setUp({ root: undefined });
+    none.session.rescan();
+    expect(heard).toEqual([]);
+    expect(s.messages.filter((m) => m === NONE)).toHaveLength(2);
+    expect(none.messages).toEqual([NONE]);
+  });
+
+  it('reaches only the watch now live, never one it replaced; after dispose it does nothing and says nothing', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    const first = await s.opened();
+    const heard: string[] = [];
+    first.request.rescan?.subscribe(() => heard.push('first'));
+    first.fail('stopped');
+    await until(() => first.ended);
+    void s.session.openGraph();
+    const second = await s.watching(2);
+    second.request.rescan?.subscribe(() => heard.push('second'));
+    s.session.rescan();
+    s.session.dispose();
+    const said = s.messages.length;
+    s.session.rescan();
+    expect([heard, s.messages.length]).toEqual([['second'], said]);
   });
 });
 

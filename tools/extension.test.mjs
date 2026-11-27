@@ -325,14 +325,18 @@ async function opened(folder) {
 }
 
 describe('the manifest', () => {
-  it('names the two commands and the restored panel, and nothing that activates on startup', () => {
+  // Sprint 25 (controller decision 79): cpg.rescan, "CPG: Rescan Workspace".
+  it('names the three commands and the restored panel, and nothing that activates on startup', () => {
     expect(manifest.contributes.commands).toEqual([
       { command: 'cpg.openGraph', title: 'CPG: Open Graph' },
       { command: 'cpg.verify', title: 'CPG: Verify' },
+      { command: 'cpg.rescan', title: 'CPG: Rescan Workspace' },
     ]);
     expect(manifest.activationEvents).toEqual(['onWebviewPanel:cpg.graph']);
     const { seen } = activate();
-    expect(new Set(seen.commands.keys())).toEqual(new Set(['cpg.openGraph', 'cpg.verify']));
+    expect(new Set(seen.commands.keys())).toEqual(
+      new Set(['cpg.openGraph', 'cpg.verify', 'cpg.rescan']),
+    );
     expect([...seen.serializers.keys()]).toEqual(['cpg.graph']);
     expect(seen.panels).toEqual([]);
   });
@@ -342,6 +346,18 @@ describe('the manifest', () => {
     expect(Object.keys(manifest.dependencies)).toEqual(
       expect.arrayContaining(Object.keys(host.dependencies)),
     );
+  });
+});
+
+describe('cpg.rescan (decision 79)', () => {
+  it('with no graph being watched it only says so', async () => {
+    const { seen, run } = activate();
+    await run('cpg.rescan');
+    expect([seen.warnings, seen.errors, seen.panels]).toEqual([
+      ['CPG: no graph is being watched'],
+      [],
+      [],
+    ]);
   });
 });
 
