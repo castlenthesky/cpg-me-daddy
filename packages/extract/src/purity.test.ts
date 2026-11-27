@@ -38,7 +38,7 @@ try {
     startIndex: 0, endIndex: 5, namedChildren: [], childForFieldName: () => null, text: 'x = 1' });
   const root = { ...leaf('module', 0), endPosition: at(2, 0), namedChildren: [leaf('expression_statement', 0)] };
   const out = api.createExtractor().extract({ path: 'main.py', grammarId: 'python', root,
-    revision_id: 'r', lineCount: 2 });
+    revision_id: '5d'.repeat(32), lineCount: 2 });
   const sealed = out.kind === 'ok' ? api.sealExtractedFiles([out.file]).kind : 'not sealed';
   result = { extract: out.kind, seal: sealed, nodes: out.kind === 'ok' ? out.file.nodes.length : 0 };
 } catch (error) { failure = String(error); }
