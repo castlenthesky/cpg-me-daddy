@@ -133,6 +133,7 @@ describe('functions and methods', () => {
     ['async  def fetch(url):\n    pass\n', true],
     ['def asyncfetch(url):\n    pass\n', false],
     ['def fetch(asyncio):\n    pass\n', false],
+    ['async\tdef fetch(url):\n    pass\n', true], // r2 (review 11): any whitespace
   ])('async from the keyword: %j', async (source, async) => {
     expect(await classifyAt(source, 0)).toMatchObject({ async });
   });
@@ -162,6 +163,14 @@ describe('functions and methods', () => {
     });
   });
 
+  // r2 (review 9): only the six parameter shapes are params; a tuple pattern is none
+  it('a tuple-pattern parameter is no param', async () => {
+    expect(await classifyAt('def h(a, (b, c)):\n    pass\n', 0)).toMatchObject({
+      signature: 'h(a)',
+      params: [['a', undefined, undefined, 'identifier@0:6']],
+    });
+  });
+
   it('a recovered def with no parameter written (rung 09) has none', async () => {
     expect(await classifyAt('def broken(:\n    pass\n', 0)).toMatchObject({
       name: 'broken',
@@ -177,6 +186,11 @@ describe('functions and methods', () => {
     ["'single'", 'single'],
     ['""""""', undefined],
     ['"   "', undefined],
+    // r2 (review 10): the first line is trimmed again; any prefix letters; only the first statement
+    ['"""Head.   \n\n    more"""', 'Head.'],
+    ['R"""Raw."""', 'Raw.'],
+    ['rf"""Both."""', 'Both.'],
+    ['pass\n    """late"""', undefined],
     ['x = "not a docstring"', undefined],
     ['pass', undefined],
   ])('the docstring head of a body opening with %j', async (first, head) => {
@@ -279,6 +293,50 @@ describe('decorated definitions (decision 107)', () => {
   it('a decorated method inside a decorated class keeps its own container', async () => {
     const source = '@dataclass\nclass C:\n    @staticmethod\n    def __init__():\n        pass\n';
     expect(await classifyAt(source, 0, 0)).toMatchObject({ kind: 'constructor', name: '__init__' });
+  });
+});
+
+// r2 (review 14): a header without a name, or a def without parameters, is no declaration. Real parses
+// turn such headers into ERROR, so these are hand-built nodes with only the named fields.
+function headerOnly(type: string, fields: Readonly<Record<string, SyntaxNode>>): SyntaxNode {
+  return {
+    type,
+    startPosition: { row: 0, column: 0 },
+    endPosition: { row: 0, column: 9 },
+    startIndex: 0,
+    endIndex: 9,
+    text: 'def f():',
+    namedChildren: Object.values(fields),
+    childForFieldName: (name) => fields[name] ?? null,
+  };
+}
+const NAME = headerOnly('identifier', {});
+const PARAMS = headerOnly('parameters', {});
+
+describe('a header missing a field', () => {
+  it.each([
+    [
+      'a function without a name',
+      headerOnly('function_definition', { parameters: PARAMS }),
+      'MODULE',
+    ],
+    ['a function without parameters', headerOnly('function_definition', { name: NAME }), 'MODULE'],
+    [
+      'a method without a name',
+      headerOnly('function_definition', { parameters: PARAMS }),
+      'TYPE_DECL',
+    ],
+    ['a class without a name', headerOnly('class_definition', {}), 'MODULE'],
+  ] as const)('%s is undefined', (_name, node, container) => {
+    expect(pythonAdapter.classify(node, container)).toBeUndefined();
+  });
+
+  it('the same function with both fields is a METHOD (anti-vacuity)', () => {
+    const both = headerOnly('function_definition', { name: NAME, parameters: PARAMS });
+    expect(pythonAdapter.classify(both, 'MODULE')).toMatchObject({
+      declares: 'METHOD',
+      params: [],
+    });
   });
 });
 

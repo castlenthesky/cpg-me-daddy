@@ -260,6 +260,14 @@ describe('toWriteOp', () => {
       '8:0-8:1',
       undefined,
     ]);
+    // r2 (review 12): the rule is the element's nameRange, whatever its label
+    const labelled: ExtractedFile = {
+      ...FILE,
+      nodes: [{ ...MODULE, nameRange: range(0, 0, 0, 4) }],
+      symbols: [],
+      edges: [],
+    };
+    expect(toWriteOp(labelled, [], 0).nodes[0]?.properties['name_range']).toBe('1:0-1:4');
     const bad: ExtractedFile = { ...FILE, nodes: [{ ...GREET, nameRange: range(1, 9, 1, 8) }] };
     expect(() => toWriteOp(bad, [], 0)).toThrow(/invalid source range/);
   });

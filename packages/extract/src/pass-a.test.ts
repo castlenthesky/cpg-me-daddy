@@ -135,6 +135,8 @@ describe('a METHOD and its PARAMs (decisions 91, 92, 113)', () => {
   const file = lazy(() => ok(extractFile(req(root), scripted(new Map([[F, F_INFO]])).adapter)));
 
   it('emits the METHOD with its range, nameRange and properties, then one PARAM per param', () => {
+    // r2 (review 13): a parameter is never a visited node, only the root and the def
+    expect(file().stats.astNodesVisited).toBe(2);
     expect(file().nodes.map((x) => [x.label, x.id])).toEqual([
       ['MODULE', MOD],
       ['METHOD', id('METHOD', 'f')],
@@ -213,6 +215,17 @@ describe('a METHOD and its PARAMs (decisions 91, 92, 113)', () => {
     });
   });
 
+  // r2 (review 2): DECLARES, then DEFINES, then each HAS_PARAM, in that order
+  it("orders a METHOD's edges: DECLARES, DEFINES, then HAS_PARAM per param", () => {
+    expect(file().edges.map((e) => `${e.type} ${e.to.key}`)).toEqual([
+      `DEFINES ${sym('')}`,
+      `DECLARES ${id('METHOD', 'f')}`,
+      `DEFINES ${sym('f().')}`,
+      `HAS_PARAM ${id('PARAM', 'f.a')}`,
+      `HAS_PARAM ${id('PARAM', 'f.b')}`,
+    ]);
+  });
+
   it('writes docstring_head and the METHOD kind, signature, exported and async the adapter gives', () => {
     const G = n('function_definition', [3, 0], [4, 8]);
     const info = method('g', {
@@ -236,6 +249,11 @@ describe('a METHOD and its PARAMs (decisions 91, 92, 113)', () => {
       docstring_head: 'Head.',
     });
     expect(got.nodes[1]).not.toHaveProperty('nameRange');
+    // r2 (review 1): the SYMBOL's kind comes from the container (MODULE: function), not info.kind
+    expect(got.symbols.map((s) => s.properties)).toStrictEqual([
+      { kind: 'module' },
+      { kind: 'function' },
+    ]);
   });
 });
 
@@ -251,8 +269,9 @@ const C = n('class_definition', [0, 0], [5, 14], [C_BODY]);
 const CLASS_TABLE = new Map<SyntaxNode, DeclarationInfo>([
   [C, typeDecl('C', C_BODY, { docstringHead: 'A C.' })],
   [X, member('x', { typeText: 'int', visibility: 'public' })],
-  [M, method('m', { kind: 'method', params: [param('self', SELF)] })],
-  [D, typeDecl('D', D_BODY, { exported: false, structural: false })],
+  // r2 (reviews 1, 3): kinds the walker must pass through, not default
+  [M, method('m', { kind: 'constructor', params: [param('self', SELF)] })],
+  [D, typeDecl('D', D_BODY, { kind: 'protocol', exported: false, structural: false })],
   [Y, member('y')],
 ]);
 
@@ -312,7 +331,7 @@ describe('a TYPE_DECL and its body (decisions 92, 107)', () => {
       { name: 'x', type_text: 'int', visibility: 'public' },
       {
         name: 'm',
-        kind: 'method',
+        kind: 'constructor',
         signature: 'm()',
         params_count: 1,
         exported: true,
@@ -320,10 +339,16 @@ describe('a TYPE_DECL and its body (decisions 92, 107)', () => {
         status: 'ready',
       },
       { name: 'self', ordinal: 0 },
-      { name: 'D', kind: 'class', exported: false, status: 'ready', structural: false },
+      { name: 'D', kind: 'protocol', exported: false, status: 'ready', structural: false },
       { name: 'y' },
     ]);
     expect(file().nodes.filter((x) => 'nameRange' in x)).toEqual([]);
+    // r2 (review 3): every node is this file's, at this revision, structural
+    expect(
+      file().nodes.filter(
+        (x) => x.file !== 'm.py' || x.revision_id !== REV || x.tier !== 'structural',
+      ),
+    ).toEqual([]);
   });
 
   it('DECLARES each member from its own container and DEFINES one SYMBOL per declaration', () => {
@@ -351,6 +376,8 @@ describe('a TYPE_DECL and its body (decisions 92, 107)', () => {
       [sym('C#D#'), 'class'],
       [sym('C#D#y.'), 'variable'],
     ]);
+    // r2 (review 3): each SYMBOL is local, in the adapter's language
+    expect(file().symbols.filter((x) => x.origin !== 'local' || x.language !== 'lang')).toEqual([]);
     const declares = file().edges.find((e) => e.to.key === id('MEMBER', 'C.D.y'));
     expect(declares?.from).toStrictEqual({
       by: 'id',
@@ -360,16 +387,49 @@ describe('a TYPE_DECL and its body (decisions 92, 107)', () => {
   });
 
   it("keeps each declaration's edges and SYMBOL with it: built in source pre-order", () => {
-    expect(
-      file()
-        .edges.map((e) => `${e.type} ${e.to.key}`)
-        .slice(0, 5),
-    ).toEqual([
+    // r2 (review 2): the whole list, a METHOD's HAS_PARAM included
+    expect(file().edges.map((e) => `${e.type} ${e.to.key}`)).toEqual([
       `DEFINES ${sym('')}`,
       `DECLARES ${id('TYPE_DECL', 'C')}`,
       `DEFINES ${sym('C#')}`,
       `DECLARES ${id('MEMBER', 'C.x')}`,
       `DEFINES ${sym('C#x.')}`,
+      `DECLARES ${id('METHOD', 'C.m')}`,
+      `DEFINES ${sym('C#m().')}`,
+      `HAS_PARAM ${id('PARAM', 'C.m.self')}`,
+      `DECLARES ${id('TYPE_DECL', 'C.D')}`,
+      `DEFINES ${sym('C#D#')}`,
+      `DECLARES ${id('MEMBER', 'C.D.y')}`,
+      `DEFINES ${sym('C#D#y.')}`,
+    ]);
+  });
+
+  // r2 (review 8): ids and fqns are minted by makeNodeId and makeSymbolFqn, escapes included
+  it('escapes a path and names the way makeNodeId and makeSymbolFqn do', () => {
+    const p = n('identifier', [1, 8], [1, 11]);
+    const fn = n('function_definition', [1, 0], [1, 20]);
+    const mem = n('expression_statement', [3, 4], [3, 9]);
+    const body = n('block', [3, 4], [3, 9], [mem]);
+    const cls = n('class_definition', [2, 0], [3, 9], [body]);
+    const table = new Map<SyntaxNode, DeclarationInfo>([
+      [fn, method('a.b', { params: [param('p.q', p)] })],
+      [cls, typeDecl('T`1', body)],
+      [mem, member('m')],
+    ]);
+    const odd = n('module', [0, 0], [4, 0], [fn, cls]);
+    const got = ok(extractFile(req(odd, { path: wsPath('x:y.py') }), scripted(table).adapter));
+    expect(got.nodes.map((x) => x.id)).toEqual([
+      'file:x%3Ay.py:MODULE:$root',
+      'file:x%3Ay.py:METHOD:a%2Eb',
+      'file:x%3Ay.py:PARAM:a%2Eb.p%2Eq',
+      'file:x%3Ay.py:TYPE_DECL:T`1',
+      'file:x%3Ay.py:MEMBER:T`1.m',
+    ]);
+    expect(got.symbols.map((x) => x.fqn)).toEqual([
+      '`x:y.py`/',
+      '`x:y.py`/`a.b`().',
+      '`x:y.py`/`T``1`#',
+      '`x:y.py`/`T``1`#m.',
     ]);
   });
 });
@@ -463,6 +523,23 @@ describe('ERROR regions (decision 95)', () => {
     // the root, three module children, two in C's body
     expect(file().stats.astNodesVisited).toBe(6);
   });
+
+  // r2 (review 4): the scope is the whole class chain, not the innermost name
+  it('scopes an ERROR in a nested class by the whole chain', () => {
+    const err = n('ERROR', [2, 8], [2, 9]);
+    const inner = n('block', [2, 8], [2, 9], [err]);
+    const d = n('class_definition', [1, 4], [2, 9], [inner]);
+    const outer = n('block', [1, 4], [2, 9], [d]);
+    const c = n('class_definition', [0, 0], [2, 9], [outer]);
+    const nested = new Map<SyntaxNode, DeclarationInfo>([
+      [c, typeDecl('C', outer)],
+      [d, typeDecl('D', inner)],
+    ]);
+    const got = ok(extractFile(req(n('module', [0, 0], [3, 0], [c])), scripted(nested).adapter));
+    expect(got.nodes.filter((x) => x.label === 'UNKNOWN').map((x) => x.id)).toEqual([
+      id('UNKNOWN', 'C.D:0'),
+    ]);
+  });
 });
 
 describe('duplicate names in one file (I7)', () => {
@@ -544,6 +621,28 @@ describe('duplicate names in one file (I7)', () => {
     );
   });
 
+  // r2 (review 5): a repeat is the same label and scope; one name under three labels repeats nothing
+  it('gives one name under three labels in one container three ordinal-free ids', () => {
+    const xm = n('expression_statement', [0, 0], [0, 5]);
+    const xf = n('function_definition', [1, 0], [1, 12]);
+    const xc = n('class_definition', [2, 0], [2, 12]);
+    const same = new Map<SyntaxNode, DeclarationInfo>([
+      [xm, member('x')],
+      [xf, method('x')],
+      [xc, typeDecl('x')],
+    ]);
+    const got = ok(
+      extractFile(req(n('module', [0, 0], [3, 0], [xm, xf, xc])), scripted(same).adapter),
+    );
+    expect(got.nodes.map((x) => x.id)).toEqual([
+      MOD,
+      id('MEMBER', 'x'),
+      id('METHOD', 'x'),
+      id('TYPE_DECL', 'x'),
+    ]);
+    expect(got.symbols.map((x) => x.fqn)).toEqual([sym(''), sym('x.'), sym('x().'), sym('x#')]);
+  });
+
   it('is deterministic with repeats (I3)', () => {
     expect(outcome.kind).toBe('ok');
     expect(JSON.stringify(extractFile(req(root), scripted(table).adapter))).toBe(
@@ -621,6 +720,44 @@ describe('the budget across containers (I17)', () => {
   it('checks maxDepth before maxNodes on the same child', () => {
     const { outcome } = run({ maxDepth: 1, maxNodes: 2 });
     expect(outcome.kind === 'truncated' && outcome.truncation.limit).toBe('maxDepth');
+  });
+
+  // r2 (review 6): a nested class's member is depth 3
+  it('puts a nested class member one deeper than its class: depth 3 under maxDepth 2', () => {
+    const { adapter } = scripted(CLASS_TABLE);
+    const outcome = extractFile(
+      req(n('module', [0, 0], [6, 0], [C]), { budget: { maxDepth: 2 } }),
+      adapter,
+    );
+    if (outcome.kind !== 'truncated') throw new Error(`expected truncated, got ${outcome.kind}`);
+    expect(outcome.truncation).toEqual({
+      limit: 'maxDepth',
+      limitValue: 2,
+      droppedAtNodeType: 'expression_statement',
+      droppedRange: range([5, 8], [5, 14]),
+    });
+    expect(outcome.file.nodes.map((x) => x.id)).toEqual([
+      MOD,
+      id('TYPE_DECL', 'C'),
+      id('MEMBER', 'C.x'),
+      id('METHOD', 'C.m'),
+      id('PARAM', 'C.m.self'),
+      id('TYPE_DECL', 'C.D'),
+    ]);
+  });
+
+  // r2 (review 7): the budget is checked before an ERROR is handled
+  it('stops at an ERROR over maxNodes without its UNKNOWN', () => {
+    const e = n('ERROR', [0, 0], [0, 1]);
+    const outcome = extractFile(
+      req(n('module', [0, 0], [1, 0], [e]), { budget: { maxNodes: 1 } }),
+      scripted(table).adapter,
+    );
+    if (outcome.kind !== 'truncated') throw new Error(`expected truncated, got ${outcome.kind}`);
+    expect([outcome.truncation.droppedAtNodeType, outcome.file.nodes.map((x) => x.label)]).toEqual([
+      'ERROR',
+      ['MODULE'],
+    ]);
   });
 
   it('counts an ERROR as visited, against maxNodes too', () => {
