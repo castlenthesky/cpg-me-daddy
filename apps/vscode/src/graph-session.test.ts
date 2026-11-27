@@ -897,6 +897,22 @@ describe('what the watch says (decision 74)', () => {
     expect(await s.verified()).toBe(NOT_DRAWN);
   });
 
+  // Post-implementation (sabotage #12): a watch that stops while it is still the latest.
+  it('a watch that stops on an error: its refresh in flight lands, the one queued behind it is dropped', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    const watch = await s.opened();
+    const held = s.holdInspect();
+    watch.batch();
+    await held.reached;
+    watch.batch();
+    watch.fail('gone');
+    held.open();
+    await until(() => s.closes.length === 1);
+    await allMicrotasks();
+    expect([s.inspected.length, stamps(s.page())]).toEqual([2, ['1/0', '1/1']]);
+  });
+
   it('a session that will not close: said once the watch has ended', async () => {
     const root = await directory({ 'a.ts': 'a' });
     const s = setUp({ root, closeFails: true });
@@ -1167,6 +1183,24 @@ describe('deactivation (decision 74)', () => {
     await s.session.verify();
     await allMicrotasks();
     expect([s.listed, s.messages.length]).toEqual([[], 1]);
+  });
+
+  // Post-implementation (sabotage #25): dispose lands before the engine has closed the watch.
+  it('a refresh queued behind the one in flight is never started after dispose', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root, holdEnd: true });
+    const watch = await s.opened();
+    const held = s.holdInspect();
+    watch.batch();
+    await held.reached;
+    watch.batch();
+    s.session.dispose();
+    held.open();
+    await until(() => s.answered.length === 2);
+    await allMicrotasks();
+    expect([s.inspected.length, s.closes]).toEqual([2, []]);
+    watch.end();
+    await until(() => s.closes.length === 1);
   });
 
   it.each(['before ready', "with ready's refresh in flight"] as const)(
