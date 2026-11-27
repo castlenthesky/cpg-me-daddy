@@ -1,17 +1,18 @@
 // REAL (U3.1.1 part 4, BMO-52): the extension's flows (controller decision 38), in plain node. Owns the host,
 // the verify scheduler and the panel; extension.ts gives it VS Code. U4.2.2 (BMO-132): one watch keeps the
-// graph current (controller decisions 70 to 74). SEAT: the watch driver (`watch`).
+// graph current (controller decisions 70 to 74).
 
-import type { CpgEngine, EngineConfig } from '@cpg/engine';
+import type { CpgEngine, EngineConfig, EngineSession, WatchEvent } from '@cpg/engine';
 import { parseWebviewMessage } from '@cpg/inspector';
-import type { ThemeSnapshot, VerificationReport } from '@cpg/model';
+import type { GraphPayload, ThemeSnapshot, VerificationReport } from '@cpg/model';
 import type { FilesystemProbe, SourceOpener } from './contract';
 import { serializeError } from './errors';
 import { PanelGraphHost } from './graph-host';
 import { GraphPanel, type PanelSurface } from './graph-panel';
 import { revealMessage } from './reveal-message';
 import { VerifyScheduler, type VerifySchedulerOptions } from './verify-scheduler';
-import type { WorkspaceFileSystem } from './workspace-probe';
+import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace-config';
+import { workspaceProbe, type WorkspaceFileSystem } from './workspace-probe';
 
 export interface GraphSessionOptions {
   /** The first workspace folder's absolute path; undefined: there is none (decision 35). */
@@ -39,6 +40,37 @@ interface Judge {
   readonly scheduler: VerifyScheduler;
   /** On the scope the graph held was indexed with. */
   probe: FilesystemProbe;
+}
+
+/** What a started watch refreshes with: its configuration, its engine and its one session. */
+interface WatchResources {
+  readonly workspace: WorkspaceConfig;
+  readonly engine: CpgEngine;
+  readonly session: EngineSession;
+}
+
+/** One watch (decisions 70 and 71). */
+interface Watch {
+  /** Its refreshes deliver only while this is the session's latest (and it is not disposed). */
+  readonly generation: number;
+  /** Aborted by dispose, or when the next watch starts. */
+  readonly stop: AbortController;
+  /** From its start until its `closed`, or the end of a start that failed (decision 72). */
+  live: boolean;
+  /** A snapshot was delivered: the next one is a catch-up. */
+  delivered: boolean;
+  /** The seq of the one refresh queued (latest-wins). */
+  pending: number | undefined;
+  /** A refresh is in flight; `pump` settles when the last one has. */
+  pumping: boolean;
+  pump: Promise<void> | undefined;
+  /** ready's IndexReport warnings, said after the first snapshot. */
+  readyWarnings: readonly string[];
+  /** Settles after the first refresh settles, or when the watch has ended. */
+  firstGraph: Promise<void>;
+  settleFirst: (() => void) | undefined;
+  /** Settles when watch() has resolved, the refresh settled and the session closed. */
+  ended: Promise<void>;
 }
 
 /**
@@ -81,6 +113,8 @@ export class GraphSession {
   private readonly options: GraphSessionOptions;
   private readonly host: PanelGraphHost;
   private readonly panel: GraphPanel;
+  private generation = 0;
+  private current: Watch | undefined;
   private disposed = false;
   /** From the first graph on. */
   private judge: Judge | undefined;
@@ -146,16 +180,187 @@ export class GraphSession {
    */
   dispose(): void {
     this.disposed = true;
+    this.current?.stop.abort();
     this.judge?.scheduler.dispose();
     this.host.dispose();
   }
 
+  private isCurrent(watch: Watch): boolean {
+    return !this.disposed && watch.generation === this.generation;
+  }
+
   /**
    * The live watch's first graph, or a new watch's (decision 72): resolves when it has delivered its
-   * first graph or ended. SEAT (U4.2.2): the watch driver is not built yet.
+   * first graph or ended.
    */
   private watch(): Promise<void> {
-    return Promise.reject(new Error('SEAT: U4.2.2: the watch driver is not built yet'));
+    if (this.disposed) return Promise.resolve();
+    const { root } = this.options;
+    if (root === undefined) {
+      this.options.showError('CPG: open a folder first');
+      return Promise.resolve();
+    }
+    if (this.current?.live === true) return this.current.firstGraph;
+
+    this.generation += 1;
+    const watch: Watch = {
+      generation: this.generation,
+      stop: new AbortController(),
+      live: true,
+      delivered: false,
+      pending: undefined,
+      pumping: false,
+      pump: undefined,
+      readyWarnings: [],
+      firstGraph: Promise.resolve(),
+      settleFirst: undefined,
+      ended: Promise.resolve(),
+    };
+    watch.firstGraph = new Promise<void>((resolve) => {
+      watch.settleFirst = resolve;
+    });
+    const previous = this.current;
+    this.current = watch;
+    previous?.stop.abort();
+    watch.ended = this.run(watch, root, previous);
+    return watch.firstGraph;
+  }
+
+  private async run(watch: Watch, root: string, previous: Watch | undefined): Promise<void> {
+    let session: EngineSession | undefined;
+    let failed = '';
+    try {
+      if (previous !== undefined) await previous.ended;
+      if (!this.isCurrent(watch)) return;
+
+      failed = 'cannot read the configuration';
+      const workspace = await loadWorkspaceConfig(root);
+      if (!this.isCurrent(watch)) return;
+
+      const { config } = workspace;
+      const engine = this.options.createEngine({
+        version: this.options.version,
+        consumers: config.consumers,
+      });
+
+      failed = 'cannot open the graph store';
+      const { host, port, graph } = config.store;
+      session = await engine.connect({ host, port, graph }, { readOnly: false });
+      if (!this.isCurrent(watch)) return;
+
+      const resources: WatchResources = { workspace, engine, session };
+
+      failed = 'the watch stopped';
+      await engine.watch(
+        {
+          config: {
+            ...config,
+            trailingMs: config.watch.trailingMs,
+            ceilingMs: config.watch.ceilingMs,
+          },
+          session,
+        },
+        (event) => this.onEvent(watch, resources, event),
+        watch.stop.signal,
+      );
+    } catch (thrown) {
+      if (this.isCurrent(watch)) {
+        this.options.showError(`CPG: ${failed}: ${serializeError(thrown).message}`);
+      }
+    } finally {
+      watch.live = false;
+      watch.pending = undefined;
+      if (watch.pump !== undefined) await watch.pump;
+      if (session !== undefined) {
+        try {
+          await session.close();
+        } catch (thrown) {
+          if (!this.disposed) {
+            this.options.showError(
+              `CPG: cannot close the graph store: ${serializeError(thrown).message}`,
+            );
+          }
+        }
+      }
+      watch.settleFirst?.();
+    }
+  }
+
+  private onEvent(watch: Watch, resources: WatchResources, event: WatchEvent): void {
+    if (!this.isCurrent(watch)) return;
+    switch (event.kind) {
+      case 'ready':
+        watch.readyWarnings = event.report.warnings;
+        this.refresh(watch, resources, event.seq);
+        return;
+      case 'batch':
+        this.refresh(watch, resources, event.seq);
+        return;
+      case 'warning':
+        this.options.showWarning(`CPG: ${event.message}`);
+        return;
+      case 'error':
+        this.options.showError(`CPG: the watch stopped: ${event.error.message}`);
+        return;
+      case 'closed':
+        watch.live = false;
+        return;
+    }
+  }
+
+  private refresh(watch: Watch, resources: WatchResources, seq: number): void {
+    watch.pending = seq;
+    if (!watch.pumping) {
+      watch.pumping = true;
+      watch.pump = this.pump(watch, resources);
+    }
+  }
+
+  private async pump(watch: Watch, resources: WatchResources): Promise<void> {
+    try {
+      while (this.isCurrent(watch) && watch.pending !== undefined) {
+        const seq = watch.pending;
+        watch.pending = undefined;
+        // oxlint-disable-next-line no-await-in-loop -- refreshes run one at a time, latest-wins
+        await this.refreshOnce(watch, resources, seq);
+        watch.settleFirst?.();
+      }
+    } finally {
+      watch.pumping = false;
+    }
+  }
+
+  private async refreshOnce(watch: Watch, resources: WatchResources, seq: number): Promise<void> {
+    try {
+      const payload = await resources.engine.inspect(resources.session, resources.workspace.config);
+      if (this.isCurrent(watch)) {
+        await this.deliver(watch, resources.workspace, { ...payload, seq });
+      }
+    } catch (thrown) {
+      if (this.isCurrent(watch)) {
+        this.options.showError(`CPG: the graph refresh failed: ${serializeError(thrown).message}`);
+      }
+    }
+  }
+
+  private async deliver(
+    watch: Watch,
+    workspace: WorkspaceConfig,
+    payload: GraphPayload,
+  ): Promise<void> {
+    if (!watch.delivered) {
+      watch.delivered = true;
+      const probe = workspaceProbe(this.options.fileSystem, workspace.config);
+      if (this.judge === undefined) this.judge = this.newJudge(probe);
+      else this.judge.probe = probe;
+      await this.host.onSnapshot(payload, { seq: payload.seq, cause: 'initial' });
+      const warnings = [...workspace.warnings, ...watch.readyWarnings];
+      if (warnings.length > 0 && this.isCurrent(watch)) {
+        this.options.showWarning(`CPG: ${warnings.join('; ')}`);
+      }
+      return;
+    }
+    await this.host.onSnapshot(payload, { seq: payload.seq, cause: 'catch-up' });
   }
 
   private newJudge(probe: FilesystemProbe): Judge {
@@ -167,6 +372,7 @@ export class GraphSession {
         onError: (thrown) =>
           this.options.showError(`CPG: verify failed: ${serializeError(thrown).message}`),
         after: this.options.after,
+        current: (report) => report.epoch === this.host.epoch() && report.seq === this.host.seq(),
       }),
     };
     return judge;

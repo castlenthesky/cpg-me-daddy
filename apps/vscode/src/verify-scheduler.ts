@@ -35,8 +35,6 @@ export interface VerifySchedulerOptions {
  * - `dispose` cancels the timer. After it nothing starts, a run still going reports nothing, and every
  *   `now` still open resolves with undefined. The host's own dispose is what keeps that run from posting
  *   to the page.
- *
- * SEAT (U4.2.2): `current` is not read yet.
  */
 export class VerifyScheduler {
   private readonly options: VerifySchedulerOptions;
@@ -71,11 +69,12 @@ export class VerifyScheduler {
   now(): Promise<VerificationReport | undefined> {
     if (this.disposed) return Promise.resolve(undefined);
     this.cancelTimer();
-    if (!this.running) return this.run();
-    this.owedTo = 'now';
-    return new Promise<VerificationReport | undefined>((resolve) => {
+    const answer = new Promise<VerificationReport | undefined>((resolve) => {
       this.waiting.push(resolve);
     });
+    if (!this.running) void this.run();
+    else this.owedTo = 'now';
+    return answer;
   }
 
   dispose(): void {
@@ -84,24 +83,29 @@ export class VerifyScheduler {
     for (const resolve of this.waiting.splice(0)) resolve(undefined);
   }
 
-  private async run(): Promise<VerificationReport | undefined> {
+  private async run(): Promise<void> {
     this.running = true;
     this.owedTo = undefined;
     const waiters = this.waiting.splice(0);
     let report: VerificationReport | undefined;
+    let stale = false;
     try {
       const finished = await this.options.verify();
       if (!this.disposed) {
-        report = finished;
-        this.options.onReport(finished);
+        if (this.options.current?.(finished) === false) {
+          stale = true;
+        } else {
+          report = finished;
+          this.options.onReport(finished);
+        }
       }
     } catch (thrown) {
       if (!this.disposed) this.options.onError(thrown);
     } finally {
       this.running = false;
-      for (const resolve of waiters) resolve(report);
+      if (stale && !this.disposed) this.waiting.unshift(...waiters);
+      else for (const resolve of waiters) resolve(report);
       if (this.owedTo !== undefined && !this.disposed) void this.run();
     }
-    return report;
   }
 }

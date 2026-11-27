@@ -55,8 +55,7 @@ export interface GraphPage<E extends ViewElement<E>> {
  *   render-report, already-applied is ignored, a gap posts resync 'gap', malformed posts resync
  *   'render-error'. A resync carries the page's own epoch and seq (0 and -1 before any graph);
  * - `verification`: writes verificationText into the banner, when its epoch is the page's (0 before
- *   any graph); another epoch's is ignored (controller decision 73, BMO-85). SEAT (U4.2.2): the epoch
- *   check is not built yet;
+ *   any graph); another epoch's is ignored (controller decision 73, BMO-85);
  * - a click posts `reveal` with only the node id.
  */
 export function startGraphApp<E extends ViewElement<E>>(
@@ -107,7 +106,7 @@ export function startGraphApp<E extends ViewElement<E>>(
     }
 
     if (message.type === 'verification') {
-      page.banner.textContent = verificationText(message.report);
+      if (message.epoch === epoch) page.banner.textContent = verificationText(message.report);
       return;
     }
 

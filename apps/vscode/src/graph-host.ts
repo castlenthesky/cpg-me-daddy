@@ -248,7 +248,7 @@ export class PanelGraphHost implements GraphHost {
    * run is posted as a `verification` carrying its report's epoch and seq (I-22), to a page that is
    * ready then (I-2), when the host's epoch and seq are still the report's; a run whose graph moved
    * while it ran is stale and posted nowhere (controller decision 73, BMO-85), and is still returned.
-   * After dispose it posts nothing. Never rejects. SEAT (U4.2.2): the stale drop is not built yet.
+   * After dispose it posts nothing. Never rejects.
    */
   async verify(fs: FilesystemProbe): Promise<VerificationReport> {
     const subject = {
@@ -257,13 +257,15 @@ export class PanelGraphHost implements GraphHost {
       latest: this.latestRenderReport ?? null,
     };
     const report = await verifyPayload(subject, fs);
-    this.post({
-      type: 'verification',
-      protocol: CPG_PROTOCOL_VERSION,
-      epoch: report.epoch,
-      seq: report.seq,
-      report,
-    });
+    if (report.epoch === this.currentEpoch && report.seq === this.seq()) {
+      this.post({
+        type: 'verification',
+        protocol: CPG_PROTOCOL_VERSION,
+        epoch: report.epoch,
+        seq: report.seq,
+        report,
+      });
+    }
     return report;
   }
 
