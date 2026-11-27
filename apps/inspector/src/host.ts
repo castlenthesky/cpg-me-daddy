@@ -106,12 +106,16 @@ export class InspectorHost {
   /** One stdin line, already parsed. */
   input(input: InspectorInput): void {
     switch (input.type) {
-      case 'graph':
-        // SEAT: sprint 26 (decision 84): only the first graph and a cause 'initial' bump the epoch.
+      case 'graph': {
+        if (this.currentPayload === undefined || input.cause === 'initial') {
+          this.currentEpoch += 1;
+        } else if (input.payload.seq <= this.currentPayload.seq) {
+          return;
+        }
         this.currentPayload = input.payload;
-        this.currentEpoch += 1;
         this.post(this.graphMessage(this.currentPayload));
         return;
+      }
       case 'graph-delta': {
         if (this.currentPayload === undefined) {
           this.options.onFault(`delta before any graph at seq ${String(input.delta.seq)}`);

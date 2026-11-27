@@ -10,6 +10,7 @@ import {
   type VerifyCheckId,
 } from '@cpg/engine';
 import {
+  applyGraphDelta,
   validatePayload,
   type GraphDelta,
   type GraphEdge,
@@ -162,11 +163,12 @@ export interface LivePicture {
 export function livePicture(io: Io): LivePicture {
   // REAL
   let closed = false;
+  let shown = false;
   let current:
     | {
         readonly proc: InspectorProcess;
-        readonly payload: GraphPayload;
-        readonly checks: readonly CheckResult[];
+        payload: GraphPayload;
+        checks: readonly CheckResult[];
         render: CheckResult;
       }
     | undefined;
@@ -193,17 +195,40 @@ export function livePicture(io: Io): LivePicture {
   return {
     onRenderReport,
     apply(deltas: readonly GraphDelta[]): boolean {
-      // SEAT: sprint 26 (decision 84)
-      throw new Error(
-        `SEAT: LivePicture.apply(${String(deltas.length)} deltas) lands in sprint 26`,
-      );
+      if (closed) return true;
+      if (current === undefined) return false;
+      for (const delta of deltas) {
+        const result = applyGraphDelta(current.payload, delta);
+        switch (result.outcome) {
+          case 'applied':
+            current.payload = result.payload;
+            current.proc.send({ type: 'graph-delta', delta });
+            break;
+          case 'already-applied':
+            break;
+          case 'gap':
+          case 'malformed':
+            return false;
+        }
+      }
+      return true;
     },
     reverify(checks: readonly CheckResult[]): void {
-      // SEAT: sprint 26 (decision 84)
-      void checks;
+      if (closed || current === undefined) return;
+      const render = renderReconciliation({
+        payloadSeq: current.payload.seq,
+        payloadNodeCount: current.payload.nodes.length,
+        latest,
+        url: current.proc.url,
+      });
+      current.checks = checks;
+      current.render = render;
+      current.proc.send({ type: 'verification', report: liveVerification(checks, render) });
     },
     show(proc: InspectorProcess, payload: GraphPayload, checks: readonly CheckResult[]): void {
       if (closed) return;
+      const cause = shown ? 'catch-up' : 'initial';
+      shown = true;
       const render = renderReconciliation({
         payloadSeq: payload.seq,
         payloadNodeCount: payload.nodes.length,
@@ -211,7 +236,7 @@ export function livePicture(io: Io): LivePicture {
         url: proc.url,
       });
       current = { proc, payload, checks, render };
-      proc.send({ type: 'graph', payload });
+      proc.send({ type: 'graph', payload, cause });
       proc.send({ type: 'verification', report: liveVerification(checks, render) });
     },
     close(): void {

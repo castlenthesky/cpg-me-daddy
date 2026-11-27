@@ -217,12 +217,15 @@ function isVerificationInputReport(value: unknown): value is Omit<VerificationRe
   );
 }
 
+function isGraphCause(value: unknown): value is 'initial' | 'catch-up' | undefined {
+  return value === undefined || value === 'initial' || value === 'catch-up';
+}
+
 function isInspectorInput(value: unknown): value is InspectorInput {
   if (!isRecord(value)) return false;
   switch (value['type']) {
     case 'graph':
-      // SEAT: sprint 26 (decision 84): a cause other than 'initial' or 'catch-up' refuses the line.
-      return isGraphPayload(value['payload']);
+      return isGraphPayload(value['payload']) && isGraphCause(value['cause']);
     case 'graph-delta':
       return isGraphDelta(value['delta']);
     case 'verification':

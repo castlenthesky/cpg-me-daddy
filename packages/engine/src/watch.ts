@@ -3,7 +3,15 @@
 // WatchEvent stream. The CLI verb is part b. Sprint 26 (decisions 81, 82): each batch event carries
 // one GraphDelta per change, built from the op, and the watch's one graph seq.
 
-import { isWorkspacePath, WORKSPACE_ROOT, type GraphDelta, type WorkspacePath } from '@cpg/model';
+import {
+  isWorkspacePath,
+  makeNodeId,
+  WORKSPACE_ROOT,
+  type GraphDelta,
+  type GraphEdge,
+  type GraphNode,
+  type WorkspacePath,
+} from '@cpg/model';
 import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
 import {
   createWatchSession,
@@ -174,6 +182,34 @@ export function toBatchOp(
   return { kind: 'merge-filesystem', directories, files, links, moves: [], removals };
 }
 
+function nodeIdFor(label: NodeRow['label'], key: string): string {
+  if (!isWorkspacePath(key)) {
+    throw new Error(`invalid ${label} key: ${key}`);
+  }
+  return makeNodeId({ form: label === 'DIRECTORY' ? 'directory' : 'file', path: key });
+}
+
+function pruneProperties(properties: NodeRow['properties']): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (value !== null && value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function rowToNode(row: NodeRow): GraphNode {
+  const data = pruneProperties(row.properties);
+  const name = typeof data['name'] === 'string' ? data['name'] : undefined;
+  return {
+    id: nodeIdFor(row.label, row.key),
+    type: row.label,
+    ...(name !== undefined ? { name } : {}),
+    data,
+  };
+}
+
 /**
  * The FILE and DIRECTORY paths the watch's sinks hold (controller decision 81): the engine's own
  * record of what it wrote, never a read of the store (C-EXT may_not). runWatch seeds it with the
@@ -181,10 +217,13 @@ export function toBatchOp(
  * (decision 77), then advances it with the initial batch and with every batch it writes.
  */
 export class HeldPaths {
+  private readonly files: Set<WorkspacePath>;
+  private readonly directories: Set<WorkspacePath>;
+
   constructor(files: Iterable<WorkspacePath>, directories: Iterable<WorkspacePath>) {
-    // SEAT: sprint 26 (decision 81)
-    void files;
-    void directories;
+    // REAL
+    this.files = new Set(files);
+    this.directories = new Set(directories);
   }
 
   /**
@@ -193,8 +232,26 @@ export class HeldPaths {
    * under it; else, when `path` is a held file, its FILE id; else none. In no particular order.
    */
   removedBy(path: WorkspacePath): readonly string[] {
-    // SEAT: sprint 26 (decision 81)
-    throw new Error(`SEAT: HeldPaths.removedBy(${path}) lands in sprint 26 (decision 81)`);
+    // REAL
+    if (this.directories.has(path)) {
+      const prefix = `${path}/`;
+      const ids: string[] = [];
+      for (const dir of this.directories) {
+        if (dir === path || dir.startsWith(prefix)) {
+          ids.push(makeNodeId({ form: 'directory', path: dir }));
+        }
+      }
+      for (const file of this.files) {
+        if (file === path || file.startsWith(prefix)) {
+          ids.push(makeNodeId({ form: 'file', path: file }));
+        }
+      }
+      return ids;
+    }
+    if (this.files.has(path)) {
+      return [makeNodeId({ form: 'file', path })];
+    }
+    return [];
   }
 
   /**
@@ -203,8 +260,33 @@ export class HeldPaths {
    * its entry (a file, or a directory).
    */
   advance(change: NormalizedChange): void {
-    // SEAT: sprint 26 (decision 81)
-    throw new Error(`SEAT: HeldPaths.advance(${change.path}) lands in sprint 26 (decision 81)`);
+    // REAL
+    if (change.kind === 'deleted') {
+      this.forget(change.path);
+      return;
+    }
+    if (change.kind === 'moved' && change.fromPath !== undefined) {
+      this.forget(change.fromPath);
+    }
+    if (change.entry === 'directory') {
+      this.directories.add(change.path);
+    } else {
+      this.files.add(change.path);
+    }
+  }
+
+  private forget(path: WorkspacePath): void {
+    if (this.directories.has(path)) {
+      const prefix = `${path}/`;
+      for (const dir of this.directories) {
+        if (dir === path || dir.startsWith(prefix)) this.directories.delete(dir);
+      }
+      for (const file of this.files) {
+        if (file === path || file.startsWith(prefix)) this.files.delete(file);
+      }
+      return;
+    }
+    this.files.delete(path);
   }
 }
 
@@ -233,12 +315,36 @@ export function toBatchDeltas(
   held: HeldPaths,
   firstSeq: number,
 ): readonly GraphDelta[] {
-  // SEAT: sprint 26 (decisions 81, 82)
-  void languageOf;
-  void held;
-  throw new Error(
-    `SEAT: toBatchDeltas(${String(changes.length)} changes at ${String(firstSeq)}) lands in sprint 26`,
-  );
+  // REAL
+  const deltas: GraphDelta[] = [];
+  let seq = firstSeq;
+  for (const change of changes) {
+    const op = toBatchOp([change], languageOf);
+    if (op.kind !== 'merge-filesystem') continue;
+    const addedNodes: GraphNode[] = [...op.directories.map(rowToNode), ...op.files.map(rowToNode)];
+    const addedEdges: GraphEdge[] =
+      change.kind === 'changed'
+        ? []
+        : op.links.map((link) => ({
+            source: nodeIdFor(link.fromLabel, link.fromKey),
+            target: nodeIdFor(link.toLabel, link.toKey),
+            type: 'HAS_ENTRY',
+          }));
+    const removal = op.removals[0];
+    const removedNodeIds = removal !== undefined ? held.removedBy(removal) : [];
+    deltas.push({
+      seq,
+      file: change.path,
+      revision_id: change.revision_id ?? '',
+      producer: 'filesystem',
+      addedNodes,
+      addedEdges,
+      removedNodeIds,
+    });
+    held.advance(change);
+    seq += 1;
+  }
+  return deltas;
 }
 
 /**
@@ -409,6 +515,11 @@ export async function runWatch(
         for (const dir of indexRun.walk.directories) {
           if (dir.path !== WORKSPACE_ROOT) seedDirectories.add(dir.path);
         }
+        const held = new HeldPaths(
+          indexRun.walk.files.map((file) => file.path),
+          indexRun.walk.directories.map((dir) => dir.path),
+        );
+        let graphSeq = 0;
         const { report } = indexRun;
         const sink: WatchSink = {
           async onBatch(batch) {
@@ -420,12 +531,18 @@ export async function runWatch(
             const at = deps.now();
             if (stop !== undefined) return;
             if (batch.cause === 'initial') {
+              for (const change of batch.changes) {
+                held.advance(change);
+              }
               emit({ kind: 'ready', root: req.config.root, report, graphSeq: 0 }, at);
               readyEmitted = true;
               flushWarnings();
               return;
             }
             if (receipt === undefined) return;
+            const deltas = toBatchDeltas(batch.changes, deps.languageOf, held, graphSeq + 1);
+            const lastDelta = deltas.at(-1);
+            if (lastDelta !== undefined) graphSeq = lastDelta.seq;
             const t1_t2 = batch.clock.settledAt - batch.clock.firstEventAt;
             const t2_t3 = at - batch.clock.settledAt;
             emit(
@@ -439,9 +556,8 @@ export async function runWatch(
                   statementCount: receipt.statementCount,
                 },
                 latencyMs: { t0_t1: null, t1_t2, t2_t3, total: t1_t2 + t2_t3 },
-                // SEAT: sprint 26 (decisions 81, 82): toBatchDeltas over the held paths.
-                deltas: [],
-                graphSeq: 0,
+                deltas,
+                graphSeq,
               },
               at,
             );

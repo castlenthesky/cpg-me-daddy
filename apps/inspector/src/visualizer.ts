@@ -117,6 +117,7 @@ export class GraphVisualizer {
   private allLinks: LinkBuffers = EMPTY_LINKS;
   // What cosmos.gl was last handed: a link index from a hover means an offset into this, never allLinks.
   private shownLinks: LinkBuffers = EMPTY_LINKS;
+  private settlePending = false;
 
   constructor(
     makeSurface: (events: SurfaceEvents) => GraphSurface,
@@ -145,8 +146,7 @@ export class GraphVisualizer {
       onPointClick: (index) => this.handlePointClick(index),
       onLinkMouseOver: (linkIndex) => this.showLinkTooltip(linkIndex),
       onLinkMouseOut: () => this.views.tooltip.hide(),
-      // SEAT: sprint 26 (decision 85): the simulation restarts gently once a delta's transition ends.
-      onTransitionEnd: () => undefined,
+      onTransitionEnd: (interrupted) => this.handleTransitionEnd(interrupted),
     };
 
     try {
@@ -173,6 +173,7 @@ export class GraphVisualizer {
       this.points.recolour(this.nodeColors);
       this.edges.replace(payload.edges);
       this.views.tooltip.hide();
+      this.settlePending = false;
       this.pushBuffers(surface);
       surface.setPinnedPoints([0]);
       surface.render();
@@ -217,8 +218,7 @@ export class GraphVisualizer {
       this.pushBuffers(surface);
       surface.setPinnedPoints([0]);
       surface.render();
-      surface.unpause();
-      surface.start(0.1);
+      this.settlePending = true;
       this.refreshNodeLegend(surface);
       this.refreshRelationshipLegend(surface);
     } catch (error) {
@@ -301,11 +301,25 @@ export class GraphVisualizer {
     // snapshotted after toggling, so a just-hidden type came back at its seed).
     this.points.syncLive(surface.getPointPositions());
     toggleSet(this.hiddenTypes, key);
+    this.settlePending = false;
     surface.setPointPositions(this.points.masked(this.hiddenTypes));
     surface.render();
     surface.unpause();
     surface.start(0.1);
     this.refreshNodeLegend(surface);
+  }
+
+  private handleTransitionEnd(interrupted: boolean): void {
+    if (interrupted || !this.settlePending) return;
+    this.settlePending = false;
+    const surface = this.surface;
+    if (!surface) return;
+    try {
+      surface.unpause();
+      surface.start(0.1);
+    } catch (error) {
+      console.error('@cpg/inspector: failed to settle graph after delta', error);
+    }
   }
 
   private toggleRelationshipType(surface: GraphSurface, key: string): void {
