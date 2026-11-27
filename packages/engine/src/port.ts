@@ -1,6 +1,6 @@
 // The CpgEngine port (C-CLI): the one surface a front door sees. C-CLI Q1 puts the contract types in
 // @cpg/engine's public surface. Types only. This is the slice built so far (identity, connect,
-// index, verify, inspect, schema); watch, read and doctor arrive with their units.
+// index, watch, verify, inspect, schema); read and doctor arrive with their units.
 
 import type {
   CheckResult,
@@ -9,6 +9,7 @@ import type {
   SchemaDocInput,
   WorkspacePath,
 } from '@cpg/model';
+import type { NormalizedChange } from '@cpg/watch';
 
 export interface StoreTarget {
   readonly host: string;
@@ -164,6 +165,90 @@ export interface VerifyConfig extends IndexConfig {
   readonly strict?: boolean;
 }
 
+/**
+ * CpgEngine.watch's request (controller decision 59): the walk scope plus the debounce window. A
+ * session is required: there is no dry-run watch.
+ */
+export interface WatchRequest {
+  readonly config: IndexConfig & {
+    /** Default 100 (C-WATCH budget_boundary.T1_T2). */
+    readonly trailingMs?: number;
+    /** Default 500 (C-WATCH budget_boundary.T1_T2). */
+    readonly ceilingMs?: number;
+  };
+  readonly session: EngineSession;
+}
+
+/**
+ * The C-CLI CliError kinds a watch reports, a subset of C-CLI's CliError union. `workspace` is a
+ * WatchError (root-missing, a fatal backend error): `path` is the error's path, else the root, and
+ * `message` starts with its code. `engine-rejected` is any other failure (the index, a sink's last
+ * rejection of the initial batch, a probe that throws there), with the error's message.
+ */
+export type WatchFailure =
+  | { readonly kind: 'workspace'; readonly path: string; readonly message: string }
+  | { readonly kind: 'engine-rejected'; readonly message: string };
+
+/**
+ * The three intervals of C-WATCH budget_boundary, in ms. `t0_t1` is always null: T0 is outside our
+ * code, and the benchmark measures it from outside (C-CLI amended, decision 63).
+ */
+export interface WatchLatency {
+  readonly t0_t1: number | null;
+  /** settledAt - firstEventAt: the debounce window. */
+  readonly t1_t2: number;
+  /** When every sink's write resolved, minus settledAt: the pipeline. */
+  readonly t2_t3: number;
+  /** t1_t2 + t2_t3. */
+  readonly total: number;
+}
+
+/**
+ * One event of CpgEngine.watch (C-CLI). `seq` is dense from 0 across every kind and `closed` is
+ * always last (I-23); `at` is the engine's injected `now()` when the event is emitted (I-30).
+ */
+export type WatchEvent =
+  | {
+      readonly kind: 'ready';
+      readonly seq: number;
+      readonly at: number;
+      /** The absolute root being watched: the request's `config.root`. */
+      readonly root: string;
+      /** The IndexReport of the index the watch started with. */
+      readonly report: IndexReport;
+    }
+  | {
+      readonly kind: 'batch';
+      readonly seq: number;
+      readonly at: number;
+      readonly changes: readonly NormalizedChange[];
+      /** The first sink's receipt (the built-in memory store), as IndexReport counts it. */
+      readonly write: {
+        readonly nodesWritten: number;
+        readonly edgesWritten: number;
+        readonly statementCount: number;
+      };
+      readonly latencyMs: WatchLatency;
+    }
+  | {
+      readonly kind: 'warning';
+      readonly seq: number;
+      readonly at: number;
+      readonly message: string;
+    }
+  | {
+      readonly kind: 'error';
+      readonly seq: number;
+      readonly at: number;
+      readonly error: WatchFailure;
+    }
+  | {
+      readonly kind: 'closed';
+      readonly seq: number;
+      readonly at: number;
+      readonly reason: 'signal' | 'error' | 'eof';
+    };
+
 export interface CpgEngine {
   readonly identity: {
     readonly name: string;
@@ -176,6 +261,16 @@ export interface CpgEngine {
     onProgress: (progress: IndexProgress) => void,
     signal: AbortSignal,
   ): Promise<IndexReport>;
+  /**
+   * Indexes as `index()` does, then watches the root and writes each settled batch of changes
+   * through the same sinks until `signal` aborts or the watch fails (U4.2.1, decisions 59-63).
+   * Every outcome is an event: it resolves after `closed` and never rejects.
+   */
+  watch(
+    req: WatchRequest,
+    onEvent: (event: WatchEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void>;
   /** Read-only. `expected` must be null (C-CLI Q9: the live filesystem suffices). */
   verify(
     session: EngineSession,

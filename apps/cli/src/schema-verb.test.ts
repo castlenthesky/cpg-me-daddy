@@ -43,6 +43,7 @@ function fakeEngine(schema: SchemaDocInput) {
     index: () => Promise.reject(new Error('cpg schema never indexes')),
     verify: () => Promise.reject(new Error('cpg schema never verifies')),
     inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
+    watch: () => Promise.reject(new Error('fakeEngine.watch is not driven by these tests')),
     schema: () => {
       calls++;
       return schema;

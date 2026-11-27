@@ -6,8 +6,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isWorkspacePath, WORKSPACE_ROOT, type WorkspacePath } from '@cpg/model';
-import { DEFAULT_EXCLUDES, DEFAULT_INCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from './defaults';
-import { compileMatcher } from './glob';
+import { createAdmission, type AdmissionEntry } from './admission';
 
 export interface WalkOptions {
   /** Absolute path to the workspace root. */
@@ -60,9 +59,7 @@ export interface WalkResult {
 
 export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
   // REAL
-  const include = compileMatcher(options.include ?? DEFAULT_INCLUDES);
-  const exclude = compileMatcher(options.exclude ?? DEFAULT_EXCLUDES);
-  const maxFileSizeBytes = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES;
+  const admission = createAdmission(options);
 
   const files: WalkedFile[] = [];
   const directories: WalkedDirectory[] = [];
@@ -104,13 +101,26 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
       }
       const absPath = join(absDir, entry.name);
 
-      if (entry.isSymbolicLink()) {
+      const kind: AdmissionEntry | undefined = entry.isSymbolicLink()
+        ? 'symlink'
+        : entry.isDirectory()
+          ? 'directory'
+          : entry.isFile()
+            ? 'file'
+            : undefined;
+      if (kind === undefined) {
+        // Sockets, FIFOs, devices: never source, never worth counting.
+        continue;
+      }
+
+      const verdict = admission.check(relPath, kind);
+      if (verdict === 'symlink') {
         stats.symlinksSkipped++;
         continue;
       }
 
-      if (entry.isDirectory()) {
-        if (exclude.test(relPath, true)) {
+      if (kind === 'directory') {
+        if (verdict === 'excluded') {
           stats.directoriesSkipped++;
           continue;
         }
@@ -118,14 +128,9 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
         continue;
       }
 
-      if (!entry.isFile()) {
-        // Sockets, FIFOs, devices: never source, never worth counting.
-        continue;
-      }
-
       stats.filesSeen++;
 
-      if (exclude.test(relPath, false) || !include.test(relPath, false)) {
+      if (verdict === 'excluded') {
         stats.filesExcluded++;
         continue;
       }
@@ -138,7 +143,7 @@ export async function walkWorkspace(options: WalkOptions): Promise<WalkResult> {
         continue;
       }
 
-      if (fileStat.size > maxFileSizeBytes) {
+      if (admission.check(relPath, 'file', fileStat.size) === 'too-large') {
         stats.filesTooLarge++;
         continue;
       }

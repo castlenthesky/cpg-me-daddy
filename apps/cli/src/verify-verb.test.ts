@@ -280,6 +280,7 @@ function fakeEngine(
       return reject ? Promise.reject(new Error('boom')) : Promise.resolve(REPORT(state));
     },
     inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
+    watch: () => Promise.reject(new Error('fakeEngine.watch is not driven by these tests')),
     schema: () => {
       throw new Error('fakeEngine.schema is not driven by these tests');
     },

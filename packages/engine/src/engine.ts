@@ -1,11 +1,13 @@
 // createEngine: the engine's one constructor. Only a front door (apps/*) calls it (03-architecture §2
 // rule 3, check-deps rule engine-call-site); this package defines it and never calls it.
 
+import { realpath } from 'node:fs/promises';
 import { CPG_SCHEMA, type GraphPayload, type SchemaDocInput } from '@cpg/model';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
 import { createMemoryStore, type GraphSink, type MemoryStore } from '@cpg/sink';
-import type { EdgeRow, GraphStore, NodeRow, WriteOp } from '@cpg/store';
+import type { EdgeRow, GraphStore, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
+import { createParcelWatchBackend, type TimerApi, type WatchBackend } from '@cpg/watch';
 import { createNullGraphStore } from './null-graph-store';
 import type {
   ConsumerSwitches,
@@ -20,10 +22,13 @@ import type {
   StoreTarget,
   VerifyConfig,
   VerifyReport,
+  WatchEvent,
+  WatchRequest,
 } from './port';
 import { verifyStore } from './verify';
 import { filesystemTier, type FilesystemTier } from './walker/filesystem-tier';
 import { walkWorkspace } from './walker/walker';
+import { runWatch, type IndexRun } from './watch';
 
 export interface EngineConfig {
   /** identity.version: the front door's manifest version, never a literal (C-CLI I-13). */
@@ -47,6 +52,19 @@ export interface EngineDeps {
   readonly resolvers?: readonly Resolver[];
   /** SEAT: accepted and unused until the LSP driver (U8). */
   readonly processHost?: ProcessHost;
+  /**
+   * The backend `watch` subscribes with. Default: @parcel/watcher (`createParcelWatchBackend`), on
+   * `now`, with node's `realpath` so macOS real paths map back onto the root.
+   */
+  readonly watchBackend?: WatchBackend;
+  /**
+   * The clock `watch` stamps with: WatchEvent `at`, the session's `clock.settledAt`, the end of a
+   * write, and the default backend's `observedAt` (C-CLI I-30). Default `Date.now`, looked up at
+   * each call.
+   */
+  readonly now?: () => number;
+  /** The watch session's timers (debounce, retry backoff). Default: the global ones. */
+  readonly timers?: TimerApi;
 }
 
 function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
@@ -92,13 +110,128 @@ function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
 export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEngine {
   // REAL
   const memory: MemoryStore = deps.memoryStore ?? createMemoryStore({ id: 'memory' });
-  const sinks: readonly EngineSink[] = [memory, ...(deps.sinks ?? [])];
+  const hostSinks: readonly EngineSink[] = deps.sinks ?? [];
+  const sinks: readonly EngineSink[] = [memory, ...hostSinks];
   const registry = createLanguageRegistry();
   for (const lang of BUILTIN_LANGUAGES) {
     registry.register(lang);
   }
   registry.freeze();
   const languageOf = (p: string): string | undefined => registry.languageForPath(p);
+
+  async function writeAll(op: WriteOp): Promise<WriteReceipt> {
+    // Sequential by design: write each sink in order, never Promise.all.
+    const first = await memory.write(op);
+    /* oxlint-disable no-await-in-loop */
+    for (const sink of hostSinks) {
+      await sink.write(op);
+    }
+    /* oxlint-enable no-await-in-loop */
+    return first;
+  }
+
+  async function runIndex(
+    req: IndexRequest,
+    onProgress: (progress: IndexProgress) => void,
+    signal: AbortSignal,
+  ): Promise<IndexRun> {
+    if (req.resumeFrom !== null) {
+      throw new Error('SEAT: resumeFrom: v1 index is not resumable; pass null');
+    }
+    const start = performance.now();
+    const walkResult = await walkWorkspace({
+      root: req.config.root,
+      languageOf,
+      ...(req.config.include !== undefined ? { include: req.config.include } : {}),
+      ...(req.config.exclude !== undefined ? { exclude: req.config.exclude } : {}),
+      ...(req.config.maxFileSizeBytes !== undefined
+        ? { maxFileSizeBytes: req.config.maxFileSizeBytes }
+        : {}),
+    });
+    onProgress({ phase: 'walked', filesTotal: walkResult.files.length });
+
+    const { stats } = walkResult;
+    const walk: IndexWalk = {
+      filesSeen: stats.filesSeen,
+      filesIndexed: walkResult.files.length - stats.filesUnsupported,
+      filesExcluded: stats.filesExcluded,
+      filesUnsupported: stats.filesUnsupported,
+      filesTooLarge: stats.filesTooLarge,
+      filesFailed: stats.filesFailed,
+    };
+
+    const warnings: string[] = [
+      'the code tier is not built yet (U6a): only the filesystem tier was indexed',
+    ];
+    if (walk.filesIndexed === 0) {
+      warnings.push(`no files indexed under ${req.config.root}`);
+    }
+
+    if (signal.aborted) {
+      return {
+        report: {
+          root: req.config.root,
+          walk,
+          files: [],
+          nodesWritten: 0,
+          edgesWritten: 0,
+          durationMs: performance.now() - start,
+          dryRun: req.session === null,
+          interrupted: true,
+          warnings,
+          // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
+          target: null,
+          consumers: [],
+        },
+        walk: walkResult,
+      };
+    }
+
+    const op = toMergeFilesystemOp(filesystemTier(walkResult));
+
+    let nodesWritten = 0;
+    let edgesWritten = 0;
+    if (req.session === null) {
+      const nullStore = createNullGraphStore();
+      await nullStore.open();
+      try {
+        const receipt = await nullStore.write(op);
+        nodesWritten = receipt.nodesWritten;
+        edgesWritten = receipt.edgesWritten;
+      } finally {
+        await nullStore.close();
+      }
+    } else {
+      const receipt = await writeAll(op);
+      nodesWritten = receipt.nodesWritten;
+      edgesWritten = receipt.edgesWritten;
+    }
+
+    onProgress({ phase: 'written', filesTotal: walkResult.files.length });
+
+    const files: IndexedFile[] = walkResult.files
+      .filter((f) => f.language !== null)
+      .map((f) => ({ path: f.path, revision_id: f.revision_id, nodes: 0, edges: 0 }))
+      .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+    return {
+      report: {
+        root: req.config.root,
+        walk,
+        files,
+        nodesWritten,
+        edgesWritten,
+        durationMs: performance.now() - start,
+        dryRun: req.session === null,
+        interrupted: false,
+        warnings,
+        // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
+        target: null,
+        consumers: req.session === null ? [] : sinks.map((s) => s.id),
+      },
+      walk: walkResult,
+    };
+  }
 
   return {
     identity: {
@@ -138,105 +271,29 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       onProgress: (progress: IndexProgress) => void,
       signal: AbortSignal,
     ): Promise<IndexReport> {
-      if (req.resumeFrom !== null) {
-        throw new Error('SEAT: resumeFrom: v1 index is not resumable; pass null');
-      }
-      const start = performance.now();
-      const walkResult = await walkWorkspace({
-        root: req.config.root,
-        languageOf,
-        ...(req.config.include !== undefined ? { include: req.config.include } : {}),
-        ...(req.config.exclude !== undefined ? { exclude: req.config.exclude } : {}),
-        ...(req.config.maxFileSizeBytes !== undefined
-          ? { maxFileSizeBytes: req.config.maxFileSizeBytes }
-          : {}),
-      });
-      onProgress({ phase: 'walked', filesTotal: walkResult.files.length });
+      return (await runIndex(req, onProgress, signal)).report;
+    },
 
-      const { stats } = walkResult;
-      const walk: IndexWalk = {
-        filesSeen: stats.filesSeen,
-        filesIndexed: walkResult.files.length - stats.filesUnsupported,
-        filesExcluded: stats.filesExcluded,
-        filesUnsupported: stats.filesUnsupported,
-        filesTooLarge: stats.filesTooLarge,
-        filesFailed: stats.filesFailed,
-      };
-
-      const warnings: string[] = [
-        'the code tier is not built yet (U6a): only the filesystem tier was indexed',
-      ];
-      if (walk.filesIndexed === 0) {
-        warnings.push(`no files indexed under ${req.config.root}`);
-      }
-
-      if (signal.aborted) {
-        return {
-          root: req.config.root,
-          walk,
-          files: [],
-          nodesWritten: 0,
-          edgesWritten: 0,
-          durationMs: performance.now() - start,
-          dryRun: req.session === null,
-          interrupted: true,
-          warnings,
-          // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
-          target: null,
-          consumers: [],
-        };
-      }
-
-      const op = toMergeFilesystemOp(filesystemTier(walkResult));
-
-      let nodesWritten = 0;
-      let edgesWritten = 0;
-      if (req.session === null) {
-        const nullStore = createNullGraphStore();
-        await nullStore.open();
-        try {
-          const receipt = await nullStore.write(op);
-          nodesWritten = receipt.nodesWritten;
-          edgesWritten = receipt.edgesWritten;
-        } finally {
-          await nullStore.close();
-        }
-      } else {
-        let first = true;
-        // Sequential by design: write each sink in order, never Promise.all.
-        /* oxlint-disable no-await-in-loop */
-        for (const sink of sinks) {
-          const receipt = await sink.write(op);
-          if (first) {
-            nodesWritten = receipt.nodesWritten;
-            edgesWritten = receipt.edgesWritten;
-            first = false;
-          }
-        }
-        /* oxlint-enable no-await-in-loop */
-      }
-
-      onProgress({ phase: 'written', filesTotal: walkResult.files.length });
-
-      const files: IndexedFile[] = walkResult.files
-        .filter((f) => f.language !== null)
-        .map((f) => ({ path: f.path, revision_id: f.revision_id, nodes: 0, edges: 0 }))
-        .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-
-      return {
-        root: req.config.root,
-        walk,
-        files,
-        nodesWritten,
-        edgesWritten,
-        durationMs: performance.now() - start,
-        dryRun: req.session === null,
-        interrupted: false,
-        warnings,
-        // SEAT: FalkorStore (U5) will report the target it dialled; the memory store dials none.
-        target: null,
-        consumers: req.session === null ? [] : sinks.map((s) => s.id),
-      };
+    watch(
+      req: WatchRequest,
+      onEvent: (event: WatchEvent) => void,
+      signal: AbortSignal,
+    ): Promise<void> {
+      const readNow = (): number => (deps.now ?? Date.now)();
+      const backend = deps.watchBackend ?? createParcelWatchBackend({ now: readNow, realpath });
+      return runWatch(
+        {
+          runIndex,
+          write: writeAll,
+          languageOf,
+          backend,
+          now: readNow,
+          ...(deps.timers !== undefined ? { timers: deps.timers } : {}),
+        },
+        req,
+        onEvent,
+        signal,
+      );
     },
 
     async verify(

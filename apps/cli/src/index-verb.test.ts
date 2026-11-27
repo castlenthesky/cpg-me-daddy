@@ -78,6 +78,7 @@ function fakeEngine(report: IndexReport = REPORT) {
     },
     verify: () => Promise.reject(new Error('fakeEngine.verify is not driven by these tests')),
     inspect: () => Promise.reject(new Error('fakeEngine.inspect is not driven by these tests')),
+    watch: () => Promise.reject(new Error('fakeEngine.watch is not driven by these tests')),
     schema: () => {
       throw new Error('fakeEngine.schema is not driven by these tests');
     },

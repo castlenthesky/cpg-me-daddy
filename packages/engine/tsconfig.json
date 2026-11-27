@@ -13,6 +13,7 @@
     { "path": "../parse" },
     { "path": "../resolve" },
     { "path": "../sink" },
-    { "path": "../store" }
+    { "path": "../store" },
+    { "path": "../watch" }
   ]
 }
