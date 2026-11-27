@@ -18,7 +18,7 @@
  *   path that is not a WorkspacePath or is `'.'`; an empty scheme or one holding `:` or `` ` ``; an empty
  *   package or one holding `` ` ``; an empty descriptor name or an unknown descriptor kind; U+0000 anywhere.
  */
-import type { WorkspacePath } from '../paths';
+import { isWorkspacePath, type WorkspacePath } from '../paths';
 
 /** SCIP's descriptor kinds that v1 mints. */
 export type SymbolDescriptorKind = 'namespace' | 'type' | 'term' | 'method';
@@ -47,8 +47,81 @@ export type SymbolFqnParts =
       readonly descriptors: readonly SymbolDescriptor[];
     };
 
+const SUFFIX: Readonly<Record<SymbolDescriptorKind, string>> = {
+  namespace: '/',
+  type: '#',
+  term: '.',
+  method: '().',
+};
+const SIMPLE = /^[A-Za-z0-9_+$-]+$/;
+const NUL = '\u0000';
+
+function escape(value: string): string {
+  return value.replaceAll('`', '``');
+}
+
+function fail(reason: string): never {
+  throw new Error(`invalid symbol fqn parts: ${reason}`);
+}
+
+function isDescriptorKind(value: unknown): value is SymbolDescriptorKind {
+  return typeof value === 'string' && Object.hasOwn(SUFFIX, value);
+}
+
+function isArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
 /** Renders `parts` per the grammar above. Pure; throws on invalid parts. */
-export function makeSymbolFqn(_parts: SymbolFqnParts): string {
-  // SEAT: lands in U6a.2-1 (controller decision 89)
-  throw new Error('SEAT: makeSymbolFqn is not built yet (U6a.2-1)');
+export function makeSymbolFqn(parts: SymbolFqnParts): string {
+  // REAL
+  if (parts === null || typeof parts !== 'object') {
+    fail('parts is not an object');
+  }
+  let owner: string;
+  const rawForm: unknown = parts.form;
+  if (parts.form === 'local') {
+    const { path } = parts;
+    if (typeof path !== 'string' || !isWorkspacePath(path) || path === '.') {
+      fail(`path is not a file WorkspacePath: ${JSON.stringify(path)}`);
+    }
+    owner = `\`${escape(path)}\`/`;
+  } else if (parts.form === 'external') {
+    const { scheme, package: pkg } = parts;
+    if (
+      typeof scheme !== 'string' ||
+      scheme.length === 0 ||
+      scheme.includes(':') ||
+      scheme.includes('`') ||
+      scheme.includes(NUL)
+    ) {
+      fail(`bad scheme ${JSON.stringify(scheme)}`);
+    }
+    if (typeof pkg !== 'string' || pkg.length === 0 || pkg.includes('`') || pkg.includes(NUL)) {
+      fail(`bad package ${JSON.stringify(pkg)}`);
+    }
+    owner = `${scheme}:${pkg}\``;
+  } else {
+    fail(`unknown form ${JSON.stringify(rawForm)}`);
+  }
+
+  if (!isArray(parts.descriptors)) {
+    fail('descriptors is not an array');
+  }
+  const rendered: string[] = [];
+  for (const descriptor of parts.descriptors) {
+    if (descriptor === null || typeof descriptor !== 'object') {
+      fail('descriptor is not an object');
+    }
+    const { kind, name } = descriptor;
+    if (!isDescriptorKind(kind)) {
+      fail(`unknown descriptor kind ${JSON.stringify(kind)}`);
+    }
+    if (typeof name !== 'string' || name.length === 0 || name.includes(NUL)) {
+      fail(`bad descriptor name ${JSON.stringify(name)}`);
+    }
+    const segment = SIMPLE.test(name) ? name : `\`${escape(name)}\``;
+    rendered.push(segment + SUFFIX[kind]);
+  }
+  return owner + rendered.join('');
 }

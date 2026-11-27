@@ -396,7 +396,7 @@ export const NODE_LABELS = [
         type: 'string',
         cardinality: 'one',
         golden: 'include',
-        doc: 'Owner-prefixed SCIP descriptor grammar. Workspace-local: `<path>`/<descriptors>, e.g. `src/users.ts`/UserService#findById(). External: <scheme>:<package>`<descriptors>, e.g. site:node`console.log(). The external prefix is INSIDE the fqn because fqn has a UNIQUE constraint and two packages exporting Foo#bar(). must not collide onto one node. UNIQUE.',
+        doc: "Owner-prefixed SCIP descriptor grammar. Workspace-local: `<path>`/<descriptors>, e.g. `src/users.ts`/UserService#findById(). External: <scheme>:<package>`<descriptors>, e.g. site:node`console.log(). The external prefix is INSIDE the fqn because fqn has a UNIQUE constraint and two packages exporting Foo#bar(). must not collide onto one node. A name outside SCIP's simple identifiers [A-Za-z0-9_+$-] is backtick-quoted with each backtick doubled, so the rendering is injective; mint it only with makeSymbolFqn. UNIQUE.",
       },
       {
         name: 'scheme',

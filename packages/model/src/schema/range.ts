@@ -11,16 +11,32 @@
  * MODULE is `1:0-1:0`.
  */
 
+function checkCoord(field: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `invalid source range: ${field} is not a non-negative safe integer: ${String(value)}`,
+    );
+  }
+}
+
 /**
  * Formats a 0-based range as the schema's `range` string. Pure; throws on an invalid range. The parameter
  * is `SourceRange`'s shape, spelt out because `../index.ts` (which declares it) imports this module.
  */
-export function formatRange(_range: {
+export function formatRange(range: {
   readonly startRow: number;
   readonly startColumn: number;
   readonly endRow: number;
   readonly endColumn: number;
 }): string {
-  // SEAT: lands in U6a.2-1 (controller decision 89)
-  throw new Error('SEAT: formatRange is not built yet (U6a.2-1)');
+  // REAL
+  const { startRow, startColumn, endRow, endColumn } = range;
+  checkCoord('startRow', startRow);
+  checkCoord('startColumn', startColumn);
+  checkCoord('endRow', endRow);
+  checkCoord('endColumn', endColumn);
+  if (endRow < startRow || (endRow === startRow && endColumn < startColumn)) {
+    throw new Error('invalid source range: the end comes before the start');
+  }
+  return `${startRow + 1}:${startColumn}-${endRow + 1}:${endColumn}`;
 }

@@ -11,8 +11,11 @@
 // Ported from archive 21754b4:packages/cpg-generator/src/resolve.ts with C-RESOLVE's five amendments
 // (ResolveBatch, capabilities, status(), ResolveContext, +5 reasons), DQ-02 paths (WorkspacePath)
 // and readonly on every field.
+//
+// The extract-shaped types this seam consumes (EdgeElement, ExtractedFileSet and its SEALED brand) live in
+// @cpg/extract (controller decision 88); applyResolutions (U6c) imports them from there.
 
-import type { EdgeType, NodeLabel, RESOLUTION_STATUS, WorkspacePath } from '@cpg/model';
+import type { RESOLUTION_STATUS, WorkspacePath } from '@cpg/model';
 
 /** Zero-based rows, UTF-16 code-unit columns: identical to `vscode.Position`, no conversion at the host. */
 export interface RefPosition {
@@ -213,45 +216,6 @@ export interface Resolver {
   ): Promise<ResolveBatch>;
   status(): ResolverStatus;
   close(): Promise<void>;
-}
-
-// ── Declared here until U6a moves them to @cpg/extract (settled decision 4) ──
-
-/** Labels a file-owned node may carry; the excluded ones are walker- or graph-scoped. */
-export type FileOwnedLabel = Exclude<
-  NodeLabel,
-  'DIRECTORY' | 'FILE' | 'SYMBOL' | 'COMMUNITY' | 'TAG' | 'META_DATA'
->;
-
-/** Mirrors model's PropertyType. */
-export type PropertyValue = string | number | boolean | readonly string[];
-
-export type EndpointRef =
-  | { readonly by: 'id'; readonly label: FileOwnedLabel; readonly key: string }
-  | { readonly by: 'fqn'; readonly label: 'SYMBOL'; readonly key: string };
-
-export interface EdgeElement {
-  readonly type: EdgeType;
-  readonly from: EndpointRef;
-  readonly to: EndpointRef;
-  readonly properties: Readonly<Record<string, PropertyValue>>;
-}
-
-/** The resolver-facing structural slice of C-EXTRACT's ExtractedFile (U6a's full type is assignable to it). */
-export interface ExtractedFileRefs {
-  readonly path: WorkspacePath;
-  readonly revision_id: string;
-  readonly edges: readonly EdgeElement[];
-  readonly refSites: readonly RefSite[];
-}
-
-/** Not exported: nothing can mint an ExtractedFileSet before U6a's sealExtractedFiles. */
-declare const SEALED: unique symbol;
-
-export interface ExtractedFileSet {
-  readonly [SEALED]: true;
-  readonly files: ReadonlyMap<WorkspacePath, ExtractedFileRefs>;
-  readonly refSites: readonly RefSite[];
 }
 
 // ── The process seam (C-RESOLVE INV-18): a resolver spawns nothing except through it ──
