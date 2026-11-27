@@ -639,6 +639,26 @@ describe('GraphVisualizer.applyDelta', () => {
     expect({ framed: surface.framed.length, starts: surface.starts }).toEqual(before);
   });
 
+  // Round two (review 10, sprint 34): decision 111 is positions only. The save removes m, so every
+  // edge it had goes (C-MODEL I-8), and only the edges it re-adds come back.
+  it('a save that removes and re-adds a MODULE drops the edges it does not re-add', () => {
+    const { viz, surface } = mount();
+    viz.render({
+      seq: 0,
+      nodes: [D, F, node('m', 'MODULE'), node('s', 'SYMBOL')],
+      edges: [entry('d', 'f'), edge('m', 'f', 'SOURCE_FILE'), edge('m', 's', 'DEFINES')],
+    });
+    expect(surface.links).toHaveLength(6);
+    viz.applyDelta(
+      delta({
+        removedNodeIds: ['m'],
+        addedNodes: [node('m', 'MODULE')],
+        addedEdges: [edge('m', 'f', 'SOURCE_FILE')],
+      }),
+    );
+    expect(surface.links).toHaveLength(4);
+  });
+
   // round two (review b2)
   it('keeps a hidden relationship type hidden through a delta, new edges of that type included', () => {
     const { viz, surface, legend } = mount();

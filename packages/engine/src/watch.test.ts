@@ -23,6 +23,7 @@ import {
   type GraphPayload,
   type WorkspacePath,
 } from '@cpg/model';
+import { createExtractor, type Extractor } from '@cpg/extract';
 import { createParseService, type ParseService } from '@cpg/parse';
 import { createMemoryStore, type MemoryStore } from '@cpg/sink';
 import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
@@ -1907,13 +1908,15 @@ describe('HeldCode (decision 102)', () => {
       [wp('pkg/sub/c.py'), ['m4']],
       [wp('pkg2/b.py'), ids],
       [wp('pkg/a.py'), ['m1', 'm2']],
+      // round two (review 11): code-unit order puts `B` before `a`; localeCompare does not
+      [wp('pkg/B.py'), ['m6']],
       [wp('pkg.py'), ['m5']],
       [wp('z.py'), []],
     ]);
     const code = new HeldCode(source);
     ids.push('late');
     source.set(wp('new.py'), ['n']);
-    expect(code.filesAt(wp('pkg'))).toEqual(['pkg/a.py', 'pkg/sub/c.py']);
+    expect(code.filesAt(wp('pkg'))).toEqual(['pkg/B.py', 'pkg/a.py', 'pkg/sub/c.py']);
     expect(code.filesAt(wp('pkg/a.py'))).toEqual(['pkg/a.py']);
     expect(code.filesAt(wp('pkg/sub'))).toEqual(['pkg/sub/c.py']);
     expect([
@@ -1962,11 +1965,12 @@ describe('planCodeWrites (decision 102)', () => {
       fileChange('moved', 'b2.py', 'rb', 'b.py'),
       fileChange('created', 'n.py', 'rn'),
       fileChange('changed', 'c.ts', 'rc'),
-      dirChange('created', 'lib.py'),
+      // round two (review 4): a directory or a deletion with a revision is still no replace-file
+      aChange('created', 'directory', 'lib.py', { revision_id: 'rd' }),
       fileChange('deleted', 'pkg/sub/c.py'),
       fileChange('changed', 'x.py'),
       dirChange('moved', 'd', 'olddir'),
-      fileChange('deleted', 'gone.py'),
+      fileChange('deleted', 'gone.py', 'rg'),
       fileChange('changed', 'keep.py', 'rk'),
       fileChange('created', 'README', 'rr'),
     ];
@@ -2021,6 +2025,8 @@ describe('toCodeDelta (decision 102)', () => {
           revision_id: 'r1',
           range: '1:0-2:0',
           doc: null,
+          // round two (review 6): an array value is copied, never shared with the op
+          tags: ['x', 'y'],
         },
       },
       { label: 'FILE', key: 'pkg/m.py', properties: { interface_hash: 'h', loc: 2 } },
@@ -2070,7 +2076,13 @@ describe('toCodeDelta (decision 102)', () => {
           id: M,
           type: 'MODULE',
           name: 'pkg.m',
-          data: { name: 'pkg.m', file: 'pkg/m.py', revision_id: 'r1', range: '1:0-2:0' },
+          data: {
+            name: 'pkg.m',
+            file: 'pkg/m.py',
+            revision_id: 'r1',
+            range: '1:0-2:0',
+            tags: ['x', 'y'],
+          },
         },
         { id: S, type: 'SYMBOL', data: { fqn: S, language: 'python', kind: 'module', name: 42 } },
       ],
@@ -2082,6 +2094,7 @@ describe('toCodeDelta (decision 102)', () => {
       removedNodeIds: ['old1', 'old2'],
     });
     expect(delta?.addedNodes[0]?.data).not.toBe(replace.nodes[0]?.properties);
+    expect(delta?.addedNodes[0]?.data?.['tags']).not.toBe(replace.nodes[0]?.properties['tags']);
     expect(replace.nodes[0]?.properties).toHaveProperty('doc', null);
   });
 
@@ -2106,6 +2119,29 @@ describe('toCodeDelta (decision 102)', () => {
       edges: [],
     };
     expect(toCodeDelta(fileOnly, [], 6)).toBeUndefined();
+    // round two (review 5): an edge-only replace-file is a delta (C-SINK INV-4)
+    const edgeOnly: ReplaceFileOp = {
+      ...fileOnly,
+      edges: [
+        {
+          type: 'SOURCE_FILE',
+          fromLabel: 'MODULE',
+          fromKey: 'm',
+          toLabel: 'FILE',
+          toKey: 'e.py',
+          properties: {},
+        },
+      ],
+    };
+    expect(toCodeDelta(edgeOnly, [], 6)).toStrictEqual({
+      seq: 6,
+      file: 'e.py',
+      revision_id: 'r',
+      producer: 'code',
+      addedNodes: [],
+      addedEdges: [{ source: 'm', target: 'file:e.py', type: 'SOURCE_FILE' }],
+      removedNodeIds: [],
+    });
     expect(toCodeDelta(fileOnly, ['x'], 6)).toMatchObject({
       addedNodes: [],
       removedNodeIds: ['x'],
@@ -2123,6 +2159,9 @@ async function batchAfter(run: Run, n: number, ...events: RawWatchEvent[]): Prom
   if (batch === undefined) throw new Error(`no batch ${String(n)}`);
   return batch;
 }
+/** A batch's code deltas as `[file, removedNodeIds]`, in order. */
+const codeRemovals = (b: BatchEvent): [string, readonly string[]][] =>
+  b.deltas.filter((d) => d.producer === 'code').map((d) => [d.file, d.removedNodeIds]);
 const codeSeqs = (ops: readonly WriteOp[]): number[] =>
   ops.flatMap((op) => (op.kind === 'replace-file' || op.kind === 'delete-file' ? [op.seq] : []));
 const increasing = (xs: readonly number[]): boolean =>
@@ -2520,26 +2559,305 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     expect(module?.data?.['revision_id']).toBe(sha256('a = 3\n'));
   });
 
-  it('once a stop has begun, the batch writes nothing more and emits nothing', async () => {
+  // Round two (review 1): what a live batch wrote is held, so later batches remove, move and forget
+  // it; and no batch reads the store to learn it (C-EXT may_not).
+  it('what a live batch writes is held: a later move, save and delete remove it; a moved-from file is forgotten', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const reads: string[] = [];
+    const run = await start(root, { memory: recorder({ reads }) });
+    await ready(run);
+    await writeFile(join(root, 'n.py'), 'n = 1\n');
+    await batchAfter(run, 1, raw(root, 'created', 'n.py', 5001));
+    await rename(join(root, 'n.py'), join(root, 'm.py'));
+    const moved = await batchAfter(
+      run,
+      2,
+      raw(root, 'deleted', 'n.py', 5100),
+      raw(root, 'created', 'm.py', 5101),
+    );
+    await writeFile(join(root, 'm.py'), 'm = 2\n');
+    const changed = await batchAfter(run, 3, raw(root, 'changed', 'm.py', 5200));
+    await rm(join(root, 'm.py'));
+    const deleted = await batchAfter(run, 4, raw(root, 'deleted', 'm.py', 5300));
+    await writeFile(join(root, 'n.py'), 'n = 3\n');
+    const again = await batchAfter(run, 5, raw(root, 'created', 'n.py', 5400));
+    expect([moved, changed, deleted, again].map(codeRemovals)).toEqual([
+      [
+        ['n.py', [mod('n.py')]],
+        ['m.py', []],
+      ],
+      [['m.py', [mod('m.py')]]],
+      [['m.py', [mod('m.py')]]],
+      [['n.py', []]],
+    ]);
+    expect(opKinds(run.memory.ops.slice(-2))).toEqual(['merge-filesystem', 'replace-file n.py']);
+    expect(reads).toEqual(['memory']);
+  });
+
+  // Round two (review 2): IndexRun.heldCode is the store's own code for a file the index did not
+  // rewrite (revision-unchanged, or its code tier failed), never a SYMBOL, and nothing for a file
+  // the index deleted.
+  it("the index's held code: the store's for a file not rewritten, never a SYMBOL, none for a removed file", async () => {
+    const root = await tree({ 'a.py': 'a = 1\n', 'f.py': 'f = 1\n', 'd/keep.py': 'k = 1\n' });
+    const memory = recorder();
+    const planted = (path: string, revision: string, extra: readonly NodeRow[] = []): WriteOp => ({
+      kind: 'replace-file',
+      file: wp(path),
+      seq: memory.store.nextWriteSeq(),
+      revision_id: revision,
+      nodes: [
+        {
+          label: 'MODULE',
+          key: mod(path),
+          properties: { name: 'planted', file: path, revision_id: revision, range: '1:0-1:0' },
+        },
+        ...extra,
+      ],
+      edges: [],
+    });
+    await memory.store.open();
+    await memory.store.write({
+      kind: 'merge-filesystem',
+      directories: [dirRow('.'), dirRow('d')],
+      files: [
+        fileRow('a.py', sha256('a = 1\n'), 'python'),
+        fileRow('f.py', 'old', 'python'),
+        fileRow('d/gone.py', 'g', 'python'),
+      ],
+      links: [],
+      moves: [],
+      removals: [],
+    });
+    const symbol: NodeRow = {
+      label: 'SYMBOL',
+      key: sym('a.py'),
+      properties: { fqn: sym('a.py'), language: 'python', kind: 'module', file: 'a.py' },
+    };
+    await memory.store.write(planted('a.py', sha256('a = 1\n'), [symbol]));
+    await memory.store.write(planted('f.py', 'old'));
+    await memory.store.write(planted('d/gone.py', 'g'));
+    await memory.store.close();
+    const run = await start(root, {
+      memory,
+      codeTier: {
+        createParseService: (options) => {
+          const service = createParseService(options);
+          return {
+            ...service,
+            parse: (request) =>
+              request.key === 'f.py'
+                ? Promise.resolve({ ok: false, error: { code: 'no-tree', message: 'planted' } })
+                : service.parse(request),
+          };
+        },
+      },
+    });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'a.py'), 'a = 2\n');
+    await rm(join(root, 'f.py'));
+    await rm(join(root, 'd'), { recursive: true });
+    const batch = await batchAfter(
+      run,
+      1,
+      raw(root, 'changed', 'a.py', 5001),
+      raw(root, 'deleted', 'f.py', 5002),
+      raw(root, 'deleted', 'd', 5003),
+    );
+    expect(opKinds(after(run.memory, skip)).toSorted()).toEqual([
+      'delete-file d/keep.py',
+      'delete-file f.py',
+      'merge-filesystem',
+      'replace-file a.py',
+    ]);
+    expect(codeRemovals(batch).toSorted((x, y) => byText(x[0], y[0]))).toEqual([
+      ['a.py', [mod('a.py')]],
+      ['d/keep.py', [mod('d/keep.py')]],
+      ['f.py', [mod('f.py')]],
+    ]);
+  });
+
+  // Round two (review 3): the held state advances only once every write of the batch landed, so a
+  // retry after a delete-file landed deletes and says it again.
+  it('a batch refused after its delete-file landed is retried whole: the delete-file and its code delta again', async () => {
     const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
-    const controller = new AbortController();
+    // index: 1 merge-filesystem, 2 and 3 replace-file; the batch: 4 delete-file, 5 refused, then 6-8
+    const memory = recorder({ rejects: (n) => n === 5 });
+    const run = await start(root, { memory });
+    await ready(run);
+    await rm(join(root, 'a.py'));
+    await writeFile(join(root, 'b.py'), 'b = 2\n');
+    run.backend.fire(raw(root, 'deleted', 'a.py', 5001), raw(root, 'changed', 'b.py', 5002));
+    run.clock.advance(100);
+    await until(() => run.clock.armed() > 0, 'the backoff');
+    run.clock.advance(200);
+    await until(() => batches(run.events).length === 1, 'the batch');
+    expect(opKinds(memory.ops.slice(3))).toEqual([
+      'delete-file a.py',
+      'merge-filesystem',
+      'delete-file a.py',
+      'merge-filesystem',
+      'replace-file b.py',
+    ]);
+    const [batch] = batches(run.events);
+    expect(batch && codeRemovals(batch)).toEqual([
+      ['a.py', [mod('a.py')]],
+      ['b.py', [mod('b.py')]],
+    ]);
+    expect(batch?.write).toEqual(sums(memory, 5));
+  });
+
+  // Round two (review 8): a failing save of a held file keeps what it held, and the batch's other
+  // files are still written.
+  it('a held file whose save fails keeps its code; the files after it in the batch are written', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
+    let failing = false;
+    const run = await start(root, {
+      codeTier: {
+        createParseService: (options) => {
+          const service = createParseService(options);
+          return {
+            ...service,
+            parse: (request) =>
+              failing && request.key === 'a.py'
+                ? Promise.resolve({ ok: false, error: { code: 'no-tree', message: 'planted' } })
+                : service.parse(request),
+          };
+        },
+      },
+    });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    failing = true;
+    await writeFile(join(root, 'a.py'), 'a = 2\n');
+    await writeFile(join(root, 'b.py'), 'b = 2\n');
+    const saved = await batchAfter(
+      run,
+      1,
+      raw(root, 'changed', 'a.py', 5001),
+      raw(root, 'changed', 'b.py', 5002),
+    );
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file b.py']);
+    expect(codeRemovals(saved)).toEqual([['b.py', [mod('b.py')]]]);
+    expect(run.events.flatMap((e) => (e.kind === 'warning' ? [e.message] : []))).toEqual([
+      'code tier: 1 python file at the FILE tier only (no-tree): a.py: planted',
+    ]);
+    const module = (await run.memory.store.readAll()).nodes.find((n) => n.id === mod('a.py'));
+    expect(module?.data?.['revision_id']).toBe(sha256('a = 1\n'));
+    await rm(join(root, 'a.py'));
+    const deleted = await batchAfter(run, 2, raw(root, 'deleted', 'a.py', 5100));
+    expect(codeRemovals(deleted)).toEqual([['a.py', [mod('a.py')]]]);
+  });
+
+  // Round two (review 7): a file extracted with no MODULE is written and said after the failures; its
+  // op adds nothing to the picture, so it sends no delta and takes no graph seq.
+  it('no MODULE: its replace-file is written, no code delta, its warning after the failure warnings', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const real = createExtractor();
+    const bare: Extractor = {
+      ...real,
+      extract: (request) => {
+        const got = real.extract(request);
+        return got.kind === 'ok' && request.path === 'bare.py'
+          ? { kind: 'ok', file: { ...got.file, nodes: [], symbols: [], edges: [] } }
+          : got;
+      },
+    };
+    const host = recorder({
+      id: 'host',
+      during: async (op) => {
+        if (op.kind === 'merge-filesystem') await rm(join(root, 'gone.py'), { force: true });
+      },
+    });
+    const run = await start(root, { host, codeTier: { extractor: bare } });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'bare.py'), 'x = 1\n');
+    await writeFile(join(root, 'gone.py'), 'g = 1\n');
+    const batch = await batchAfter(
+      run,
+      1,
+      raw(root, 'created', 'bare.py', 5001),
+      raw(root, 'created', 'gone.py', 5002),
+    );
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file bare.py']);
+    expect([batch.deltas.map((d) => [d.seq, d.producer]), batch.graphSeq]).toEqual([
+      [
+        [1, 'filesystem'],
+        [2, 'filesystem'],
+      ],
+      2,
+    ]);
+    expect(run.events.flatMap((e) => (e.kind === 'warning' ? [e.message] : []))).toEqual([
+      expect.stringMatching(
+        /^code tier: 1 python file at the FILE tier only \(read-failed\): gone\.py: /,
+      ),
+      'code tier: bare.py: no MODULE, so no SOURCE_FILE edge',
+    ]);
+    expect(kinds(run.events)).toEqual(['ready', 'batch', 'warning', 'warning']);
+  });
+
+  // Round two (review 9): the initial batch's code-tier warnings come right after ready.
+  it("the initial batch's failure warning is emitted after ready, so ready is seq 0", async () => {
+    const root = await tree({ 'a.ts': 'a' });
     let armed = false;
     const host = recorder({
       id: 'host',
-      during: () => {
-        if (armed) controller.abort();
+      during: async (op) => {
+        if (armed && op.kind === 'merge-filesystem')
+          await rm(join(root, 'late.py'), { force: true });
       },
     });
-    const run = await start(root, { host, controller });
-    await ready(run);
-    const skip = run.memory.ops.length;
-    await rm(join(root, 'a.py'));
-    await writeFile(join(root, 'b.py'), 'b = 2\n');
-    armed = true;
-    run.backend.fire(raw(root, 'deleted', 'a.py', 5001), raw(root, 'changed', 'b.py', 5002));
-    run.clock.advance(100);
-    await run.done;
-    expect(opKinds(after(run.memory, skip))).toEqual(['delete-file a.py']);
-    expect(kinds(run.events)).toEqual(['ready', 'closed']);
+    const backend = backendFor(async () => {
+      await writeFile(join(root, 'late.py'), 'l = 1\n');
+      armed = true;
+    });
+    const run = await start(root, { backend, host });
+    await until(() => run.events.length >= 2, 'ready and its warning');
+    expect(run.events.map((e) => [e.kind, e.seq])).toEqual([
+      ['ready', 0],
+      ['warning', 1],
+    ]);
+    expect(run.events[1]).toMatchObject({
+      message: expect.stringMatching(
+        /^code tier: 1 python file at the FILE tier only \(read-failed\): late\.py: /,
+      ),
+    });
   });
+
+  // Round two (review 12): a stop that begins at each kind of write ends the job right there.
+  it.each([
+    ['delete-file', ['delete-file a.py']],
+    ['merge-filesystem', ['delete-file a.py', 'merge-filesystem']],
+    ['replace-file', ['delete-file a.py', 'merge-filesystem', 'replace-file b.py']],
+  ] as const)(
+    'once a stop has begun (at a %s), the batch writes nothing more and emits nothing',
+    async (at, written) => {
+      const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n', 'c.py': 'c = 1\n' });
+      const controller = new AbortController();
+      let armed = false;
+      const host = recorder({
+        id: 'host',
+        during: (op) => {
+          if (armed && op.kind === at) controller.abort();
+        },
+      });
+      const run = await start(root, { host, controller });
+      await ready(run);
+      const skip = run.memory.ops.length;
+      await rm(join(root, 'a.py'));
+      await writeFile(join(root, 'b.py'), 'b = 2\n');
+      await writeFile(join(root, 'c.py'), 'c = 2\n');
+      armed = true;
+      run.backend.fire(
+        raw(root, 'deleted', 'a.py', 5001),
+        raw(root, 'changed', 'b.py', 5002),
+        raw(root, 'changed', 'c.py', 5003),
+      );
+      run.clock.advance(100);
+      await run.done;
+      expect(opKinds(after(run.memory, skip))).toEqual(written);
+      expect(kinds(run.events)).toEqual(['ready', 'closed']);
+    },
+  );
 });
