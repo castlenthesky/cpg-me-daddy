@@ -254,7 +254,10 @@ beforeEach(() => {
   writeFileSync(join(root, 'sub', 'c.ts'), '');
   symlinkSync(join(root, 'a.ts'), join(root, 'link.ts'));
 });
+/** Each extension a test activated: deactivated after it, so no watch outlives its test (U4.2.2). */
+const active = [];
 afterEach(() => {
+  for (const deactivate of active.splice(0)) deactivate();
   vi.useRealTimers();
   rmSync(temp, { recursive: true, force: true });
 });
@@ -279,8 +282,9 @@ function activate(folder = root) {
   const run = (id) => seen.commands.get(id)();
   const deactivate = () => {
     extension.deactivate?.();
-    for (const subscription of subscriptions) subscription.dispose();
+    for (const subscription of subscriptions.splice(0)) subscription.dispose();
   };
+  active.push(deactivate);
   return { seen, vscode, run, deactivate };
 }
 
@@ -427,10 +431,18 @@ describe('verify in the editor', () => {
     // Round two (review b1): closing the panel leaves the verdict where it is.
     panel.dispose();
     expect([status.text, seen.diagnostics.size]).toEqual(['$(error) CPG 2', 1]);
-    // A re-index and its run clear what it fixed.
+    // U4.2.2: the watch is live, so cpg.openGraph only shows a new panel, sent the graph held. The watch
+    // sees the write once its debounce (the faked timers) fires, and a catch-up graph follows.
     await run('cpg.openGraph');
     const [, again] = seen.panels;
     again.send(READY);
+    expect(ofType(again, 'graph').map(({ epoch, seq }) => [epoch, seq])).toEqual([[1, 0]]);
+    await until(() => {
+      vi.advanceTimersByTime(100);
+      return ofType(again, 'graph').length === 2;
+    });
+    const [, caughtUp] = ofType(again, 'graph');
+    expect([caughtUp.epoch, caughtUp.seq > 0]).toEqual([1, true]);
     draw(again);
     vi.advanceTimersByTime(500);
     await until(() => !status.text.startsWith('$(error)'));

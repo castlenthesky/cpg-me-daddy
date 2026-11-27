@@ -1,5 +1,5 @@
-// REAL (U3.1.1 part 2, BMO-52; U3.1.2, BMO-56): when verify runs (C-EXT OQ-5; controller decisions 36
-// and 40). No clock of its own: the extension passes setTimeout, the tests a fake.
+// REAL (U3.1.1 part 2, BMO-52; U3.1.2, BMO-56; U4.2.2, BMO-132): when verify runs (C-EXT OQ-5; controller
+// decisions 36, 40 and 73). No clock of its own: the extension passes setTimeout, the tests a fake.
 
 import type { VerificationReport } from '@cpg/model';
 
@@ -15,6 +15,11 @@ export interface VerifySchedulerOptions {
   readonly onError: (thrown: unknown) => void;
   /** Calls `callback` once after `ms`; the function it returns cancels that. */
   readonly after: (ms: number, callback: () => void) => () => void;
+  /**
+   * Whether a finished run's report still describes the graph held (controller decision 73): false when
+   * the graph moved while it ran. Absent: every report is current.
+   */
+  readonly current?: (report: VerificationReport) => boolean;
 }
 
 /**
@@ -24,9 +29,14 @@ export interface VerifySchedulerOptions {
  * - requests during a run lead to exactly one more: at the end of the run when `now` was called
  *   during it; otherwise VERIFY_DEBOUNCE_MS after the last `changed`, or at the end of the run when
  *   that is later;
+ * - a run whose report is not `current` reports nothing (no onReport), and the `now` requests it would
+ *   have answered wait for the next run instead (decision 73). The change that moved the graph has
+ *   already asked for that run;
  * - `dispose` cancels the timer. After it nothing starts, a run still going reports nothing, and every
  *   `now` still open resolves with undefined. The host's own dispose is what keeps that run from posting
  *   to the page.
+ *
+ * SEAT (U4.2.2): `current` is not read yet.
  */
 export class VerifyScheduler {
   private readonly options: VerifySchedulerOptions;

@@ -706,13 +706,33 @@ describe('startGraphApp: the #cpg-verification banner (BMO-35 line 5)', () => {
     expect(page.channel.posted.map((m) => m.type)).toEqual(['ready', 'render-report']);
   });
 
-  it('shows a report that arrives before any graph, and the newer of two', () => {
+  // U4.2.2 (controller decision 73): before any graph the page's epoch is 0, the browser host's stamp then.
+  it('shows a report at epoch 0 that arrives before any graph, and the newer of two', () => {
     const page = start();
-    page.channel.deliver(verification(report));
-    expect(page.banner.textContent).toBe(verificationText(report));
-    const later: VerificationReport = { ...report, seq: 4, state: 'fail' };
+    const before: VerificationReport = { ...report, epoch: 0 };
+    page.channel.deliver(verification(before));
+    expect(page.banner.textContent).toBe(verificationText(before));
+    const later: VerificationReport = { ...before, seq: 4, state: 'fail' };
     page.channel.deliver(verification(later));
     expect(page.banner.textContent).toBe(verificationText(later));
+  });
+
+  // U4.2.2 (controller decision 73, BMO-85): a verdict on another graph is not this one's.
+  it("ignores a verification whose epoch is not the page's, before and after a graph", () => {
+    const page = start();
+    page.channel.deliver(verification(report));
+    expect(page.banner.textContent).toBeNull();
+    page.channel.deliver(graphMessage(P1, 2));
+    for (const epoch of [1, 3]) {
+      page.channel.deliver(verification({ ...report, epoch, state: 'fail' }));
+    }
+    expect(page.banner.textContent).toBeNull();
+    const current: VerificationReport = { ...report, epoch: 2, seq: 7 };
+    page.channel.deliver(verification(current));
+    expect(page.banner.textContent).toBe(verificationText(current));
+    page.channel.deliver(verification({ ...report, epoch: 1, state: 'fail' }));
+    expect(page.banner.textContent).toBe(verificationText(current));
+    expect(page.channel.posted.map((m) => m.type)).toEqual(['ready', 'render-report']);
   });
 
   it('leaves the picture alone', () => {

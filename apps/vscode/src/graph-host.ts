@@ -244,9 +244,11 @@ export class PanelGraphHost implements GraphHost {
 
   /**
    * The six checks over the payload, epoch and render-report held when it is called (verifyPayload,
-   * I-18): what lands while it runs makes the report's seq or epoch lag and is not judged. Every
-   * completed run is posted as a `verification` carrying its report's epoch and seq (I-22), to a page
-   * that is ready then (I-2); after dispose it posts nothing. Never rejects.
+   * I-18): what lands while it runs makes the report's seq or epoch lag and is not judged. A completed
+   * run is posted as a `verification` carrying its report's epoch and seq (I-22), to a page that is
+   * ready then (I-2), when the host's epoch and seq are still the report's; a run whose graph moved
+   * while it ran is stale and posted nowhere (controller decision 73, BMO-85), and is still returned.
+   * After dispose it posts nothing. Never rejects. SEAT (U4.2.2): the stale drop is not built yet.
    */
   async verify(fs: FilesystemProbe): Promise<VerificationReport> {
     const subject = {

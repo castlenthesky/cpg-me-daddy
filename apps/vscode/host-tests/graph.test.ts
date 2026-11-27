@@ -1,7 +1,8 @@
 // The U2 gate's assertions inside VS Code (U3.1.2, BMO-56; the retirement battery's Q21). Run by
 // @vscode/test-cli (`bun run test:vscode-host`) on a copy of ladder rung 07; the only thing read of the
 // extension is what `cpg.verify` resolves with (controller decision 40) and what the editor shows.
-// Expected values: 08-verification.md §3, C-EXT, controller decisions 35, 38 and 42, and the rung.
+// Expected values: 08-verification.md §3, C-EXT, controller decisions 35, 38, 42, 70, 72 and 75, and the
+// rung.
 //
 // A `pass` of render-reconciliation here proves that the bundle loaded in a real webview and that its page
 // reported the graph. It does NOT prove that a picture was drawn: the report counts the page's own buffers,
@@ -9,7 +10,7 @@
 // WebGL2, and no test here claims a drawing.
 
 import { strict as assert } from 'node:assert';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isWorkspacePath, type VerificationReport, type WorkspacePath } from '@cpg/model';
@@ -21,7 +22,11 @@ import { webglRenderer } from './webgl';
 const FILES = 3;
 const NODES = 5;
 const STALE = 'shapes/square.py';
+/** A file the tests add: one more FILE node in a directory that is already there. */
+const ADDED = 'shapes/live.py';
 const REPORT_MS = 20_000;
+/** How long the watch may take to bring a change on disk into the graph (decision 75). */
+const FOLLOW_MS = 10_000;
 const VERIFY_STATES = {
   'filesystem-reconciliation': 'pass',
   'identity-invariants': 'unavailable', // until U6c
@@ -68,6 +73,26 @@ async function reported(): Promise<VerificationReport> {
     await delay(100);
   }
 }
+/** The first verdict that `done` accepts, polling cpg.verify, or the last one when none does in time. */
+async function verdict(
+  done: (report: VerificationReport) => boolean,
+  ms = FOLLOW_MS,
+): Promise<VerificationReport> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const report = await verify();
+    if (done(report) || Date.now() > deadline) return report;
+    await delay(200);
+  }
+}
+/**
+ * The graph's FILE nodes through filesystem-reconciliation (the U3.1.2 seam, decision 40): `observed`
+ * counts them, and `pass` says they are the files on disk, directory by directory.
+ */
+const fileCount = (report: VerificationReport) => {
+  const { state, observed, expected } = check(report, 'filesystem-reconciliation');
+  return `${state} ${String(observed)}/${String(expected)}`;
+};
 const graphPanels = () =>
   vscode.window.tabGroups.all
     .flatMap(({ tabs }) => tabs)
@@ -152,72 +177,88 @@ suite('the graph in VS Code', () => {
     assert.equal(report.state, 'unavailable'); // the worst of the six, until U6c
   });
 
-  suite('with a file changed on disk since the index (E4)', () => {
+  // U4.2.2 (BMO-132; decisions 70, 72 and 75): one watch keeps the graph current, so a change on disk is in
+  // the graph within its debounce window, and nothing here can wait for a stale verdict. E4 (one stale
+  // revision fails revision-reconciliation alone) is proven in plain node, where the batch is scripted
+  // (graph-session.test.ts) or held behind faked timers (tools/extension.test.mjs).
+  suite('the graph follows the disk (U4.2.2)', () => {
     let original: Buffer;
     suiteSetup(async () => {
       original = await readFile(join(root, STALE));
     });
-    setup(async () => {
-      await fresh();
+    setup(fresh);
+    teardown(async () => {
+      await rm(join(root, ADDED), { force: true });
+      await writeFile(join(root, STALE), original);
+      const settled = await verdict(
+        (report) =>
+          fileCount(report) === `pass ${String(FILES)}/${String(FILES)}` &&
+          check(report, 'revision-reconciliation').state === 'pass',
+      );
+      assert.equal(
+        fileCount(settled),
+        `pass ${String(FILES)}/${String(FILES)}`,
+        'the fixture is back',
+      );
+    });
+
+    test('cpg.openGraph while the watch is live starts nothing: the epoch is kept', async () => {
+      const before = await verify();
+      await openGraph();
+      const after = await verify();
+      assert.equal(after.epoch, before.epoch); // no new initial snapshot (C-EXT I-13)
+      assert.equal(graphPanels().length, 1);
+    });
+
+    test('a file written on disk joins the graph, and leaves it when deleted, in one epoch', async () => {
+      const before = await verify();
+      await writeFile(join(root, ADDED), 'side = 4\n');
+      const more = `pass ${String(FILES + 1)}/${String(FILES + 1)}`;
+      const added = await verdict((report) => fileCount(report) === more);
+      assert.equal(fileCount(added), more, 'the new file never joined the graph');
+      assert.equal(added.epoch, before.epoch); // a catch-up snapshot (C-EXT I-13)
+      assert.ok(added.seq > before.seq, `seq ${String(added.seq)} after ${String(before.seq)}`);
+      await rm(join(root, ADDED));
+      const fewer = `pass ${String(FILES)}/${String(FILES)}`;
+      const removed = await verdict((report) => fileCount(report) === fewer);
+      assert.equal(fileCount(removed), fewer, 'the deleted file never left the graph');
+      assert.equal(removed.epoch, before.epoch);
+      assert.ok(removed.seq > added.seq, `seq ${String(removed.seq)} after ${String(added.seq)}`);
+      assert.deepEqual(cpgDiagnostics(), []);
+    });
+
+    test('one bit of one file on disk: the graph follows it, in the one panel', async () => {
+      const before = await verify();
       const changed = Buffer.from(original);
       changed[0] = (original[0] ?? 0) ^ 1; // one bit: the same names and sizes
       await writeFile(join(root, STALE), changed);
-    });
-    teardown(async () => {
-      await writeFile(join(root, STALE), original);
-      await openGraph();
-    });
-
-    test('revision-reconciliation fails alone, with one diagnostic, on that file', async () => {
-      const before = await verify();
-      assert.deepEqual(cpgDiagnostics(), [`${STALE} revision-reconciliation`]);
-      const failing = before.checks.filter(({ state }) => state === 'fail');
-      assert.deepEqual(
-        failing.map(({ id, localisedTo }) => [id, localisedTo]),
-        [['revision-reconciliation', [STALE]]],
+      const followed = await verdict(
+        (report) =>
+          report.seq > before.seq && check(report, 'revision-reconciliation').state === 'pass',
       );
-      assert.equal(before.state, 'fail');
-      const { 'render-reconciliation': _render, ...expected } = VERIFY_STATES;
-      const { 'render-reconciliation': render, ...states } = statesOf(before);
-      assert.deepEqual(states, { ...expected, 'revision-reconciliation': 'fail' });
-      if (renderer !== undefined) assert.equal(render, 'pass');
-    });
-
-    test('a second cpg.openGraph clears it, in the one panel', async () => {
-      const failed = await verify();
-      assert.equal(check(failed, 'revision-reconciliation').state, 'fail');
-      await openGraph();
-      const report = renderer === undefined ? await verify() : await reported();
-      assert.equal(check(report, 'revision-reconciliation').state, 'pass');
+      assert.ok(followed.seq > before.seq, 'the change never reached the graph');
+      assert.equal(check(followed, 'revision-reconciliation').state, 'pass');
+      assert.equal(followed.epoch, before.epoch);
       assert.deepEqual(cpgDiagnostics(), []);
       assert.equal(graphPanels().length, 1);
-      assert.equal(report.epoch, failed.epoch + 1); // C-EXT I-13
-      if (renderer !== undefined) {
-        assert.equal(check(report, 'render-reconciliation').state, 'pass');
-      }
     });
 
-    // The host verifies 500 ms after a render-report it accepts (decision 36), and each run sets the
-    // diagnostics again; nothing else asks for one here. So the event says the reloaded page was sent the
-    // graph and reported on it.
-    test('a webview that is reloaded is sent the graph again', async function () {
+    // A reloaded page draws the graph it is then sent. The file is written after the reload, so a
+    // render-report of the graph that holds it can only come from the page that came back.
+    test('a webview that is reloaded is kept in step with the graph', async function () {
       needsWebGL(this);
-      await verify();
-      await delay(1500); // no run is pending
-      const verified = new Promise<void>((resolve) => {
-        const subscription = vscode.languages.onDidChangeDiagnostics(({ uris }) => {
-          if (!uris.some((changed) => changed.fsPath === uri(STALE).fsPath)) return;
-          subscription.dispose();
-          resolve();
-        });
-      });
       await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction');
-      const outcome = await Promise.race([
-        verified.then(() => 'verified'),
-        delay(REPORT_MS).then(() => 'nothing happened'),
-      ]);
-      assert.equal(outcome, 'verified');
-      assert.equal(check(await verify(), 'render-reconciliation').state, 'pass');
+      await delay(1000);
+      await writeFile(join(root, ADDED), 'side = 4\n');
+      const report = await verdict((candidate) => {
+        const render = check(candidate, 'render-reconciliation');
+        return render.state === 'pass' && render.expected === NODES + 1;
+      }, REPORT_MS);
+      const render = check(report, 'render-reconciliation');
+      assert.deepEqual(
+        [render.state, render.observed, render.expected],
+        ['pass', NODES + 1, NODES + 1],
+      );
     });
   });
 

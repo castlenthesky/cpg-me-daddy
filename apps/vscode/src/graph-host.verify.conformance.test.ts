@@ -235,7 +235,8 @@ describe('I-18: all six checks, in enum order, stamped with the seq and epoch of
     expect(row(report, RENDER)).toBe('unavailable 0/0');
   });
 
-  it('a delta and its render-report mid-verify are not judged: the report lags by its seq', async () => {
+  // U4.2.2 (controller decision 73, BMO-85): a run whose graph moved is returned, and posted nowhere.
+  it('a delta and its render-report mid-verify are not judged: the report lags by its seq, and is not posted', async () => {
     const { host, page } = await showing();
     const { fs, open } = gated();
     const pending = host.verify(fs);
@@ -246,20 +247,37 @@ describe('I-18: all six checks, in enum order, stamped with the seq and epoch of
     expect(states(report)).toBe(ALL_PASS);
     expect(report).toMatchObject({ epoch: 1, seq: 4 });
     expect(report.checks.map((check) => check.asOfSeq)).toEqual([4, 4, 4, 4, 4, 4]);
-    expect(page.verifications).toMatchObject([{ epoch: 1, seq: 4 }]);
+    expect(page.verifications).toEqual([]);
     expect(host.seq()).toBe(5);
   });
 
-  it('a snapshot mid-verify is not judged either: the epoch lags too', async () => {
+  it('a snapshot mid-verify is not judged either: the epoch lags too, and it is not posted', async () => {
     const { host, page } = await showing();
     const { fs, open } = gated();
     const pending = host.verify(fs);
-    await host.onSnapshot({ seq: 9, nodes: [], edges: [] }, { seq: 9, cause: 'initial' });
+    await host.onSnapshot({ ...P, seq: 4 }, { seq: 4, cause: 'initial' });
     open();
     const report = await pending;
     expect(states(report)).toBe(ALL_PASS);
     expect(report).toMatchObject({ epoch: 1, seq: 4 });
-    expect(page.verifications).toMatchObject([{ epoch: 1, seq: 4 }]);
+    expect([host.epoch(), host.seq(), page.verifications]).toEqual([2, 4, []]);
+  });
+
+  it('a render-report mid-verify moves neither epoch nor seq, so the run is posted (I-22); a catch-up does', async () => {
+    const { host, page } = await showing();
+    const first = gated();
+    const posted = host.verify(first.fs);
+    page.send(drew(1, 4, 3));
+    first.open();
+    const report = await posted;
+    expect(states(report)).toBe(ALL_PASS);
+    expect(page.verifications).toMatchObject([{ epoch: 1, seq: 4, report }]);
+    const second = gated();
+    const dropped = host.verify(second.fs);
+    await host.onSnapshot({ ...P, seq: 6 }, { seq: 6, cause: 'catch-up' });
+    second.open();
+    expect(await dropped).toMatchObject({ epoch: 1, seq: 4 });
+    expect([host.epoch(), page.verifications.length]).toEqual([1, 1]);
   });
 });
 
@@ -491,7 +509,6 @@ describe('I-22: every completed verify is pushed as a verification message', () 
     const { host, page } = await showing();
     const { fs, open } = gated();
     const pending = host.verify(fs);
-    await host.onDelta(ADD_C, { seq: 5, cause: 'live' });
     page.onPost = () => {
       throw new Error('gone');
     };
