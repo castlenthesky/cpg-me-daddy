@@ -5,12 +5,7 @@ import type { GraphDelta, GraphNode, GraphPayload } from '@cpg/model';
 import { BufferStore, deltaParents } from './buffer-store';
 import { CAMERA_FOLLOW_THROTTLE_MS, CameraFollow } from './camera';
 import { EdgeStore, visibleLinks, type LinkBuffers } from './edge-store';
-import {
-  createMulberry32,
-  DEFAULT_FALLBACK_PARENT_EDGE_TYPES,
-  DEFAULT_HIERARCHY_EDGE_TYPE,
-  layoutPayload,
-} from './layout';
+import { createMulberry32, DEFAULT_PARENT_TABLE, layoutPayload, type ParentTable } from './layout';
 import { nodeLegendRows, relationshipLegendRows, type LegendRow } from './legend';
 import { REGISTRY_NODE_COLORS, type NodeColors } from './node-types';
 import { relationshipKey } from './relationship-types';
@@ -72,8 +67,8 @@ export interface GraphViews {
 export interface GraphVisualizerOptions {
   /** Seeds the layout and the jitter of delta-added nodes (re-seeded on every render). */
   readonly seed: number;
-  readonly hierarchyEdgeType?: string;
-  readonly fallbackParentEdgeTypes?: ReadonlySet<string>;
+  /** Places the layout's points and a delta's new ones; default `DEFAULT_PARENT_TABLE` (BMO-100). */
+  readonly parentTable?: ParentTable;
   /** A click on a live, shown node; never the synthetic root, a tombstone or a hidden type. */
   readonly onNodeClick?: (node: GraphNode) => void;
   /** The camera throttle's clock; default performance.now. */
@@ -104,8 +99,7 @@ export class GraphVisualizer {
   private readonly surface: GraphSurface | undefined;
   private readonly views: GraphViews;
   private readonly seed: number;
-  private readonly hierarchyEdgeType: string;
-  private readonly fallbackParentEdgeTypes: ReadonlySet<string>;
+  private readonly parentTable: ParentTable;
   private readonly onNodeClick: ((node: GraphNode) => void) | undefined;
   private readonly camera: CameraFollow;
   private readonly points = new BufferStore();
@@ -126,9 +120,7 @@ export class GraphVisualizer {
   ) {
     this.views = views;
     this.seed = options.seed;
-    this.hierarchyEdgeType = options.hierarchyEdgeType ?? DEFAULT_HIERARCHY_EDGE_TYPE;
-    this.fallbackParentEdgeTypes =
-      options.fallbackParentEdgeTypes ?? DEFAULT_FALLBACK_PARENT_EDGE_TYPES;
+    this.parentTable = options.parentTable ?? DEFAULT_PARENT_TABLE;
     this.onNodeClick = options.onNodeClick;
     this.camera = new CameraFollow(options.now ?? (() => performance.now()));
     this.random = createMulberry32(this.seed);
@@ -163,11 +155,7 @@ export class GraphVisualizer {
       return;
     }
     try {
-      const layout = layoutPayload(payload, {
-        seed: this.seed,
-        hierarchyEdgeType: this.hierarchyEdgeType,
-        fallbackParentEdgeTypes: this.fallbackParentEdgeTypes,
-      });
+      const layout = layoutPayload(payload, { seed: this.seed, parentTable: this.parentTable });
       this.random = createMulberry32(this.seed);
       this.points.load(layout, payload);
       this.points.recolour(this.nodeColors);
@@ -208,11 +196,7 @@ export class GraphVisualizer {
     try {
       // Sync live simulation positions first so existing points never snap back to their seeds.
       this.points.syncLive(surface.getPointPositions());
-      const parents = deltaParents(
-        delta.addedEdges,
-        this.hierarchyEdgeType,
-        this.fallbackParentEdgeTypes,
-      );
+      const parents = deltaParents(delta.addedEdges, this.parentTable);
       this.points.applyDelta(delta, parents, this.random);
       this.edges.apply(delta.removedNodeIds, delta.addedEdges);
       this.pushBuffers(surface);

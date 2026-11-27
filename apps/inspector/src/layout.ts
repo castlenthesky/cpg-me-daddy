@@ -70,33 +70,49 @@ export function linkWidthForSizes(sizeA: number, sizeB: number): number {
 const VIRTUAL_ROOT_ID = String.fromCharCode(0) + 'inspector/virtual-root';
 const VIRTUAL_ROOT_TYPE = '__root__';
 
-/**
- * Default hierarchy edge type for seeding the tree. Replaced the archive's
- * `'CONTAINS'` because the schema (`packages/model/src/schema`,
- * `docs/outline/04-schema.yaml`) renamed directory/file containment to
- * `'HAS_ENTRY'` and reserves `'CONTAINS'` for Joern's opposite meaning.
- */
-export const DEFAULT_HIERARCHY_EDGE_TYPE: string = 'HAS_ENTRY';
+/** Which end of an edge is the parent of the other end when the layout places a point. */
+export type ParentEnd = 'source' | 'target';
+
+/** One row of a parent table: an edge type, and which of its two ends is the parent. */
+export interface ParentRule {
+  readonly type: string;
+  readonly parent: ParentEnd;
+}
 
 /**
- * Edge types that may stand in for a hierarchy edge when placing an otherwise
- * parentless node — see `buildHierarchy`'s second pass.
+ * Where a point goes: beside its parent, found through these rows (BMO-100, controller decision
+ * 103). The same table places a full payload (`layoutPayload`) and a delta's new points
+ * (`deltaParents`), so a point a delta adds lands where a full layout would have put it.
  *
- * `DEFINES` points from a declaration to the symbol it declares, so adopting
- * along it puts a symbol inside its definer's cluster. It is *not* a
- * containment edge and nothing else should treat it as one; this is purely a
- * layout anchor, and it is what keeps symbols from forcing the synthetic-root
- * path.
+ * - `hierarchy`: containment. A node takes its parent from the first row, in this order, that has
+ *   an edge naming it as the child; within a row, the first such edge in edge order.
+ * - `fallback`: layout anchors, not containment. Only a node no hierarchy row placed may take one,
+ *   again first row first; the anchor must itself have a parent, and the adoption must close no
+ *   cycle (`buildHierarchy`'s second pass).
  */
-export const DEFAULT_FALLBACK_PARENT_EDGE_TYPES: ReadonlySet<string> = new Set(['DEFINES']);
+export interface ParentTable {
+  readonly hierarchy: readonly ParentRule[];
+  readonly fallback: readonly ParentRule[];
+}
+
+/**
+ * SEAT (sprint 33 RED, BMO-100): today's two rows only (`HAS_ENTRY`, then the `DEFINES` fallback);
+ * BMO-100's table lands with the implementation.
+ */
+export const DEFAULT_PARENT_TABLE: ParentTable = {
+  hierarchy: [{ type: 'HAS_ENTRY', parent: 'source' }],
+  fallback: [{ type: 'DEFINES', parent: 'source' }],
+};
+
+// SEAT (sprint 33 RED): the layout still reads these two instead of a table.
+const HIERARCHY_EDGE_TYPE = 'HAS_ENTRY';
+const FALLBACK_PARENT_EDGE_TYPES: ReadonlySet<string> = new Set(['DEFINES']);
 
 export interface LayoutOptions {
   /** Required: the only source of jitter. The same payload and seed give byte-identical buffers. */
   readonly seed: number;
-  /** Edge type that seeds the tree; default `DEFAULT_HIERARCHY_EDGE_TYPE` (`'HAS_ENTRY'`). */
-  readonly hierarchyEdgeType?: string;
-  /** Edge types that may adopt a still-parentless node; default `DEFAULT_FALLBACK_PARENT_EDGE_TYPES`. */
-  readonly fallbackParentEdgeTypes?: ReadonlySet<string>;
+  /** The rows that find each point's parent; default `DEFAULT_PARENT_TABLE`. SEAT: ignored at RED. */
+  readonly parentTable?: ParentTable;
 }
 
 export interface LayoutResult {
@@ -342,11 +358,9 @@ function placeNode(
  * reproduces the original single-tree layout.
  */
 export function layoutPayload(payload: GraphPayload, options: LayoutOptions): LayoutResult {
-  const {
-    seed,
-    hierarchyEdgeType = DEFAULT_HIERARCHY_EDGE_TYPE,
-    fallbackParentEdgeTypes = DEFAULT_FALLBACK_PARENT_EDGE_TYPES,
-  } = options;
+  const { seed } = options;
+  const hierarchyEdgeType = HIERARCHY_EDGE_TYPE;
+  const fallbackParentEdgeTypes = FALLBACK_PARENT_EDGE_TYPES;
   const hierarchy = buildHierarchy(payload, hierarchyEdgeType, fallbackParentEdgeTypes);
 
   const weights = new Map<string, number>();

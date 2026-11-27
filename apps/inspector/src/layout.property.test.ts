@@ -184,3 +184,97 @@ describe('for any hierarchy and seed', () => {
     expect(everyNodeTargeted.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+// Sprint 33 (BMO-100, controller decision 103): random trees drawn with every row of the default
+// parent table, each edge written in its row's direction. Expected parents are the generated ones.
+type Row = readonly [type: string, parent: 'source' | 'target', tier: 'hierarchy' | 'fallback'];
+const ROWS: readonly Row[] = [
+  ['HAS_ENTRY', 'source', 'hierarchy'],
+  ['DECLARES', 'source', 'hierarchy'],
+  ['HAS_PARAM', 'source', 'hierarchy'],
+  ['SOURCE_FILE', 'target', 'hierarchy'],
+  ['IN_SCOPE', 'target', 'hierarchy'],
+  ['DEFINES', 'source', 'fallback'],
+  ['IMPORTS', 'source', 'fallback'],
+  ['CALLS', 'source', 'fallback'],
+  ['INHERITS_FROM', 'source', 'fallback'],
+];
+const HIERARCHY = ROWS.filter((row) => row[2] === 'hierarchy');
+const NOISE = ['REACHING_DEF', 'CONTAINS', undefined] as const;
+
+interface Tree {
+  readonly payload: GraphPayload;
+  readonly parents: Readonly<Record<string, string>>;
+  readonly rows: readonly string[];
+}
+
+/**
+ * n0 is the root; each later node hangs off an earlier one by a random row. A fallback anchor must
+ * have a parent, so the root's children come by hierarchy rows; a fallback-placed node parents
+ * nothing (as a SYMBOL). Edges are shuffled, and edges of types no row names are mixed in.
+ */
+function arbitraryTree(lcgNext: () => number): Tree {
+  const next = (): number => lcgNext() >>> 16;
+  const n = 2 + (next() % 19);
+  const parents: Record<string, string> = {};
+  const rows: string[] = [];
+  const leaves = new Set<number>();
+  const edges: GraphEdge[] = [];
+  for (let i = 1; i < n; i++) {
+    const open = Array.from({ length: i }, (_, j) => j).filter((j) => !leaves.has(j));
+    const p = open[next() % open.length] ?? 0;
+    const choices = p === 0 ? HIERARCHY : ROWS;
+    const [type, end, tier] = choices[next() % choices.length] ?? ROWS[0] ?? ['', 'source', ''];
+    if (tier === 'fallback') leaves.add(i);
+    parents[`n${i}`] = `n${p}`;
+    rows.push(type);
+    const [source, target] = end === 'source' ? [`n${p}`, `n${i}`] : [`n${i}`, `n${p}`];
+    edges.push({ source, target, type });
+  }
+  for (let k = 0; k < n / 2; k++) {
+    const type = NOISE[next() % NOISE.length];
+    const [source, target] = [`n${next() % n}`, `n${next() % n}`];
+    edges.push(type === undefined ? { source, target } : { source, target, type });
+  }
+  const shuffled = edges.map((e) => ({ key: next(), e })).toSorted((a, b) => a.key - b.key);
+  const nodes = Array.from({ length: n }, (_, i) => node(`n${i}`));
+  return { payload: { seq: 0, nodes, edges: shuffled.map(({ e }) => e) }, parents, rows };
+}
+
+/** Each placed point's tree parent: the tree links come first in `links`, one per non-root point. */
+function treeParents(result: LayoutResult): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < result.ids.length - 1; i++) {
+    const parent = result.ids[result.links[2 * i] ?? -1];
+    const child = result.ids[result.links[2 * i + 1] ?? -1];
+    if (parent !== undefined && child !== undefined) out[child] = parent;
+  }
+  return out;
+}
+
+describe('for any tree drawn with the parent table and any seed (sprint 33)', () => {
+  it('places every node under its table parent, from the one root, with no synthetic point', () => {
+    const next = lcg(33);
+    const trees = Array.from({ length: 200 }, () => arbitraryTree(next));
+    const got = trees.map((t, run) => {
+      const result = layoutPayload(t.payload, { seed: SEEDS[run % SEEDS.length] ?? 0 });
+      return { points: result.ids.length, root: result.ids[0], parents: treeParents(result) };
+    });
+    const want = trees.map((t) => ({
+      points: t.payload.nodes.length,
+      root: 'n0',
+      parents: t.parents,
+    }));
+    expect(got).toEqual(want);
+    // Anti-vacuity: every row places nodes, and some trees run five rows deep.
+    const uses = ROWS.map(
+      ([type]) => trees.flatMap((t) => t.rows).filter((r) => r === type).length,
+    );
+    expect(uses.filter((count) => count < 20)).toEqual([]);
+    const depth = (t: Tree, id: string): number =>
+      t.parents[id] === undefined ? 0 : 1 + depth(t, t.parents[id] ?? '');
+    expect(
+      trees.filter((t) => Object.keys(t.parents).some((id) => depth(t, id) >= 5)).length,
+    ).toBeGreaterThan(20);
+  });
+});

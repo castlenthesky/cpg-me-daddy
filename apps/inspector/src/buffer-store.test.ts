@@ -7,7 +7,7 @@
 import type { GraphEdge, GraphNode, GraphPayload } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
 import { BufferStore, deltaParents } from './buffer-store';
-import type { LayoutResult } from './layout';
+import { DEFAULT_PARENT_TABLE, type LayoutResult, type ParentTable } from './layout';
 import { REGISTRY_NODE_COLORS } from './node-types';
 
 const GREY = [0.6, 0.6, 0.6, 1];
@@ -84,8 +84,10 @@ const f32 = (values: readonly number[]): number[] => Array.from(Float32Array.fro
 const add = (...addedNodes: GraphNode[]) => ({ addedNodes, removedNodeIds: [] });
 const remove = (...removedNodeIds: string[]) => ({ addedNodes: [], removedNodeIds });
 
+// Sprint 33 (BMO-100): deltaParents reads the layout's parent table. The first four cases are
+// reworked from the HAS_ENTRY + DEFINES signature; the off-table types replace CALLS, now a row.
 describe('deltaParents', () => {
-  const fallback: ReadonlySet<string> = new Set(['DEFINES']);
+  const T = DEFAULT_PARENT_TABLE;
 
   it('takes the first hierarchy edge, ahead of an earlier fallback or other edge', () => {
     const edges = [
@@ -94,23 +96,87 @@ describe('deltaParents', () => {
       edge('r', 'x', 'HAS_ENTRY'),
       edge('s', 'x', 'HAS_ENTRY'),
     ];
-    expect(deltaParents(edges, 'HAS_ENTRY', fallback).get('x')).toBe('r');
+    expect(deltaParents(edges, T).get('x')).toBe('r');
   });
 
   it('falls back to the first fallback-type edge, never to the first edge of any type', () => {
-    const edges = [edge('p', 'x', 'CALLS'), edge('q', 'x', 'DEFINES'), edge('t', 'x', 'DEFINES')];
-    expect(deltaParents(edges, 'HAS_ENTRY', fallback).get('x')).toBe('q');
+    const edges = [
+      edge('p', 'x', 'REACHING_DEF'),
+      edge('q', 'x', 'DEFINES'),
+      edge('t', 'x', 'DEFINES'),
+    ];
+    expect(deltaParents(edges, T).get('x')).toBe('q');
   });
 
   it('gives no parent without a hierarchy or fallback edge', () => {
-    const parents = deltaParents([edge('p', 'x', 'CALLS'), edge('p', 'x')], 'HAS_ENTRY', fallback);
-    expect(parents.size).toBe(0);
+    const edges = [edge('p', 'x', 'REACHING_DEF'), edge('p', 'x'), edge('p', 'x', 'CONTAINS')];
+    expect(deltaParents(edges, T).size).toBe(0);
   });
 
-  it('honours a custom hierarchy type and fallback set, per target', () => {
-    const edges = [edge('a', 'x', 'HAS_ENTRY'), edge('b', 'x', 'CONTAINS'), edge('c', 'y', 'REF')];
-    const parents = deltaParents(edges, 'CONTAINS', new Set(['REF']));
-    expect(Object.fromEntries(parents)).toEqual({ x: 'b', y: 'c' });
+  it("honours a custom table's rows and ends, per child", () => {
+    const edges = [
+      edge('a', 'x', 'HAS_ENTRY'),
+      edge('b', 'x', 'CONTAINS'),
+      edge('c', 'y', 'REF'),
+      edge('z', 'd', 'OWNS'),
+    ];
+    const custom: ParentTable = {
+      hierarchy: [
+        { type: 'CONTAINS', parent: 'source' },
+        { type: 'OWNS', parent: 'target' },
+      ],
+      fallback: [{ type: 'REF', parent: 'source' }],
+    };
+    expect(Object.fromEntries(deltaParents(edges, custom))).toEqual({ x: 'b', y: 'c', z: 'd' });
+  });
+
+  it("reads each default row's parent end: SOURCE_FILE and IN_SCOPE point at the parent", () => {
+    const edges = [
+      edge('d', 'f', 'HAS_ENTRY'),
+      edge('m', 't', 'DECLARES'),
+      edge('u', 'p', 'HAS_PARAM'),
+      edge('m2', 'f2', 'SOURCE_FILE'),
+      edge('c', 'u2', 'IN_SCOPE'),
+      edge('t3', 's1', 'DEFINES'),
+      edge('i', 's2', 'IMPORTS'),
+      edge('c3', 's3', 'CALLS'),
+      edge('t4', 's4', 'INHERITS_FROM'),
+    ];
+    expect(Object.fromEntries(deltaParents(edges, T))).toEqual({
+      f: 'd',
+      t: 'm',
+      p: 'u',
+      m2: 'f2',
+      c: 'u2',
+      s1: 't3',
+      s2: 'i',
+      s3: 'c3',
+      s4: 't4',
+    });
+  });
+
+  it('takes rows in table order, whatever order the delta lists the edges in', () => {
+    // x has an edge of all nine rows, z of DECLARES and the three after it, w of the last three
+    // fallbacks; each listed last row first, from a distinct anchor.
+    const edges = [
+      edge('a9', 'x', 'INHERITS_FROM'),
+      edge('a8', 'x', 'CALLS'),
+      edge('a7', 'x', 'IMPORTS'),
+      edge('a6', 'x', 'DEFINES'),
+      edge('x', 'a5', 'IN_SCOPE'),
+      edge('x', 'a4', 'SOURCE_FILE'),
+      edge('a3', 'x', 'HAS_PARAM'),
+      edge('a2', 'x', 'DECLARES'),
+      edge('a1', 'x', 'HAS_ENTRY'),
+      edge('z', 'b5', 'IN_SCOPE'),
+      edge('z', 'b4', 'SOURCE_FILE'),
+      edge('b3', 'z', 'HAS_PARAM'),
+      edge('b2', 'z', 'DECLARES'),
+      edge('c4', 'w', 'INHERITS_FROM'),
+      edge('c3', 'w', 'CALLS'),
+      edge('c2', 'w', 'IMPORTS'),
+    ];
+    expect(Object.fromEntries(deltaParents(edges, T))).toEqual({ x: 'a1', z: 'b2', w: 'c2' });
   });
 });
 
@@ -247,6 +313,64 @@ describe('BufferStore.applyDelta additions', () => {
     expect(xy(store, 4)).toEqual([2058, 2048]);
     expect(store.sizes[3]).toBeCloseTo(17.6, 5);
     expect(store.sizes[4]).toBeCloseTo(17.6 * 0.88, 4);
+  });
+
+  // Sprint 33 (controller decision 85): a new point starts beside its parent whatever order the
+  // delta lists them in. Every draw is 0.75, so each point sits (+10, +10) from its parent.
+  it('seeds a node beside a parent the same delta lists after it', () => {
+    const store = loaded();
+    store.applyDelta(
+      add(node('k'), node('h', 'DIRECTORY')),
+      new Map([
+        ['k', 'h'],
+        ['h', 'f'],
+      ]),
+      always(0.75),
+    );
+    const at = (id: string): number[] => xy(store, store.liveIndex(id) ?? -1);
+    expect([at('h'), at('k')]).toEqual([
+      [310, 410],
+      [320, 420],
+    ]);
+    expect(store.sizes[store.liveIndex('k') ?? -1]).toBeCloseTo(9 * 0.88 * 0.88, 4);
+  });
+
+  it('seeds a chain listed child first, each beside its parent', () => {
+    const store = loaded();
+    store.applyDelta(
+      add(node('c3'), node('c2'), node('c1')),
+      new Map([
+        ['c3', 'c2'],
+        ['c2', 'c1'],
+        ['c1', 'f'],
+      ]),
+      always(0.75),
+    );
+    const at = (id: string): number[] => xy(store, store.liveIndex(id) ?? -1);
+    expect([at('c1'), at('c2'), at('c3')]).toEqual([
+      [310, 410],
+      [320, 420],
+      [330, 430],
+    ]);
+  });
+
+  it('seeds a parent loop inside one delta, and a node that is its own parent, at the centre', () => {
+    const store = loaded();
+    store.applyDelta(
+      add(node('a'), node('b'), node('z')),
+      new Map([
+        ['a', 'b'],
+        ['b', 'a'],
+        ['z', 'z'],
+      ]),
+      always(0.5),
+    );
+    const at = (id: string): number[] => xy(store, store.liveIndex(id) ?? -1);
+    expect([at('a'), at('b'), at('z')]).toEqual([
+      [2048, 2048],
+      [2048, 2048],
+      [2048, 2048],
+    ]);
   });
 
   it('treats a parent removed in the same delta as not locatable', () => {

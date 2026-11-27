@@ -7,6 +7,7 @@ import {
   ROOT_POINT_SIZE,
   SPACE_SIZE,
   type LayoutResult,
+  type ParentTable,
 } from './layout';
 import {
   hexToRgba,
@@ -22,24 +23,27 @@ function isFiniteNumber(value: number | undefined): value is number {
   return Number.isFinite(value);
 }
 
-/** First incoming hierarchy edge per target, else first incoming fallback-type edge (matches buildHierarchy). */
+/**
+ * Each delta-added child's parent under `table` (the layout's table, BMO-100): the first row, hierarchy
+ * rows then fallback rows, with an edge naming the node as its child; within a row, the first such
+ * edge in `addedEdges` order. No anchor or cycle check: a parent that cannot be located seeds at the
+ * centre (`BufferStore.applyDelta`).
+ *
+ * SEAT (sprint 33 RED): ignores `table` and keeps today's rule (first `HAS_ENTRY`, else first
+ * `DEFINES`, source as the parent).
+ */
 export function deltaParents(
   addedEdges: readonly GraphEdge[],
-  hierarchyEdgeType: string,
-  fallbackParentEdgeTypes: ReadonlySet<string>,
+  _table: ParentTable,
 ): ReadonlyMap<string, string> {
   const parents = new Map<string, string>();
   for (const edge of addedEdges) {
-    if (edge.type === hierarchyEdgeType && !parents.has(edge.target)) {
+    if (edge.type === 'HAS_ENTRY' && !parents.has(edge.target)) {
       parents.set(edge.target, edge.source);
     }
   }
   for (const edge of addedEdges) {
-    if (
-      edge.type !== undefined &&
-      fallbackParentEdgeTypes.has(edge.type) &&
-      !parents.has(edge.target)
-    ) {
+    if (edge.type === 'DEFINES' && !parents.has(edge.target)) {
       parents.set(edge.target, edge.source);
     }
   }
