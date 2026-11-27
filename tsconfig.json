@@ -4,6 +4,7 @@
   "references": [
     { "path": "packages/model" },
     { "path": "packages/parse" },
+    { "path": "packages/extract" },
     { "path": "packages/resolve" },
     { "path": "packages/watch" },
     { "path": "packages/engine" },

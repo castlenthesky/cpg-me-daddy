@@ -64,15 +64,15 @@ A language server is the independent oracle for `[resolution]`. `bun run ladder:
 
 ## Open questions
 
-A line tagged `# ?Qn` is a judgment call the plan does not settle yet. Each tagged line is the author's best reading, and the owner's ruling replaces it.
+A line tagged `# ?Qn` is a judgment call the plan does not settle yet. Each tagged line is the author's best reading, and the owner's ruling replaces it. Q1 to Q3 are ruled (controller decisions 90 to 92, owner delegation, 2026-11-26), and their tags are gone.
 
-- **Q1.** Does a MODULE mint a SYMBOL, and is its fqn `` `main.py`/ `` (the path with no descriptor)? `DEFINES` allows MODULE as a source, but no example shows the fqn.
-- **Q2.** Does a PARAM mint a SYMBOL? `DEFINES` allows PARAM as a source and SCIP spells a parameter `(name)`, but AM-5 bans `local N` symbols, and a parameter is local in most SCIP indexers.
-- **Q3.** The CALL ordinal counts every call in its scope. Inserting an unrelated statement above rung 04's two calls changes no id, but inserting a call above them renumbers both. Is that the intended stability? `04-schema.yaml` `measured_stability` lists inserted lines, not inserted calls.
+- **Q1, ruled.** A MODULE mints a SYMBOL whose fqn is its path with no descriptor, `` `main.py`/ ``, and DEFINES it from the MODULE (decision 90). A whole-module import needs it as a target.
+- **Q2, ruled.** A PARAM mints no SYMBOL in v1 (decision 91): AM-5 bans local symbols, and a parameter is local in most SCIP indexers. `DEFINES` still allows PARAM as a source; removing that endpoint is the owner's call.
+- **Q3, ruled.** The CALL ordinal counts every call in its region, in pre-order (an outer call before the calls in its arguments, then source order), and the region is the enclosing METHOD, or `$root` at module level. IMPORT ordinals count the same way (decision 92). Inserting an unrelated statement above rung 04's two calls changes no id. Inserting a call above them renumbers both, as intended.
 - **Q4.** Does a constructor call resolve to the class (`Greeter#`) or to its initializer? basedpyright and tsserver both answer with the class.
 - **Q5.** What does the extractor emit for a region with a syntax error: nothing, an UNKNOWN, or the declarations tree-sitter recovered?
 - **Q6.** For `export function f()`, does `range` span the `export_statement` or the `function_declaration` inside it?
 
 ## Not on the ladder yet
 
-Decorators, `REACHING_DEF`, `INHERITS_FROM`, star and re-exported imports, import cycles, external and builtin targets (`print`), and edits between two revisions of a rung. Each one is a later rung, added when the stage that owns it lands.
+Decorators, `REACHING_DEF`, `INHERITS_FROM`, star and re-exported imports, import cycles, external and builtin targets (`print`), and edits between two revisions of a rung. Each one is a later rung, added when the stage that owns it lands. Nested named declarations (a `def` or `class` inside a function body) are not descended in v1 (decision 92), so no rung shows them.

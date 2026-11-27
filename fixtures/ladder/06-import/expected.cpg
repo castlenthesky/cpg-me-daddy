@@ -27,9 +27,9 @@ DECLARES file:util.py:MODULE:$root -> file:util.py:METHOD:helper
 IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/
 DEFINES file:main.py:METHOD:main -> `main.py`/main().
-DEFINES file:util.py:MODULE:$root -> `util.py`/    # ?Q1
+DEFINES file:util.py:MODULE:$root -> `util.py`/
 DEFINES file:util.py:METHOD:helper -> `util.py`/helper().
 
 [resolution]

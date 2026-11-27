@@ -5,8 +5,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { PropertySpec } from './schema';
-import { edgeSpec, nodeSpec, parseNodeId } from './schema';
+import type { PropertySpec, SymbolDescriptor, SymbolDescriptorKind } from './schema';
+import { edgeSpec, makeNodeId, makeSymbolFqn, MODULE_SCOPE, nodeSpec, parseNodeId } from './schema';
 
 const LADDER = join(__dirname, '../../../fixtures/ladder');
 const SECTIONS = ['parse', 'filesystem', 'structural', 'symbols', 'resolution'] as const;
@@ -19,7 +19,13 @@ const DESCRIPTOR_END: Readonly<Record<string, string>> = {
   TYPE_DECL: '#',
   METHOD: ').',
   MEMBER: '.',
-  PARAM: ')',
+};
+
+/** The descriptor each enclosing declaration contributes; MODULE is the fqn's owner, not a descriptor. */
+const DESCRIPTOR_KIND: Readonly<Record<string, SymbolDescriptorKind>> = {
+  TYPE_DECL: 'type',
+  METHOD: 'method',
+  MEMBER: 'term',
 };
 
 /** The section that owns each label or edge type; anything not listed is `structural`. */
@@ -72,6 +78,30 @@ function labelOf(id: string): string | undefined {
   if (parts?.form === 'file') return 'FILE';
   if (parts?.form === 'directory') return 'DIRECTORY';
   return parts?.kind;
+}
+
+/**
+ * The fqn a DEFINES from `id` must target: the path, then one descriptor per declaration on the rung whose
+ * scope is a prefix of `id`'s scope (controller decisions 89 and 90). A message when the chain breaks.
+ */
+function expectedSymbol(
+  id: string,
+  declared: ReadonlyMap<string | undefined, string | undefined>,
+): string {
+  const parts = parseNodeId(id);
+  if (parts?.form !== 'scoped') return `(not a scoped id: ${id})`;
+  const scope = parts.scope[0] === MODULE_SCOPE ? [] : parts.scope;
+  const descriptors: SymbolDescriptor[] = [];
+  for (const [i, name] of scope.entries()) {
+    const frames: [string, ...string[]] = [scope[0] ?? name, ...scope.slice(1, i + 1)];
+    const label = Object.keys(DESCRIPTOR_KIND).find((kind) =>
+      declared.has(makeNodeId({ form: 'scoped', path: parts.path, kind, scope: frames })),
+    );
+    const kind = DESCRIPTOR_KIND[label ?? ''];
+    if (kind === undefined) return `(no declaration on the rung for ${frames.join('.')})`;
+    descriptors.push({ kind, name });
+  }
+  return makeSymbolFqn({ form: 'local', path: parts.path, descriptors });
 }
 
 function checkProperties(
@@ -186,6 +216,23 @@ describe('fixtures/ladder', () => {
         if (!to.endsWith(end)) problems.push(`${f.at} a ${label} symbol ends with "${end}": ${to}`);
       }
       expect(problems).toEqual([]);
+    });
+
+    it('every DEFINES target is the fqn of its source and the declarations around it', () => {
+      const problems: string[] = [];
+      for (const f of edgeFacts.filter((x) => x.words[0] === 'DEFINES')) {
+        const [, from = '', , to = ''] = f.words;
+        const want = expectedSymbol(from, declared);
+        if (to !== want) problems.push(`${f.at} ${to} is not ${want}`);
+      }
+      expect(problems).toEqual([]);
+    });
+
+    it('no PARAM defines a SYMBOL in v1 (controller decision 91)', () => {
+      const params = edgeFacts
+        .filter((f) => f.words[0] === 'DEFINES' && declared.get(f.words[1]) === 'PARAM')
+        .map((f) => f.at);
+      expect(params).toEqual([]);
     });
 
     it('puts each fact in the section that owns it', () => {

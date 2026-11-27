@@ -35,12 +35,11 @@ HAS_PARAM file:shapes/square.py:METHOD:area -> file:shapes/square.py:PARAM:area.
 IN_SCOPE file:main.py:CALL:main:0 -> file:main.py:METHOD:main
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/
 DEFINES file:main.py:METHOD:main -> `main.py`/main().
-DEFINES file:shapes/__init__.py:MODULE:$root -> `shapes/__init__.py`/    # ?Q1
-DEFINES file:shapes/square.py:MODULE:$root -> `shapes/square.py`/    # ?Q1
+DEFINES file:shapes/__init__.py:MODULE:$root -> `shapes/__init__.py`/
+DEFINES file:shapes/square.py:MODULE:$root -> `shapes/square.py`/
 DEFINES file:shapes/square.py:METHOD:area -> `shapes/square.py`/area().
-DEFINES file:shapes/square.py:PARAM:area.side -> `shapes/square.py`/area().(side)    # ?Q2
 
 [resolution]
 IMPORTS file:main.py:IMPORT:$root:0 -> `shapes/square.py`/area(). status=resolved

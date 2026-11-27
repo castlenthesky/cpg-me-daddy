@@ -15,5 +15,5 @@ SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
 DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:greet
 
 [symbols]
-DEFINES file:main.py:MODULE:$root -> `main.py`/    # ?Q1
+DEFINES file:main.py:MODULE:$root -> `main.py`/
 DEFINES file:main.py:METHOD:greet -> `main.py`/greet().
