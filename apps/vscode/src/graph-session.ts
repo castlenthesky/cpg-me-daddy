@@ -75,18 +75,21 @@ interface Watch {
   /** Settles after the first refresh settles, or when the watch has ended. */
   firstGraph: Promise<void>;
   settleFirst: (() => void) | undefined;
+  /** Listeners subscribed on this watch's rescan trigger (decision 79). */
+  readonly rescanListeners: Set<() => void>;
   /** Settles when watch() has resolved, the refresh settled and the session closed. */
   ended: Promise<void>;
 }
 
 /**
  * One workspace's graph in the editor, kept current by ONE watch (U4.2.2, BMO-132; controller decisions
- * 70 to 74). Whatever fails, the extension stays usable.
+ * 70 to 74, 78, 79). Whatever fails, the extension stays usable.
  *
  * A watch loads the configuration, builds a NEW engine, connects, and runs `engine.watch({ config: {
- * ...config, trailingMs, ceilingMs }, session }, onEvent, signal)`, the debounce window being the
- * configuration's `watch.trailingMs` and `watch.ceilingMs`. Its session is closed once `watch()` has
- * resolved and its refresh has settled. VS Code's own file events are not used (VD-33, P-A).
+ * ...config, trailingMs, ceilingMs, rescanIntervalMs }, session, rescan }, onEvent, signal)`, the
+ * debounce window and rescan interval coming from the configuration's `watch.*`. Its session is
+ * closed once `watch()` has resolved and its refresh has settled. VS Code's own file events are not
+ * used (VD-33, P-A).
  * - `ready` and each `batch` ask for a refresh at the event's seq: `engine.inspect` on the watch's
  *   session, then `host.onSnapshot({ ...payload, seq }, { seq, cause })`. Refreshes are latest-wins:
  *   one in flight, at most one queued, and a newer request replaces the queued one. There are no
@@ -105,6 +108,7 @@ interface Watch {
  * - a warning `CPG: <warnings joined by '; '>` after the first snapshot, when there are any: the
  *   configuration's, then ready's IndexReport's;
  * - a warning `CPG: <message>` for each `warning` event;
+ * - a warning `CPG: no graph is being watched` when `cpg.rescan` runs with no live watch;
  * - an error `CPG: open a folder first` with no workspace folder;
  * - an error `CPG: cannot read the configuration: <message>` or `CPG: cannot open the graph store:
  *   <message>` when the watch cannot start; `CPG: the watch stopped: <message>` for an `error` event
@@ -190,8 +194,15 @@ export class GraphSession {
    * watched`. Nothing after dispose.
    */
   rescan(): void {
-    // SEAT: decision 79 (sprint 25): fire the live watch's rescan listeners.
-    throw new Error('SEAT: GraphSession.rescan() lands in sprint 25 (decision 79)');
+    this.log.info('cpg.rescan');
+    if (this.disposed) return;
+    if (this.current?.live !== true) {
+      this.warn('CPG: no graph is being watched');
+      return;
+    }
+    for (const listener of Array.from(this.current.rescanListeners)) {
+      listener();
+    }
   }
 
   /** The editor's theme changed. */
@@ -258,6 +269,7 @@ export class GraphSession {
       readyWarnings: [],
       firstGraph: Promise.resolve(),
       settleFirst: undefined,
+      rescanListeners: new Set<() => void>(),
       ended: Promise.resolve(),
     };
     watch.firstGraph = new Promise<void>((resolve) => {
@@ -308,8 +320,17 @@ export class GraphSession {
             ...config,
             trailingMs: config.watch.trailingMs,
             ceilingMs: config.watch.ceilingMs,
+            rescanIntervalMs: config.watch.rescanIntervalMs,
           },
           session,
+          rescan: {
+            subscribe: (listener) => {
+              watch.rescanListeners.add(listener);
+              return () => {
+                watch.rescanListeners.delete(listener);
+              };
+            },
+          },
         },
         (event) => this.onEvent(watch, resources, event),
         watch.stop.signal,

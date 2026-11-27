@@ -2,7 +2,14 @@
 // rule 3, check-deps rule engine-call-site); this package defines it and never calls it.
 
 import { realpath } from 'node:fs/promises';
-import { CPG_SCHEMA, type GraphPayload, type SchemaDocInput } from '@cpg/model';
+import {
+  CPG_SCHEMA,
+  isWorkspacePath,
+  WORKSPACE_ROOT,
+  type GraphPayload,
+  type SchemaDocInput,
+  type WorkspacePath,
+} from '@cpg/model';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
 import { createMemoryStore, type GraphSink, type MemoryStore } from '@cpg/sink';
@@ -27,7 +34,7 @@ import type {
 } from './port';
 import { verifyStore } from './verify';
 import { filesystemTier, type FilesystemTier } from './walker/filesystem-tier';
-import { walkWorkspace } from './walker/walker';
+import { walkWorkspace, type WalkResult } from './walker/walker';
 import { runWatch, type IndexRun } from './watch';
 
 export interface EngineConfig {
@@ -67,7 +74,14 @@ export interface EngineDeps {
   readonly timers?: TimerApi;
 }
 
-function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
+/**
+ * Turns a walked filesystem tier into ONE `merge-filesystem` WriteOp, carrying `removals` for any
+ * stale store paths to drop before upserting (decision 77; empty on dry runs).
+ */
+function toMergeFilesystemOp(
+  tier: FilesystemTier,
+  removals: readonly WorkspacePath[] = [],
+): WriteOp {
   const directories: NodeRow[] = [];
   const files: NodeRow[] = [];
   const byId = new Map<string, NodeRow>();
@@ -98,7 +112,27 @@ function toMergeFilesystemOp(tier: FilesystemTier): WriteOp {
     });
   }
 
-  return { kind: 'merge-filesystem', directories, files, links, moves: [], removals: [] };
+  return { kind: 'merge-filesystem', directories, files, links, moves: [], removals };
+}
+
+/**
+ * Paths the store still holds as FILE or DIRECTORY nodes that the walk did not find for that label
+ * (decision 77, S25-2): never the root `'.'` (C-STORE INV-7), never non-workspace paths, no
+ * duplicates. Every other node type is ignored.
+ */
+function stalePaths(payload: GraphPayload, walk: WalkResult): readonly WorkspacePath[] {
+  const walkedFiles = new Set<string>(walk.files.map((file) => file.path));
+  const walkedDirs = new Set<string>(walk.directories.map((dir) => dir.path));
+  const removals = new Set<WorkspacePath>();
+  for (const node of payload.nodes) {
+    if (node.type !== 'FILE' && node.type !== 'DIRECTORY') continue;
+    const path = node.data?.['path'];
+    if (typeof path !== 'string' || path === WORKSPACE_ROOT || !isWorkspacePath(path)) continue;
+    if (node.type === 'FILE' ? !walkedFiles.has(path) : !walkedDirs.has(path)) {
+      removals.add(path);
+    }
+  }
+  return [...removals];
 }
 
 function unbuiltConsumers(consumers: ConsumerSwitches): readonly string[] {
@@ -130,6 +164,12 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
     return first;
   }
 
+  /**
+   * Walks the workspace and writes one `merge-filesystem` op. With a session, reads the built-in
+   * memory store first so paths the walk did not find for their label are removed across every sink
+   * in that same op (decision 77, S25-2); a dry run (`session === null`) reads nothing and writes
+   * with `removals: []` to a NullGraphStore.
+   */
   async function runIndex(
     req: IndexRequest,
     onProgress: (progress: IndexProgress) => void,
@@ -187,11 +227,12 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
       };
     }
 
-    const op = toMergeFilesystemOp(filesystemTier(walkResult));
+    const tier = filesystemTier(walkResult);
 
     let nodesWritten = 0;
     let edgesWritten = 0;
     if (req.session === null) {
+      const op = toMergeFilesystemOp(tier);
       const nullStore = createNullGraphStore();
       await nullStore.open();
       try {
@@ -202,6 +243,8 @@ export function createEngine(config: EngineConfig, deps: EngineDeps = {}): CpgEn
         await nullStore.close();
       }
     } else {
+      const removals = stalePaths(await memory.readAll(), walkResult);
+      const op = toMergeFilesystemOp(tier, removals);
       const receipt = await writeAll(op);
       nodesWritten = receipt.nodesWritten;
       edgesWritten = receipt.edgesWritten;

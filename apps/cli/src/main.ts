@@ -51,6 +51,15 @@ void run(process.argv.slice(2), io, {
     ),
   cwd: process.cwd(),
   signal: controller.signal,
+  // SIGHUP is heard only while a watch is subscribed (decision 79).
+  rescan: {
+    subscribe(listener) {
+      process.on('SIGHUP', listener);
+      return () => {
+        process.off('SIGHUP', listener);
+      };
+    },
+  },
 }).then((code) => {
   process.exitCode = code;
 });

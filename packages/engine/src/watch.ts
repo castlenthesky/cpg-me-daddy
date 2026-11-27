@@ -188,14 +188,20 @@ export function toBatchOp(
  * 3. A rejected `createWatchSession`: `error` (a WatchError-shaped rejection, such as root-missing,
  *    is `workspace`; anything else `engine-rejected`), then `closed { reason: 'error' }`.
  *
- * The sink (decisions 62, 63): each batch with changes is written once through `deps.write`
+ * The sink (decisions 62, 63, 80): each batch with changes is written once through `deps.write`
  * (`toBatchOp`), and the batch is acknowledged only after that resolves, so known state advances
  * only on confirmed writes (C-SINK INV-19); an empty batch is not written. Then, with `at = now()`:
  * - the initial batch emits `ready { root: req.config.root, report }`, the first event (seq 0);
- * - every other batch emits `batch { changes, write: { nodesWritten, edgesWritten, statementCount }
- *   of the receipt, latencyMs: { t0_t1: null, t1_t2: settledAt - firstEventAt, t2_t3: at -
- *   settledAt, total: t1_t2 + t2_t3 } }`.
+ * - every other batch emits `batch { cause: batch.cause, changes, write: { nodesWritten,
+ *   edgesWritten, statementCount } of the receipt, latencyMs: { t0_t1: null, t1_t2: settledAt -
+ *   firstEventAt, t2_t3: at - settledAt, total: t1_t2 + t2_t3 } }`.
  * A throw from `onEvent` is contained: it never rejects the batch (that would rewrite it).
+ *
+ * Drift crawl (decisions 78, 79; S25-1, S25-3): `interval = req.config.rescanIntervalMs ?? 0`.
+ * `onRescanDone` re-arms a single countdown timer (`deps.timers ?? globalThis`) for `interval` ms
+ * whenever `interval > 0` and no stop has begun; when it fires, it calls `session.rescan()`. After
+ * `createWatchSession` resolves (and only if no stop has begun), the countdown is armed once and
+ * `req.rescan` is subscribed: each command clears any armed timer and calls `session.rescan()`.
  *
  * Warnings and errors (decision 63): `onDegraded(paths, error)` is a `warning` whose message names
  * every path; a non-fatal backend error is a `warning` whose message starts with its code. A
@@ -203,9 +209,11 @@ export function toBatchOp(
  * fatal backend error is `error { workspace }`, then `closed { reason: 'error' }`, once the session
  * has closed; its rejection of a start in progress is not reported twice.
  *
- * Stop: `signal` aborting closes the session, then `closed { reason: 'signal' }`. Once a stop has
- * begun (abort, or a fatal error), only `closed` follows: no `ready`, `batch` or `warning`, and a
- * write still in flight is not awaited (a hung sink must not hang the stop; decision 51).
+ * Stop: `signal` aborting clears any armed rescan timer and unsubscribes `req.rescan` before
+ * closing the session, then `closed { reason: 'signal' }`. Once a stop has begun
+ * (abort, or a fatal error), nothing is armed or fires, only `closed` follows: no `ready`, `batch`
+ * or `warning`, and a write still in flight is not awaited (a hung sink must not hang the stop;
+ * decision 51).
  */
 export async function runWatch(
   deps: WatchDeps,
@@ -265,6 +273,28 @@ export async function runWatch(
   }
 
   let session: WatchSession | undefined;
+  const interval = req.config.rescanIntervalMs ?? 0;
+  const timers: TimerApi = deps.timers ?? globalThis;
+  /** The armed rescan countdown; a TimerApi handle is `unknown`, so it is boxed. */
+  let countdown: { readonly handle: unknown } | undefined;
+  let unsubscribe: (() => void) | undefined;
+
+  function disarm(): void {
+    if (countdown !== undefined) timers.clearTimeout(countdown.handle);
+    countdown = undefined;
+  }
+
+  function fire(): void {
+    countdown = undefined;
+    if (stop === undefined) session?.rescan();
+  }
+
+  function arm(): void {
+    disarm();
+    if (stop !== undefined || interval <= 0) return;
+    countdown = { handle: timers.setTimeout(fire, interval) };
+  }
+
   try {
     if (stop === undefined) {
       let indexRun: IndexRun | undefined;
@@ -326,8 +356,7 @@ export async function runWatch(
             emit(
               {
                 kind: 'batch',
-                // SEAT: decision 80 passes the session batch's cause (sprint 25).
-                cause: 'live',
+                cause: batch.cause,
                 changes: batch.changes,
                 write: {
                   nodesWritten: receipt.nodesWritten,
@@ -353,6 +382,7 @@ export async function runWatch(
             ...(req.config.trailingMs !== undefined ? { trailingMs: req.config.trailingMs } : {}),
             ...(req.config.ceilingMs !== undefined ? { ceilingMs: req.config.ceilingMs } : {}),
             ...(deps.timers !== undefined ? { timers: deps.timers } : {}),
+            onRescanDone: arm,
             onError(error) {
               if (stop !== undefined) return;
               if (error.fatal) {
@@ -372,6 +402,15 @@ export async function runWatch(
           requestStop({ reason: 'error', failure: toFailure(error, req.config.root) });
         }
 
+        if (session !== undefined && stop === undefined) {
+          arm();
+          unsubscribe = req.rescan?.subscribe(() => {
+            if (stop !== undefined) return;
+            disarm();
+            session?.rescan();
+          });
+        }
+
         if (session !== undefined) {
           await stopped;
         }
@@ -379,6 +418,8 @@ export async function runWatch(
     }
   } finally {
     signal.removeEventListener('abort', onAbort);
+    disarm();
+    unsubscribe?.();
     if (session !== undefined) {
       try {
         await session.close();
