@@ -406,6 +406,7 @@ interface SetUp {
   readonly closeFails?: boolean;
   readonly onReport?: (report: VerificationReport) => void;
   readonly log?: Logger;
+  readonly grammarDir?: string;
 }
 
 function setUp(over: SetUp = {}) {
@@ -434,6 +435,7 @@ function setUp(over: SetUp = {}) {
   const session = new GraphSession({
     root: over.root,
     version: '9.8.7',
+    ...(over.grammarDir === undefined ? {} : { grammarDir: over.grammarDir }),
     createEngine: (config) => {
       engines.push(config);
       const n = engines.length;
@@ -632,6 +634,21 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
       expect([watch.signal.aborted, s.closes]).toEqual([false, []]);
     },
   );
+
+  // Controller decision 112: the grammar folder of the extension's install reaches the engine.
+  it('gives the engine the grammarDir it was given, and none when it was given none', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const grammarDir = '/install/apps/vscode/dist/grammars';
+    const given = setUp({ root, grammarDir });
+    void given.session.openGraph();
+    await given.watching(1);
+    const none = setUp({ root });
+    void none.session.openGraph();
+    await none.watching(1);
+    const consumers = { inspect: false, store: 'memory', vscode: true };
+    expect(given.engines).toEqual([{ version: '9.8.7', consumers, grammarDir }]);
+    expect(none.engines.map((config) => Object.hasOwn(config, 'grammarDir'))).toEqual([false]);
+  });
 
   it('resolves once ready is a graph: an initial snapshot at seq 0, a new epoch, then the warnings', async () => {
     const root = await directory({ 'a.ts': 'a', 'b.py': 'b' });

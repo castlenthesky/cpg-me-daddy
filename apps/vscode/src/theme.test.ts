@@ -9,6 +9,7 @@ const PALETTE = {
   nodeColors: {
     DIRECTORY: '#ff9933',
     FILE: '#4db3ff',
+    MODULE: '#B5CEA8',
     METHOD: '#4FC1FF',
     TYPE_DECL: '#4EC9B0',
     CALL: '#CE9178',

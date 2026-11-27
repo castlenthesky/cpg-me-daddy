@@ -113,11 +113,44 @@ function readResolutionValue(raw: unknown): EdgeResolution | undefined {
   return out;
 }
 
-/** data.location -> Read<NodeLocation>. A malformed result is code 'malformed-location' with nodeId = node.id. */
+/**
+ * The location the code tier writes as schema properties (controller decision 108), read when
+ * `data.location` is absent and `data.range` or `data.name_range` is present:
+ *
+ * - `data.range` is the schema's `range` string (04-schema.yaml, `formatRange`):
+ *   `startLine:startCol-endLine:endCol`, lines 1-based, columns 0-based UTF-16, end exclusive. Read
+ *   back exactly as `formatRange` writes it: four decimals with no sign and no leading zero (a lone
+ *   `0` is a zero), each a safe integer as written, both lines >= 1, and the end not before the
+ *   start. Row = line - 1, column as written: the one 1-based to 0-based conversion.
+ * - `data.file` is the owning file: a WorkspacePath (`isWorkspacePath`) other than `'.'`.
+ * - `data.name_range`, when present (not undefined or null), is a second string of the same form.
+ *
+ * Present: `{ filePath: file, range }`, plus `nameRange` when `name_range` is present; fresh objects
+ * holding only those keys. Otherwise malformed, code `malformed-location`, `nodeId` = node.id, detail
+ * `node <JSON id> data.<key> is malformed` for the first key that fails, in the order `range`, `file`,
+ * `name_range` (a missing `range` fails as `range`).
+ */
+// SEAT (decision 108)
+function readSchemaLocation(node: GraphNode): Read<NodeLocation> {
+  throw new Error(`SEAT: readSchemaLocation(${node.id}) is decision 108`);
+}
+
+/**
+ * data.location -> Read<NodeLocation>. A malformed result is code 'malformed-location' with
+ * nodeId = node.id.
+ *
+ * Controller decision 108 (a C-MODEL amendment): when `data.location` is absent the node's schema
+ * properties are read instead (readSchemaLocation). The result is absent only when `data.location`,
+ * `data.range` and `data.name_range` are all absent; `data.file` alone is no location. A present but
+ * malformed `data.location` is malformed whatever the schema properties say (I-14).
+ */
 // REAL
 export function readNodeLocation(node: GraphNode): Read<NodeLocation> {
   const raw = node.data?.['location'];
-  if (!isPresent(raw)) return { state: 'absent' };
+  if (!isPresent(raw)) {
+    const schema = isPresent(node.data?.['range']) || isPresent(node.data?.['name_range']);
+    return schema ? readSchemaLocation(node) : { state: 'absent' };
+  }
   const value = readLocationValue(raw);
   return value === undefined
     ? bad('malformed-location', `node ${JSON.stringify(node.id)} data.location`, node.id)

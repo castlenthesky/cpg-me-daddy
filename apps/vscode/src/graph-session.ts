@@ -20,6 +20,13 @@ export interface GraphSessionOptions {
   readonly root: string | undefined;
   /** EngineConfig.version: the extension's manifest version (C-CLI I-13). */
   readonly version: string;
+  /**
+   * EngineConfig.grammarDir, passed to every engine the session makes when it is given: the folder of
+   * the extension's install that `bun run compile` copies the grammar .wasm files into (controller
+   * decision 112, C-PARSE Q1). Absent: the engine's own default, the grammar package's directory.
+   */
+  // SEAT (decision 112): not passed to createEngine yet
+  readonly grammarDir?: string;
   readonly createEngine: (config: EngineConfig) => CpgEngine;
   /** The workspace at `root`. */
   readonly fileSystem: WorkspaceFileSystem;

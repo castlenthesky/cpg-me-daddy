@@ -20,6 +20,7 @@ describe('NODE_TYPES', () => {
     expect(NODE_TYPES).toEqual([
       { key: 'DIRECTORY', label: 'Directories', color: '#ff9933' },
       { key: 'FILE', label: 'Files', color: '#4db3ff' },
+      { key: 'MODULE', label: 'Modules', color: '#B5CEA8' },
       { key: 'METHOD', label: 'Methods', color: '#4FC1FF' },
       { key: 'TYPE_DECL', label: 'Types', color: '#4EC9B0' },
       { key: 'CALL', label: 'Calls', color: '#CE9178' },
@@ -114,7 +115,7 @@ describe('nodeTypeColor', () => {
     ['its own colour', 'FILE', '#123456'],
     ['its own colour, either case', 'METHOD', '#ABCdef'],
     ['the default for a type with none, registered or not', 'DIRECTORY', '#0a0b0c'],
-    ['the default for an unregistered type', 'MODULE', '#0a0b0c'],
+    ['the default for an unregistered type', 'PARAM', '#0a0b0c'],
     ['the default for a colour name', 'CALL', '#0a0b0c'],
     ['the default for a short hex', 'IMPORT', '#0a0b0c'],
     ['the default for an empty colour', 'SYMBOL', '#0a0b0c'],

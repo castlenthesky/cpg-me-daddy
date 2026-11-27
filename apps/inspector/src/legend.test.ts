@@ -38,6 +38,14 @@ describe('nodeLegendRows', () => {
         color: '#4db3ff',
         pressed: true,
       },
+      // Stop-list 186: the code tier's MODULE has its row, next to the FILE it belongs to.
+      {
+        key: 'MODULE',
+        text: 'Modules (1)',
+        title: 'Click to hide modules',
+        color: '#B5CEA8',
+        pressed: true,
+      },
     ]);
   });
 
@@ -72,11 +80,24 @@ describe('nodeLegendRows', () => {
 
   it('has no rows for no types, or only unregistered ones', () => {
     expect(nodeLegendRows([], none)).toEqual([]);
-    expect(nodeLegendRows(['MODULE', 'PARAM'], none)).toEqual([]);
+    expect(nodeLegendRows(['PARAM', '__root__'], none)).toEqual([]);
   });
 });
 
 describe('relationshipLegendRows', () => {
+  // Stop-list 186: SOURCE_FILE (MODULE to its FILE) reads as words, in MODULE's colour.
+  it('names SOURCE_FILE', () => {
+    expect(relationshipLegendRows(['SOURCE_FILE'], none)).toEqual<LegendRow[]>([
+      {
+        key: 'SOURCE_FILE',
+        text: 'Source file (1)',
+        title: 'Click to hide source file',
+        color: '#B5CEA8',
+        pressed: true,
+      },
+    ]);
+  });
+
   it('lists every key present, sorted, with the registry label and colour or the fallbacks', () => {
     const rows = relationshipLegendRows(['IMPORTS', 'HAS_ENTRY', '', 'IMPORTS', 'ZETA'], none);
     expect(rows).toEqual<LegendRow[]>([

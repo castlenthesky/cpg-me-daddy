@@ -21,6 +21,7 @@ describe('RELATIONSHIP_TYPES', () => {
       { key: 'DEFINES', label: 'Defines', color: '#DCDCAA' },
       { key: 'CALLS', label: 'Calls', color: '#CE9178' },
       { key: 'IMPORTS', label: 'Imports', color: '#C586C0' },
+      { key: 'SOURCE_FILE', label: 'Source file', color: '#B5CEA8' },
     ]);
   });
 
