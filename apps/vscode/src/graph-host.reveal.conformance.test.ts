@@ -179,6 +179,46 @@ describe('I-15: reveal resolves against the host payload', () => {
   });
 });
 
+const code = (nodeId: string, data: Record<string, unknown>): GraphNode => ({
+  id: nodeId,
+  type: 'MODULE',
+  data: { file: A, revision_id: 'r', ...data },
+});
+
+// Controller decision 108: the code tier writes `file` and the schema's `range` string (lines 1-based)
+// and never data.location, so a code node opens there. RANGE is `4:0-10:1`, NAME `4:9-4:12`.
+describe('I-15 on the code tier: a node with `file` and `range` and no data.location', () => {
+  const CODE: GraphPayload = {
+    seq: 4,
+    edges: [],
+    nodes: [
+      code('module', { range: '4:0-10:1' }),
+      code('named', { range: '4:0-10:1', name_range: '4:9-4:12' }),
+      code('line 0', { range: '0:0-1:0' }),
+      code('an object', { range: RANGE }),
+      code('fileless', { file: undefined, range: '4:0-10:1' }),
+    ],
+  };
+
+  it.each([
+    ['selected and framed by its range', 'module', 'range', RANGE],
+    ['name_range is the selection; range is framed', 'named', 'nameRange', NAME],
+  ] as const)('%s', async (_what, nodeId, target, selection) => {
+    const { host, opener } = await showing(undefined, undefined, CODE);
+    expect(await host.reveal(nodeId)).toStrictEqual({ ok: true, filePath: A, target });
+    expect(opener.opened).toStrictEqual([{ filePath: A, selection, frame: RANGE }]);
+  });
+
+  it.each(['line 0', 'an object', 'fileless'])(
+    'no-location: %s, and nothing is opened',
+    async (nodeId) => {
+      const { host, opener } = await showing(undefined, undefined, CODE);
+      expect(await host.reveal(nodeId)).toStrictEqual({ ok: false, reason: 'no-location', nodeId });
+      expect(opener.opened).toEqual([]);
+    },
+  );
+});
+
 describe('I-16: every reveal returns a discriminated outcome; none throws or returns void', () => {
   it('unknown-node: no such id, and no graph at all', async () => {
     const { host, opener } = await showing(undefined, undefined, null);

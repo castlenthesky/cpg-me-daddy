@@ -20,6 +20,7 @@ describe('NODE_TYPES', () => {
     expect(NODE_TYPES).toEqual([
       { key: 'DIRECTORY', label: 'Directories', color: '#ff9933' },
       { key: 'FILE', label: 'Files', color: '#4db3ff' },
+      { key: 'MODULE', label: 'Modules', color: '#B5CEA8' },
       { key: 'METHOD', label: 'Methods', color: '#4FC1FF' },
       { key: 'TYPE_DECL', label: 'Types', color: '#4EC9B0' },
       { key: 'CALL', label: 'Calls', color: '#CE9178' },
@@ -55,6 +56,7 @@ describe('NODE_TYPE_COLORS', () => {
     expect([...NODE_TYPE_COLORS.keys()]).toEqual([
       'DIRECTORY',
       'FILE',
+      'MODULE',
       'METHOD',
       'TYPE_DECL',
       'CALL',
@@ -64,6 +66,7 @@ describe('NODE_TYPE_COLORS', () => {
     expect(NODE_TYPE_COLORS.get('FILE')).toEqual([77 / 255, 179 / 255, 1, 1]);
     expect(NODE_TYPE_COLORS.get('DIRECTORY')).toEqual([1, 153 / 255, 51 / 255, 1]);
     expect(NODE_TYPE_COLORS.get('SYMBOL')).toEqual([220 / 255, 220 / 255, 170 / 255, 1]);
+    expect(NODE_TYPE_COLORS.get('MODULE')).toEqual([181 / 255, 206 / 255, 168 / 255, 1]);
   });
 
   it('is a Map: an unknown or prototype-named type has no colour', () => {
@@ -92,6 +95,7 @@ describe('REGISTRY_NODE_COLORS', () => {
       nodeColors: {
         DIRECTORY: '#ff9933',
         FILE: '#4db3ff',
+        MODULE: '#B5CEA8',
         METHOD: '#4FC1FF',
         TYPE_DECL: '#4EC9B0',
         CALL: '#CE9178',
@@ -114,7 +118,7 @@ describe('nodeTypeColor', () => {
     ['its own colour', 'FILE', '#123456'],
     ['its own colour, either case', 'METHOD', '#ABCdef'],
     ['the default for a type with none, registered or not', 'DIRECTORY', '#0a0b0c'],
-    ['the default for an unregistered type', 'MODULE', '#0a0b0c'],
+    ['the default for an unregistered type', 'PARAM', '#0a0b0c'],
     ['the default for a colour name', 'CALL', '#0a0b0c'],
     ['the default for a short hex', 'IMPORT', '#0a0b0c'],
     ['the default for an empty colour', 'SYMBOL', '#0a0b0c'],

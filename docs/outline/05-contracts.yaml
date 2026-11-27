@@ -78,7 +78,7 @@ contracts:
         readonly removedNodeIds: readonly string[];         // removing a node removes every incident edge; edges are never enumerated for removal
       }
       export type Read<T> = { state: 'present'; value: T } | { state: 'absent' } | { state: 'malformed'; defect: ModelDefect };
-      export function readNodeLocation(node: GraphNode): Read<NodeLocation>;
+      export function readNodeLocation(node: GraphNode): Read<NodeLocation>;   // data.location; when absent, data.file + the schema's data.range string (+ data.name_range), lines 1-based -> rows 0-based (controller decision 108)
       export function readNodeResolution(node: GraphNode): Read<EdgeResolution>;
       export function readEdgeResolution(edge: GraphEdge): Read<EdgeResolution>;
       export type ModelDefectCode = 'empty-id' | 'id-contains-separator' | 'duplicate-node-id' | 'dangling-edge' | 'malformed-location' | 'malformed-resolution' | 'non-monotonic-seq';
@@ -103,6 +103,10 @@ contracts:
         was: "HostToWebview = graph{payload} | graph-delta{delta}; WebviewToHost = ready | reveal{nodeId} | resync{haveSeq} (the archive union)"
         now: "HostToWebview and WebviewToHost are C-EXT's HostToWebviewMessage and WebviewToHostMessage (protocol, epoch, seq, theme, verification, resync{epoch, seq, reason}, render-report), which @cpg/model carries"
         why: "both hosts (the browser inspector now, VS Code at U3) speak one protocol from the zero-dependency shared vocabulary; this line had gone stale against the code (stop-list 58)"
+      - decision: "controller 108 (owner delegation, 2026-11-26; U6a.3-3 part 2)"
+        was: "readNodeLocation reads data.location only, so a code node (which carries the schema's `file` and `range` properties and never data.location) has no location and reveal answers no-location"
+        now: "when data.location is absent, readNodeLocation reads data.file and the schema's data.range string (startLine:startCol-endLine:endCol, lines 1-based, read back exactly as formatRange writes it) plus an optional data.name_range string of the same form: present as { filePath: file, range, nameRange? } with row = line - 1; absent only when data.range and data.name_range are both absent; any present but bad key is malformed-location naming the first of range, file, name_range (I-14). A present data.location still wins, and a malformed one stays malformed. The one 1-based -> 0-based conversion, private to read.ts"
+        why: "reveal on a code node (reports/27 Q12): the code tier writes the schema's properties, never data.location; reading a string format is not label-aware (may_not)"
     invariants:
       - { id: I-1,  class: C, text: "@cpg/model imports nothing at runtime; no file under packages/** imports vscode (check-deps)" }
       - { id: I-3,  class: R, text: "no id contains U+0000" }
@@ -290,7 +294,7 @@ contracts:
       - "27361a3:packages/engine/src/extract/syntax.ts"
     pinned: { web-tree-sitter: 0.27.0, "@vscode/tree-sitter-wasm": 0.3.1, grammars: [typescript, tsx, javascript, python], abi_range: "13–15" }
     open_questions:
-      - { id: Q1, kind: spike, text: "VSIX: copy .wasm next to the bundle or point CPG_GRAMMAR_DIR into node_modules?", disposition: "U3 packaging spike (<=1h)" }
+      - { id: Q1, kind: spike, text: "VSIX: copy .wasm next to the bundle or point CPG_GRAMMAR_DIR into node_modules?", disposition: "copy (controller decision 112, U6a.3-3 part 2): `bun run compile` copies tree-sitter-python.wasm into apps/vscode/dist/grammars, and the extension passes <extensionUri>/apps/vscode/dist/grammars as EngineConfig.grammarDir, the locator's explicit rule (I11), which never falls back to node_modules" }
       - { id: Q2, kind: debate, text: ".js: registered-with-no-adapter or its own registration?", disposition: "registered (parseable), no adapter (not extractable) in v1; the 4-vs-3 drift is made visible by C-EXTRACT's CoverageManifest" }
       - { id: Q4, kind: debate, text: "does TS need previousSibling on SyntaxNode for doc comments?", disposition: "additive; add when U6b needs docstrings" }
       - { id: Q5, kind: human, text: "which grammar package/version?", disposition: "vendor @vscode/tree-sitter-wasm@0.3.1 (day-one answer; self-building is a CI cost to fund later)" }

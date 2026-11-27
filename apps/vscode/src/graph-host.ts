@@ -193,7 +193,8 @@ export class PanelGraphHost implements GraphHost {
    * Opens the source of the node `nodeId` names in the merged payload (I-15) and says what happened
    * (I-16); never rejects.
    * - A FILE opens whole, at its `path` property and whatever its `data.location` says.
-   * - Any other node opens at its `data.location` (readNodeLocation): the cursor on `nameRange`, or on
+   * - Any other node opens where readNodeLocation says: its `data.location`, or a code node's `file` and
+   *   schema `range` (+ `name_range`, controller decision 108). The cursor goes on `nameRange`, or on
    *   `range` when there is none, with `range` framed.
    * - `unknown-node`: no node has that id. `no-location`: the node has no location, a malformed one, or
    *   is a FILE whose `path` is not a file's workspace path. Neither opens anything.

@@ -33,6 +33,19 @@ const node = (id: string, data?: Record<string, unknown>): GraphNode => ({
 const edge = (source: unknown, target: unknown, data?: Record<string, unknown>): GraphEdge =>
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- deliberately loose: JSON from outside is not type-checked.
   ({ source, target, ...(data === undefined ? {} : { data }) }) as GraphEdge;
+// Decision 108's helpers: a 0-based range, a code-tier node, and the defect a bad key gives.
+const at = (startRow: number, startColumn: number, endRow: number, endColumn: number) => ({
+  startRow,
+  startColumn,
+  endRow,
+  endColumn,
+});
+const MAX = Number.MAX_SAFE_INTEGER;
+const code = (data: Record<string, unknown>) => node('n', { file: 'pkg/m.py', ...data });
+const badKey = (key: string) => ({
+  state: 'malformed',
+  defect: { code: 'malformed-location', detail: `node "n" data.${key} is malformed`, nodeId: 'n' },
+});
 const payload = (nodes: GraphNode[], edges: GraphEdge[] = [], seq = -1): GraphPayload => ({
   seq,
   nodes,
@@ -335,6 +348,153 @@ function verifyModelContract(name: string, impl: ModelImpl): void {
         // A node reader names the node; an edge reader has no locator (validatePayload adds edgeIndex).
         expect('defect' in got ? got.defect.nodeId : 'no defect').toBe(isNode ? 'n' : undefined);
       });
+    });
+  });
+
+  // Controller decision 108 (a C-MODEL amendment): with no data.location, the code tier's schema
+  // properties are the location. The range string is 04-schema.yaml's (lines 1-based, columns 0-based,
+  // the ladder's `1:0-3:0` for a two-line file), read back exactly as formatRange writes it.
+  describe(`${name} C-MODEL I-14 decision 108: file and range when data.location is absent`, () => {
+    const read = (data: Record<string, unknown>) => impl.readNodeLocation(code(data));
+
+    it.each([
+      ['only a file', node('n', { file: 'pkg/m.py' })],
+      ['a null range and an undefined name_range', code({ range: null, name_range: undefined })],
+      ['a null location beside them', code({ location: null, range: null })],
+    ])('%s is absent', (_n, n) => {
+      expect(impl.readNodeLocation(n)).toEqual({ state: 'absent' });
+    });
+
+    it.each([
+      ["the ladder's two-line MODULE", { range: '1:0-3:0' }, at(0, 0, 2, 0)],
+      ['an empty file', { range: '1:0-1:0' }, at(0, 0, 0, 0)],
+      ['columns as written, lines minus one', { range: '12:30-104:7' }, at(11, 30, 103, 7)],
+      ['one line', { range: '3:2-3:5' }, at(2, 2, 2, 5)],
+      [
+        'safe integers at the top',
+        { range: `${MAX}:${MAX}-${MAX}:${MAX}` },
+        at(MAX - 1, MAX, MAX - 1, MAX),
+      ],
+      ['a null location', { location: null, range: '2:0-4:1' }, at(1, 0, 3, 1)],
+    ])('%s is present at its range', (_n, data, want) => {
+      const got = read({ revision_id: 'r', name: 'm', ...data });
+      expect(got).toStrictEqual({ state: 'present', value: { filePath: 'pkg/m.py', range: want } });
+    });
+
+    it('name_range is the nameRange; a null one is none', () => {
+      expect(read({ range: '1:0-9:0', name_range: '2:4-2:9' })).toStrictEqual({
+        state: 'present',
+        value: { filePath: 'pkg/m.py', range: at(0, 0, 8, 0), nameRange: at(1, 4, 1, 9) },
+      });
+      expect(read({ range: '1:0-9:0', name_range: null })).toStrictEqual({
+        state: 'present',
+        value: { filePath: 'pkg/m.py', range: at(0, 0, 8, 0) },
+      });
+    });
+
+    it.each([
+      ['line 0', '0:0-1:0'],
+      ['end line 0', '1:0-0:0'],
+      ['end line before start', '2:0-1:5'],
+      ['end column before start on one line', '2:5-2:4'],
+      ['a leading zero in a line', '01:0-1:0'],
+      ['a leading zero in a column', '1:00-1:1'],
+      ['a sign', '+1:0-1:0'],
+      ['a minus', '-1:0-1:0'],
+      ['a space after', '1:0-1:0 '],
+      ['a space before', ' 1:0-1:0'],
+      ['a newline after', '1:0-1:0\n'],
+      ['colons only', '1:0:1:0'],
+      ['dashes only', '1-0-1-0'],
+      ['three numbers', '1:0-1'],
+      ['five numbers', '1:0-1:0-2'],
+      ['empty', ''],
+      ['a fraction', '1.0:0-1:0'],
+      ['an exponent', '1e1:0-1e1:0'],
+      ['a line past the safe integers', `${MAX + 1}:0-${MAX + 1}:0`],
+      ['a column past the safe integers', `1:0-1:${MAX + 1}`],
+      // Post-implementation (sabotage): a start column the end, on a later line, does not bound.
+      ['a start column past the safe integers', `1:${MAX + 1}-2:0`],
+      ['a non-ASCII digit', '1:0-1:٣'],
+      ['a SourceRange object (the extractor form)', at(0, 0, 2, 0)],
+      ['a number', 5],
+      ['an array', ['1:0-2:0']],
+      // Round two (review 6): falsy but present.
+      ['zero', 0],
+      ['false', false],
+    ])('range: %s is malformed', (_n, text) => {
+      expect(read({ range: text })).toStrictEqual(badKey('range'));
+    });
+
+    it.each([
+      ['missing', { file: undefined }],
+      ['null', { file: null }],
+      ['the root', { file: '.' }],
+      ['absolute', { file: '/w/pkg/m.py' }],
+      ['climbing', { file: '../m.py' }],
+      ['empty', { file: '' }],
+      ['a number', { file: 5 }],
+      // Round two (review 7): what only isWorkspacePath refuses.
+      ['dot-slash', { file: './m.py' }],
+      ['an empty segment', { file: 'a//b.py' }],
+      ['a .. segment', { file: 'a/../b.py' }],
+      ['a trailing slash', { file: 'a/' }],
+      ['a NUL', { file: 'a\u0000b.py' }],
+    ])('file: %s is malformed', (_n, data) => {
+      expect(read({ range: '1:0-2:0', ...data })).toStrictEqual(badKey('file'));
+    });
+
+    it.each([
+      ['line 0', '0:0-1:0'],
+      ['reversed', '2:9-2:4'],
+      ['not a range', 'name'],
+      ['a SourceRange object', at(1, 4, 1, 9)],
+      ['a number', 7],
+      // Round two (review 6): falsy but present.
+      ['empty', ''],
+      ['zero', 0],
+      ['false', false],
+    ])('name_range: %s is malformed', (_n, nameRange) => {
+      expect(read({ range: '1:0-2:0', name_range: nameRange })).toStrictEqual(badKey('name_range'));
+    });
+
+    // Round two (review 8): the id is JSON, as data.location's detail has it.
+    it('names the node by its id in JSON', () => {
+      const quoted = impl.readNodeLocation(node('a"b', { file: 'pkg/m.py', range: 'x' }));
+      expect(quoted).toStrictEqual({
+        state: 'malformed',
+        defect: {
+          code: 'malformed-location',
+          detail: 'node "a\\"b" data.range is malformed',
+          nodeId: 'a"b',
+        },
+      });
+    });
+
+    it('names the first key that fails: range, then file, then name_range', () => {
+      expect(read({ name_range: '1:0-1:3' })).toStrictEqual(badKey('range'));
+      expect(read({ range: 'x', file: '.' })).toStrictEqual(badKey('range'));
+      expect(read({ range: '1:0-2:0', file: '.', name_range: 'x' })).toStrictEqual(badKey('file'));
+    });
+
+    it('a data.location wins: present or malformed, the schema properties are not read', () => {
+      const location = { filePath: 'src/x.ts', range };
+      expect(read({ location, range: 'x', file: '.' })).toStrictEqual({
+        state: 'present',
+        value: location,
+      });
+      expect(read({ location: { filePath: 'src/x.ts' }, range: '1:0-2:0' })).toMatchObject({
+        state: 'malformed',
+        defect: { detail: 'node "n" data.location is malformed' },
+      });
+    });
+
+    it('validatePayload reports a malformed range as malformed-location at its index', () => {
+      const p = payload([
+        node('ok', { file: 'pkg/m.py', range: '1:0-2:0' }),
+        code({ range: '0:0-1:0' }),
+      ]);
+      expect(impl.validatePayload(p)).toEqual([{ ...badKey('range').defect, nodeIndex: 1 }]);
     });
   });
 

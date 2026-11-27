@@ -113,11 +113,82 @@ function readResolutionValue(raw: unknown): EdgeResolution | undefined {
   return out;
 }
 
-/** data.location -> Read<NodeLocation>. A malformed result is code 'malformed-location' with nodeId = node.id. */
+const SCHEMA_RANGE = /^([1-9][0-9]*):(0|[1-9][0-9]*)-([1-9][0-9]*):(0|[1-9][0-9]*)$/;
+
+function readSchemaRange(v: unknown): SourceRange | undefined {
+  if (typeof v !== 'string') return undefined;
+  const match = SCHEMA_RANGE.exec(v);
+  if (match === null) return undefined;
+  const startLine = Number(match[1]);
+  const startColumn = Number(match[2]);
+  const endLine = Number(match[3]);
+  const endColumn = Number(match[4]);
+  if (
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(startColumn) ||
+    !Number.isSafeInteger(endLine) ||
+    !Number.isSafeInteger(endColumn)
+  ) {
+    return undefined;
+  }
+  const startRow = startLine - 1;
+  const endRow = endLine - 1;
+  if (endRow < startRow || (endRow === startRow && endColumn < startColumn)) return undefined;
+  return { startRow, startColumn, endRow, endColumn };
+}
+
+/**
+ * The location the code tier writes as schema properties (controller decision 108), read when
+ * `data.location` is absent and `data.range` or `data.name_range` is present:
+ *
+ * - `data.range` is the schema's `range` string (04-schema.yaml, `formatRange`):
+ *   `startLine:startCol-endLine:endCol`, lines 1-based, columns 0-based UTF-16, end exclusive. Read
+ *   back exactly as `formatRange` writes it: four decimals with no sign and no leading zero (a lone
+ *   `0` is a zero), each a safe integer as written, both lines >= 1, and the end not before the
+ *   start. Row = line - 1, column as written: the one 1-based to 0-based conversion.
+ * - `data.file` is the owning file: a WorkspacePath (`isWorkspacePath`) other than `'.'`.
+ * - `data.name_range`, when present (not undefined or null), is a second string of the same form.
+ *
+ * Present: `{ filePath: file, range }`, plus `nameRange` when `name_range` is present; fresh objects
+ * holding only those keys. Otherwise malformed, code `malformed-location`, `nodeId` = node.id, detail
+ * `node <JSON id> data.<key> is malformed` for the first key that fails, in the order `range`, `file`,
+ * `name_range` (a missing `range` fails as `range`).
+ */
+// REAL
+function readSchemaLocation(node: GraphNode): Read<NodeLocation> {
+  const fail = (key: 'range' | 'file' | 'name_range') =>
+    bad('malformed-location', `node ${JSON.stringify(node.id)} data.${key}`, node.id);
+  const { data } = node;
+  if (!isRecord(data)) return fail('range');
+  const range = readSchemaRange(data['range']);
+  if (range === undefined) return fail('range');
+  const filePath = data['file'];
+  if (typeof filePath !== 'string' || filePath === '.' || !isWorkspacePath(filePath)) {
+    return fail('file');
+  }
+  if (!isPresent(data['name_range'])) return { state: 'present', value: { filePath, range } };
+  const nameRange = readSchemaRange(data['name_range']);
+  return nameRange === undefined
+    ? fail('name_range')
+    : { state: 'present', value: { filePath, range, nameRange } };
+}
+
+/**
+ * data.location -> Read<NodeLocation>. A malformed result is code 'malformed-location' with
+ * nodeId = node.id.
+ *
+ * Controller decision 108 (a C-MODEL amendment): when `data.location` is absent the node's schema
+ * properties are read instead (readSchemaLocation). The result is absent only when `data.location`,
+ * `data.range` and `data.name_range` are all absent; `data.file` alone is no location. A present but
+ * malformed `data.location` is malformed whatever the schema properties say (I-14).
+ */
 // REAL
 export function readNodeLocation(node: GraphNode): Read<NodeLocation> {
   const raw = node.data?.['location'];
-  if (!isPresent(raw)) return { state: 'absent' };
+  if (!isPresent(raw)) {
+    const schema = isPresent(node.data?.['range']) || isPresent(node.data?.['name_range']);
+    return schema ? readSchemaLocation(node) : { state: 'absent' };
+  }
   const value = readLocationValue(raw);
   return value === undefined
     ? bad('malformed-location', `node ${JSON.stringify(node.id)} data.location`, node.id)

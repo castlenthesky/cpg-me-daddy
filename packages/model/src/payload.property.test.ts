@@ -2,6 +2,7 @@ import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   applyGraphDelta,
+  formatRange,
   makeNodeId,
   readNodeLocation,
   readNodeResolution,
@@ -225,6 +226,58 @@ describe('read accessor properties', () => {
         },
       ),
     );
+  });
+});
+
+// Controller decision 108: with no data.location, `file` and the schema's `range` string (and an
+// optional `name_range`) are the location, read back exactly as formatRange writes them.
+const codeNode = (data: Record<string, unknown>): GraphNode => ({ id: 'n', type: 'MODULE', data });
+/** A read in one line: the range formatRange writes back for a present one, else the defect. */
+const readBack = (got: ReturnType<typeof readNodeLocation>): string => {
+  if (got.state === 'present') return formatRange(got.value.range);
+  if (got.state === 'absent') return 'absent';
+  return `${got.defect.code} | ${got.defect.detail} | ${String(got.defect.nodeId)}`;
+};
+const insertAt = ([r, at, insert]: [Parameters<typeof formatRange>[0], number, string]) => {
+  const text = formatRange(r);
+  const cut = at % (text.length + 1);
+  return `${text.slice(0, cut)}${insert}${text.slice(cut)}`;
+};
+
+describe('the schema range string (decision 108)', () => {
+  it('P-7 what formatRange writes, readNodeLocation reads back as the range (name_range as nameRange)', () => {
+    fc.assert(
+      fc.property(pathArb, validRange, fc.option(validRange, { nil: undefined }), (file, r, nr) => {
+        const named = nr === undefined ? {} : { name_range: formatRange(nr) };
+        const value: NodeLocation = {
+          filePath: toWorkspacePath('/w', `/w/${file}`),
+          range: r,
+          ...(nr === undefined ? {} : { nameRange: nr }),
+        };
+        const got = readNodeLocation(codeNode({ file, range: formatRange(r), ...named }));
+        expect(got).toStrictEqual({ state: 'present', value });
+      }),
+    );
+  });
+
+  it('P-8 a range string read as present is the one formatRange writes for it; any other is malformed', () => {
+    const insert = fc.constantFrom('0', '1', ' ', '+', '-', ':', '00', '\n');
+    const near = fc.tuple(validRange, fc.nat(20), insert).map(insertAt);
+    const unit = fc.constantFrom('0', '1', '9', ':', '-', ' ', '+', '.');
+    const noise = fc.string({ unit, maxLength: 12 });
+    const seen = { present: 0, malformed: 0 };
+    fc.assert(
+      fc.property(fc.oneof(validRange.map(formatRange), near, noise), (text) => {
+        const got = readNodeLocation(codeNode({ file: 'a.py', range: text }));
+        seen[got.state === 'present' ? 'present' : 'malformed'] += 1;
+        // Present: formatRange writes this very text for the range read. Else malformed-location.
+        const bad = 'malformed-location | node "n" data.range is malformed | n';
+        expect(readBack(got)).toBe(got.state === 'present' ? text : bad);
+      }),
+      { numRuns: 1000 },
+    );
+    // Anti-vacuity: the inputs reach both outcomes.
+    expect([seen.present > 100, seen.malformed > 100]).toEqual([true, true]);
   });
 });
 

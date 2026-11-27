@@ -36,6 +36,8 @@ export const RELATIONSHIP_TYPES: readonly RelationshipTypeDescriptor[] = [
   { key: 'CALLS', label: 'Calls', color: '#CE9178' },
   // Import resolution edges: IMPORT -> SYMBOL.
   { key: 'IMPORTS', label: 'Imports', color: '#C586C0' },
+  // MODULE -> its FILE; the swatch is its from-end's colour.
+  { key: 'SOURCE_FILE', label: 'Source file', color: '#B5CEA8' },
 ];
 
 /**

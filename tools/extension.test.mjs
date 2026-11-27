@@ -5,6 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -26,6 +27,14 @@ const manifest = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
 const MAIN = join(REPO, manifest.main);
 const PAGE_DIRECTORY = join(REPO, 'apps', 'inspector', 'dist', 'page');
 const READY = { type: 'ready', protocol: 1 };
+// Controller decision 112: `bun run compile` copies the python grammar into this folder of the install,
+// and the extension gives the engine that folder (C-PARSE I11's explicit rule, never node_modules).
+const GRAMMARS = join('apps', 'vscode', 'dist', 'grammars');
+const PYTHON_WASM = join(
+  dirname(createRequire(import.meta.url).resolve('@vscode/tree-sitter-wasm/package.json')),
+  'wasm',
+  'tree-sitter-python.wasm',
+);
 
 class Uri {
   constructor(path) {
@@ -240,9 +249,17 @@ function standIn(root) {
 
 // One stub for the whole file: Node caches where a directory's `vscode` resolved to.
 let stubs = '';
+let install = '';
+let bare = '';
 let hooks;
 beforeAll(() => {
   stubs = realpathSync(mkdtempSync(join(tmpdir(), 'extension-vscode-')));
+  // An install as compile leaves it, and one without the grammar.
+  install = join(stubs, 'install');
+  bare = join(stubs, 'bare');
+  mkdirSync(join(install, GRAMMARS), { recursive: true });
+  copyFileSync(PYTHON_WASM, join(install, GRAMMARS, 'tree-sitter-python.wasm'));
+  mkdirSync(join(bare, GRAMMARS), { recursive: true });
   const stub = join(stubs, 'vscode.cjs');
   writeFileSync(stub, 'module.exports = globalThis.vscodeStandIn;\n');
   hooks = registerHooks({
@@ -279,8 +296,8 @@ afterEach(() => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-/** Loads the built extension afresh on the stand-in and activates it. */
-function activate(folder = root) {
+/** Loads the built extension afresh on the stand-in and activates it, installed at `home`. */
+function activate(folder = root, home = install) {
   const { seen, vscode } = standIn(folder ?? undefined);
   globalThis.vscodeStandIn = vscode;
   const require = createRequire(MAIN);
@@ -293,7 +310,7 @@ function activate(folder = root) {
   const context = {
     subscriptions,
     extension: { packageJSON: manifest },
-    extensionUri: new Uri(REPO),
+    extensionUri: new Uri(home),
   };
   extension.activate(context);
   const run = (id) => seen.commands.get(id)();
@@ -493,6 +510,38 @@ describe('cpg.openGraph', () => {
 const lines = (seen, level) =>
   seen.channels[0].lines.filter(([recorded]) => level === undefined || recorded === level);
 
+// Controller decision 112 (C-PARSE Q1): the code tier's grammar comes from the extension's install, so
+// a VSIX finds it beside its own build. Without it there the engine says so once and keeps the FILE
+// tier (decision 100); it never falls back to the grammar package in node_modules.
+describe('the code tier grammar', () => {
+  it('is read from the install: without it there, one warning and the FILE tier only', async () => {
+    const { seen, run } = activate(root, bare);
+    await run('cpg.openGraph');
+    const [panel] = seen.panels;
+    panel.send(READY);
+    const ids = ofType(panel, 'graph')[0].payload.nodes.map(({ id }) => id);
+    expect(new Set(ids)).toEqual(
+      new Set(['dir:.', 'dir:sub', 'file:a.ts', 'file:b.py', 'file:sub/c.ts']),
+    );
+    await until(() => seen.warnings.length > 0);
+    const [said, ...more] = seen.warnings;
+    const failure = 'code tier: 1 python file at the FILE tier only (grammar-unavailable): b.py: ';
+    expect([said.split(failure).length, said.includes(join(bare, GRAMMARS)), more]).toEqual([
+      2,
+      true,
+      [],
+    ]);
+    expect(seen.errors).toEqual([]);
+  });
+
+  it('is in the folder the activation line names', () => {
+    const { seen } = activate();
+    const named = `; grammars ${join(install, GRAMMARS)}`;
+    const [first] = lines(seen, 'info');
+    expect(first[1].slice(-named.length)).toBe(named);
+  });
+});
+
 describe('the log', () => {
   it('is one log channel named CPG, opened by cpg.showLog, that starts with the activation line', async () => {
     const { seen, run } = activate();
@@ -644,6 +693,17 @@ describe('verify in the editor', () => {
 });
 
 describe('click to source', () => {
+  // Controller decision 108: the code tier writes `file` and the schema's `range`, never data.location.
+  it('opens a MODULE at its range, rows from 0 where the schema counts lines from 1', async () => {
+    const { seen, panel } = await opened();
+    panel.send({ type: 'reveal', nodeId: 'file:b.py:MODULE:$root' });
+    await until(() => seen.opened.length === 1);
+    // b.py is one line and its newline: by the ladder (rung 07), its MODULE's range is 1:0-2:0.
+    const whole = { start: at(0, 0), end: at(1, 0) };
+    expect(seen.opened).toMatchObject([[join(root, 'b.py'), { preview: true, selection: whole }]]);
+    expect(seen.framed).toMatchObject([[whole, 2]]);
+  });
+
   it('opens a FILE whole, as a preview, where the panel is not', async () => {
     const { seen, panel } = await opened();
     panel.send({ type: 'reveal', nodeId: 'file:sub/c.ts' });

@@ -41,7 +41,7 @@
   },
   "scripts": {
     "vscode:prepublish": "bun run compile",
-    "compile": "tsc -b && node tools/build-inspector.mjs",
+    "compile": "tsc -b && node tools/build-inspector.mjs && node tools/copy-grammars.mjs",
     "watch": "tsc -b -w",
     "clean": "node tools/clean.mjs",
     "format": "oxfmt --write",
