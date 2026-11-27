@@ -87,18 +87,22 @@ try {
       return { nodes: undefined, edges: undefined, warnings: [] };
     }
   };
-  const expectCode = (label, got, nodes, edges, warning) => {
+  // `missing`: the grammar file the one code-tier warning must name (round two, review 15: matched
+  // with includes, so a temp path's own characters never act as a pattern).
+  const unavailable =
+    'code tier: 1 python file at the FILE tier only (grammar-unavailable): b.py: ';
+  const expectCode = (label, got, nodes, edges, missing) => {
     const warned = got.warnings.filter((w) => w !== 'no extractor for typescript yet (U6b)');
     const ok =
       got.nodes === nodes &&
       got.edges === edges &&
       got.warnings.includes('no extractor for typescript yet (U6b)') &&
-      (warning === undefined
+      (missing === undefined
         ? warned.length === 0
-        : warned.length === 1 && warning.test(warned[0]));
+        : warned.length === 1 && warned[0].startsWith(unavailable) && warned[0].includes(missing));
     if (!ok)
       errors.push(
-        `cpg index (${label}): expected b.py nodes=${nodes} edges=${edges} and ${warning ?? 'no code-tier warning'}, got ${JSON.stringify(got)}`,
+        `cpg index (${label}): expected b.py nodes=${nodes} edges=${edges} and ${missing === undefined ? 'no code-tier warning' : `a warning naming ${missing}`}, got ${JSON.stringify(got)}`,
       );
   };
   const wasmDir = join(
@@ -109,6 +113,7 @@ try {
   mkdirSync(empty);
   const home = join(aside, 'cwd');
   mkdirSync(join(home, 'grammars'), { recursive: true });
+  mkdirSync(join(home, 'no-grammars'));
   cpSync(
     join(wasmDir, 'tree-sitter-python.wasm'),
     join(home, 'grammars', 'tree-sitter-python.wasm'),
@@ -131,9 +136,16 @@ try {
     codeTier('CPG_GRAMMAR_DIR without the grammar', { CPG_GRAMMAR_DIR: empty }),
     0,
     0,
-    new RegExp(
-      `^code tier: 1 python file at the FILE tier only \\(grammar-unavailable\\): b\\.py: .*${join(empty, 'tree-sitter-python.wasm').replace(/[.]/g, '\\.')}`,
-    ),
+    join(empty, 'tree-sitter-python.wasm'),
+  );
+  // round two (review 14): a relative value without the grammar names the cwd-resolved file, so a
+  // main.ts that dropped relative values (the package anchor would answer) fails
+  expectCode(
+    'CPG_GRAMMAR_DIR relative, without the grammar',
+    codeTier('CPG_GRAMMAR_DIR relative, empty', { CPG_GRAMMAR_DIR: 'no-grammars' }, home),
+    0,
+    0,
+    join(home, 'no-grammars', 'tree-sitter-python.wasm'),
   );
   expectRun(['index', ws], 0, 'stderr', /consumers: memory$/m);
   // a switched-on consumer that is not built yet is exit 2 "not built yet", naming its source

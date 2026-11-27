@@ -55,7 +55,9 @@ async function until(check: () => boolean, what: string): Promise<void> {
 /** Spawns the cpg bin with the caller's CPG_* variables removed (they would redirect the run). */
 async function cpg(args: readonly string[], cwd: string) {
   const env: Record<string, string | undefined> = { ...process.env };
-  for (const name of ['CPG_WORKSPACE', 'CPG_HOST', 'CPG_PORT', 'CPG_GRAPH']) delete env[name];
+  // round two (review 19): CPG_GRAMMAR_DIR too (U6a.3-2), which would move the grammar
+  for (const name of ['CPG_WORKSPACE', 'CPG_HOST', 'CPG_PORT', 'CPG_GRAPH', 'CPG_GRAMMAR_DIR'])
+    delete env[name];
   const proc = spawn(process.execPath, [await binPath(), ...args], { cwd, env, stdio: 'pipe' });
   procs.push(proc);
   let out = '';

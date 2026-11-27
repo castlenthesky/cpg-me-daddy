@@ -11,7 +11,13 @@ import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { ExtractedFile, ExtractOutcome, ExtractRequest, Extractor } from '@cpg/extract';
+import type {
+  ExtractedFile,
+  ExtractErrorCode,
+  ExtractOutcome,
+  ExtractRequest,
+  Extractor,
+} from '@cpg/extract';
 import { createExtractor } from '@cpg/extract';
 import type { WorkspacePath } from '@cpg/model';
 import { isWorkspacePath } from '@cpg/model';
@@ -192,6 +198,21 @@ describe('index(): the code tier after the filesystem tier (decision 101)', () =
   });
 });
 
+// Round two (review 5): walk order and path order differ here ('a/' sorts before 'a.py' in its
+// directory, after it as a path), so writing in report.files order is wrong.
+describe('index(): replace-files follow the walk, not the sorted report', () => {
+  it('a/z.py before a.py; report.files stays sorted by path', async () => {
+    const r = recorded();
+    const report = await indexWith(engineOn(r.sink), await tree({ 'a/z.py': 'z', 'a.py': 'a' }));
+    expect(kinds(r.writes)).toEqual([
+      'merge-filesystem',
+      'replace-file a/z.py',
+      'replace-file a.py',
+    ]);
+    expect(report.files.map((f) => f.path)).toEqual(['a.py', 'a/z.py']);
+  });
+});
+
 describe('the write seq is the sink allocator (decision 98a)', () => {
   it('every replace-file and delete-file seq comes from the store, above a seq written before', async () => {
     const memory = createMemoryStore();
@@ -230,6 +251,21 @@ describe('the write seq is the sink allocator (decision 98a)', () => {
       { path: 'a.py', revision_id: sha256('a = 1\n'), nodes: 1, edges: 2 },
     ]);
     expect([second.nodesWritten, second.edgesWritten]).toEqual([2, 1]);
+  });
+});
+
+// Round two (review 3): the engine asks the store for every seq, so it never caches one between runs.
+describe('the engine holds no seq of its own (decision 98a)', () => {
+  it('a seq written directly between two index() runs is below the next run', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n' });
+    const r = recorded();
+    const engine = engineOn(r.sink);
+    await indexWith(engine, root);
+    await r.memory.open();
+    await r.memory.write({ kind: 'delete-file', file: wp('elsewhere.py'), seq: 50 });
+    await writeFile(join(root, 'a.py'), 'a = 2\n');
+    await indexWith(engine, root);
+    expect(seqs(r.writes)).toEqual([0, 51]);
   });
 });
 
@@ -302,6 +338,52 @@ describe('removals (decisions 77, 101): delete-file for each removed path the st
   });
 });
 
+// Round two (review 6): the criterion is the store's own file-owned nodes, not the path's language.
+const fileRow = (path: string): NodeRow => ({
+  label: 'FILE',
+  key: path,
+  properties: { path, name: path, revision_id: '5d'.repeat(32) },
+});
+describe('removals: what the store held decides, not the extension', () => {
+  it('a removed .ts holding a MODULE gets a delete-file; a removed .py holding none gets none', async () => {
+    const memory = createMemoryStore();
+    await memory.open();
+    await memory.write({
+      kind: 'merge-filesystem',
+      directories: [],
+      files: [fileRow('x.ts'), fileRow('y.py')],
+      links: [],
+      moves: [],
+      removals: [],
+    });
+    await memory.write({
+      kind: 'replace-file',
+      file: wp('x.ts'),
+      seq: 3,
+      revision_id: '5d'.repeat(32),
+      nodes: [
+        {
+          label: 'MODULE',
+          key: mod('x.ts'),
+          properties: { name: 'x', file: 'x.ts', revision_id: '5d'.repeat(32), range: '1:0-1:1' },
+        },
+      ],
+      edges: [],
+    });
+    await memory.close();
+    const r = recorded(memory);
+    await indexWith(engineOn(r.sink), await tree({ 'a.py': 'a' }));
+    const [fs, ...rest] = r.writes;
+    expect(fs?.op.kind === 'merge-filesystem' && [...fs.op.removals].toSorted()).toEqual([
+      'x.ts',
+      'y.py',
+    ]);
+    expect(kinds(rest)).toEqual(['replace-file a.py', 'delete-file x.ts']);
+    expect(seqs(rest)).toEqual([4, 5]);
+    expect(await filesOwning(r.memory)).toEqual(['a.py']);
+  });
+});
+
 describe('a code tier failure is a warning, never fatal (decision 100)', () => {
   it('a grammarDir without the grammar: FILE tier only, one warning for every python file', async () => {
     const empty = await tmp();
@@ -359,6 +441,39 @@ describe('a code tier failure is a warning, never fatal (decision 100)', () => {
     expect(await nodeData(r.memory, mod('b.py'))).toMatchObject({ revision_id: sha256('b = 1\n') });
     const stale = check(await verifyWith(engine, root), 'revision-reconciliation');
     expect([stale?.state, stale?.observed, stale?.localisedTo]).toEqual(['fail', 1, ['b.py']]);
+  });
+});
+
+// Round two (reviews 7, 8): one warning per (language, code) in the order each first failed, with
+// the first path and message; then the bridge warnings; the no-extractor warning comes first.
+describe('the warnings together (decision 101)', () => {
+  it('no extractor, then one per failure group by first failure, then no MODULE', async () => {
+    const real = createExtractor();
+    const failing: Readonly<Record<string, readonly [ExtractErrorCode, string]>> = {
+      'a.py': ['root-type-mismatch', 'a broke'],
+      'b.py': ['internal', 'b broke'],
+      'c.py': ['internal', 'c broke'],
+    };
+    const mixed: Extractor = {
+      ...real,
+      extract: (request) => {
+        const fail = failing[request.path];
+        if (fail !== undefined)
+          return { kind: 'failed', error: { code: fail[0], message: fail[1], path: request.path } };
+        const got = real.extract(request);
+        return got.kind === 'ok' && request.path === 'd.py'
+          ? { kind: 'ok', file: { ...got.file, nodes: [], symbols: [], edges: [] } }
+          : got;
+      },
+    };
+    const root = await tree({ 'a.py': 'a', 'b.py': 'b', 'c.py': 'c', 'd.py': 'd', 'e.ts': 'e' });
+    const report = await indexWith(engineOn(recorded().sink, { extractor: mixed }), root);
+    expect(report.warnings).toEqual([
+      'no extractor for typescript yet (U6b)',
+      'code tier: 1 python file at the FILE tier only (root-type-mismatch): a.py: a broke',
+      'code tier: 2 python files at the FILE tier only (internal): b.py: b broke',
+      'code tier: d.py: no MODULE, so no SOURCE_FILE edge',
+    ]);
   });
 });
 
@@ -525,6 +640,19 @@ describe('one ParseService per engine, bytes read once (decision 100; C-PARSE I1
     ]);
     expect(p.requests).toStrictEqual([{ key: 'a.py', text: 'é = 1\n', language: 'python' }]);
     expect(report.files[0]?.nodes).toBe(1);
+  });
+
+  // Round two (review 9): an already-aborted signal parses nothing at all, not even the first file.
+  it('an aborted signal before the index builds no service and parses nothing', async () => {
+    const p = parseRig();
+    const r = recorded();
+    const root = await tree({ 'a.py': 'a', 'b.py': 'b' });
+    const report = await indexWith(
+      engineOn(r.sink, { createParseService: p.make }),
+      root,
+      AbortSignal.abort(),
+    );
+    expect([p.services, p.requests, r.writes, report.interrupted]).toEqual([[], [], [], true]);
   });
 
   it('an abort during the code tier parses nothing more and writes nothing', async () => {

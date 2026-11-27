@@ -433,7 +433,9 @@ const CASES = [
         mkdirSync(`${dir}/.git`);
         writeFileSync(`${dir}/one.py`, 'x = 1');
         for (const name of ['a.py', 'b.py', 'c.py']) writeFileSync(`${dir}/${name}`, '');
-        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:sparsity', dir], { env: PLAIN_ENV });
+        // no ambient CPG_GRAMMAR_DIR: the plant is the density, not a missing grammar
+        const { CPG_GRAMMAR_DIR: _ambient, ...env } = PLAIN_ENV;
+        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:sparsity', dir], { env });
         const problem = verdict(r, this);
         if (problem) throw new Error(problem);
       } finally {

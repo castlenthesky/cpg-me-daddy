@@ -21,7 +21,7 @@ import type {
 } from '@cpg/parse';
 import { BUILTIN_LANGUAGES, createLanguageRegistry, createParseService } from '@cpg/parse';
 import type { EdgeRow, NodeRow } from '@cpg/store';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CodeTier, CodeTierOptions, ReplaceFileOp } from './code-tier';
 import {
   attachSourceFile,
@@ -144,6 +144,8 @@ describe('createDiskGrammarSource (decision 100)', () => {
     const got = await source.load(REF);
     expect(got.ok).toBe(false);
     expect(!got.ok && got.message).toContain(join(dir, 'g.wasm'));
+    // round two (review 11): and the read error itself
+    expect(!got.ok && got.message).toMatch(/ENOENT/);
   });
 });
 
@@ -433,6 +435,8 @@ describe('createCodeTier (decisions 96, 100)', () => {
       'truncated',
       true,
     ]);
+    // round two (review 12): the tree is released on this path too
+    expect(r.handles.map((h) => h.released)).toEqual([1]);
   });
 
   it('a throw from extract or parse is failed internal with its message; run never throws', async () => {
@@ -498,6 +502,18 @@ describe('createCodeTier on the real parser (the package anchor when no grammarD
     expect(await moduleRange(tier, 'e.py', utf8('def greet():\n    pass\n'))).toBe('1:0-3:0');
     // one service for all five, every tree released (never two live)
     expect([services.length, services[0]?.stats().liveHandles]).toEqual([1, 0]);
+  });
+
+  // round two (review 13): the locator gets no environment, so a CPG_GRAMMAR_DIR in the process's own
+  // environment changes nothing (only the front door reads it, decision 100)
+  it('ignores CPG_GRAMMAR_DIR in the process environment: no grammarDir is the package anchor', async () => {
+    vi.stubEnv('CPG_GRAMMAR_DIR', await tmp());
+    try {
+      const { tier } = real();
+      expect(await moduleRange(tier, 'a.py', utf8('x = 1'))).toBe('1:0-1:5');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('an explicit grammarDir holding the grammar is used', async () => {

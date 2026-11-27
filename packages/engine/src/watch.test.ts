@@ -34,6 +34,7 @@ import type {
   WatchError,
 } from '@cpg/watch';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { EngineDeps } from './engine';
 import { createEngine } from './engine';
 import type {
   ConsumerSwitches,
@@ -350,6 +351,8 @@ interface StartOptions {
   readonly controller?: AbortController;
   readonly onEvent?: (event: WatchEvent) => void;
   readonly rescan?: RescanTrigger;
+  /** The code tier's seams (U6a.3-2), to prove the watch never uses them (S32-1). */
+  readonly codeTier?: Pick<EngineDeps, 'extractor' | 'createParseService'>;
 }
 async function start(root: string, o: StartOptions = {}): Promise<Run> {
   const clock = o.clock ?? fakeClock(5000);
@@ -363,6 +366,7 @@ async function start(root: string, o: StartOptions = {}): Promise<Run> {
       watchBackend: backend,
       now: clock.now,
       timers: clock,
+      ...o.codeTier,
     },
   );
   const session = await engine.connect(TARGET, { readOnly: false });
@@ -480,6 +484,35 @@ describe('start: index, then ready (decision 60)', () => {
     expect(event.report.consumers).toEqual(['memory']);
     expect(run.memory.ops).toHaveLength(1);
     expect(run.backend.subscribed).toEqual([root]);
+  });
+
+  // Round two (review 10): with the code tier off the watch never builds a parser or extracts, so a
+  // watch that parses and only drops the writes fails.
+  it('the watch builds no ParseService and calls no extract (S32-1, until U6a.3-3)', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n', 'src/b.py': 'b' });
+    const calls: string[] = [];
+    const run = await start(root, {
+      codeTier: {
+        createParseService: () => {
+          calls.push('createParseService');
+          throw new Error('the watch must not parse');
+        },
+        extractor: {
+          contractVersion: 'test',
+          grammars: ['python'],
+          coverage: () => {
+            throw new Error('unused');
+          },
+          extract: () => {
+            calls.push('extract');
+            throw new Error('the watch must not extract');
+          },
+        },
+      },
+    });
+    await ready(run);
+    expect(calls).toEqual([]);
+    expect(run.memory.ops.map((op) => op.kind)).toEqual(['merge-filesystem']);
   });
 
   it('seeds the session from the walk, so the initial batch is only what changed since, written before ready', async () => {

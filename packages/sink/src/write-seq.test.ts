@@ -76,6 +76,9 @@ describe('MemoryStore.nextWriteSeq (decision 98a)', () => {
     // a lower seq on another file applies, but the next value stays above everything seen
     expect((await store.write(del('b.py', 4))).applied).toBe(true);
     expect(store.nextWriteSeq()).toBe(12);
+    // round two (review 2): a direct write after values were handed out still counts
+    expect((await store.write(del('b.py', 20))).applied).toBe(true);
+    expect(store.nextWriteSeq()).toBe(21);
   });
 
   it('a revision-unchanged replace-file moves the record, so the next value is above it', async () => {

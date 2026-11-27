@@ -196,6 +196,12 @@ describe('walkWorkspace onFile: the byte hand-off', () => {
     const root = await tree({ 'a.py': 'a', 'b.py': 'b', 'c/d.py': 'd' });
     const log: string[] = [];
     await walk(root, {
+      // round two (review 4): the walk's own per-file step is logged too, so a walker that walks
+      // everything first and calls the hook afterwards (holding every file's bytes) fails
+      languageOf: (path) => {
+        log.push(`lang ${path}`);
+        return languageOf(path);
+      },
       onFile: async (file) => {
         log.push(`start ${file.path}`);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -203,10 +209,13 @@ describe('walkWorkspace onFile: the byte hand-off', () => {
       },
     });
     expect(log).toEqual([
+      'lang a.py',
       'start a.py',
       'end a.py',
+      'lang b.py',
       'start b.py',
       'end b.py',
+      'lang c/d.py',
       'start c/d.py',
       'end c/d.py',
     ]);

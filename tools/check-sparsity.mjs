@@ -3,7 +3,8 @@
 // the fixture corpus"; controller decision 101).
 // Usage: node tools/check-sparsity.mjs [corpus] [--report <cpg.index.report.json>]
 //
-// The corpus defaults to fixtures/ladder. Without --report the tool builds apps/cli (`tsc -b`, a no-op
+// The corpus defaults to the repository's fixtures/ladder; a given one is resolved against the cwd.
+// Either way `<corpus>` below is that absolute path. Without --report the tool builds apps/cli (`tsc -b`, a no-op
 // when current) and runs the built bin the way an installed `cpg` runs:
 // `node apps/cli/dist/main.js index <corpus> --dry-run --format json`, cwd the repository, with this
 // process's environment (so CPG_GRAMMAR_DIR reaches it). `--report <file>` reads that document from

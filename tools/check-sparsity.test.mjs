@@ -18,10 +18,12 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+// Round two (review 19): no CPG_GRAMMAR_DIR from the caller's shell, which would move the grammar.
+const { CPG_GRAMMAR_DIR: _ambient, ...BASE_ENV } = process.env;
 const run = (args, env = {}) =>
   spawnSync(process.execPath, [SCRIPT, ...args], {
     cwd: REPO,
-    env: { ...process.env, ...env },
+    env: { ...BASE_ENV, ...env },
     encoding: 'utf8',
   });
 const loc = (text) => (text.length === 0 ? 0 : text.split('\n').length);
@@ -79,7 +81,8 @@ describe('check-sparsity on the ladder through the built bin', () => {
       const named = pyFiles(LADDER).map(
         (f) => `check-sparsity: ${LADDER}/${relative(LADDER, f)}: no code-tier nodes`,
       );
-      expect(lines(r.stderr).toSorted()).toEqual(named.toSorted());
+      // round two (review 17): in the report's file order, which is path order (C-CLI IndexReport)
+      expect(lines(r.stderr)).toEqual(named.toSorted());
     },
   );
 });
@@ -143,6 +146,38 @@ describe('check-sparsity on a written report (--report)', () => {
     ]);
   });
 
+  // Round two (review 17): every kind of line at once, in the stated order, the report unsorted
+  it('stderr order: warnings in report order, then each empty file in report order, then the density', () => {
+    const c = corpus(
+      { 'z.py': 'z\n', 'm.py': 'm', 'a.py': 'a\n', 'k.py': 'k' },
+      { 'z.py': 4, 'm.py': 0, 'a.py': 6, 'k.py': 0 },
+    );
+    const r = run([c.root, '--report', c.report]);
+    // z.py 4 / 2 and a.py 6 / 2 warn; the corpus is 10 / 6
+    expect([r.status, r.stdout, lines(r.stderr)]).toEqual([
+      1,
+      '',
+      [
+        'check-sparsity: warning: z.py 2.000 n/LOC',
+        'check-sparsity: warning: a.py 3.000 n/LOC',
+        `check-sparsity: ${c.root}/m.py: no code-tier nodes`,
+        `check-sparsity: ${c.root}/k.py: no code-tier nodes`,
+        `check-sparsity: ${c.root}: structural density 1.667 n/LOC is over the bar 1.5`,
+      ],
+    ]);
+  });
+
+  // Round two (review 18): a file that is not JSON at all is the same failure, not a stack trace
+  it('a report that is not JSON fails as no cpg.index.report document', () => {
+    const c = corpus({ 'a.py': 'a' }, { 'a.py': 1 });
+    writeFileSync(c.report, '{');
+    const r = run([c.root, '--report', c.report]);
+    expect([r.status, lines(r.stderr)]).toEqual([
+      1,
+      ['check-sparsity: no cpg.index.report document'],
+    ]);
+  });
+
   it('a document that is not a cpg.index.report fails', () => {
     const c = corpus({ 'a.py': 'a' }, { 'a.py': 1 });
     writeFileSync(
@@ -154,5 +189,20 @@ describe('check-sparsity on a written report (--report)', () => {
       1,
       ['check-sparsity: no cpg.index.report document'],
     ]);
+  });
+});
+
+// Round two (review 16): the bin's own failure is reported with its exit code and its stderr.
+describe('check-sparsity when cpg index fails', () => {
+  it('names the exit code and passes the bin stderr on', { timeout: 120_000 }, () => {
+    const root = mkdtempSync(join(tmpdir(), 'cpg-sparsity-badconfig-'));
+    roots.push(root);
+    mkdirSync(join(root, '.git'));
+    writeFileSync(join(root, 'cpg.config.yaml'), 'version: 99\n');
+    writeFileSync(join(root, 'a.py'), 'a = 1\n');
+    const r = run([root]);
+    expect(r.status).toBe(1);
+    expect(r.stderr.startsWith('check-sparsity: cpg index failed (exit 2): ')).toBe(true);
+    expect(r.stderr).toContain(join(root, 'cpg.config.yaml'));
   });
 });
