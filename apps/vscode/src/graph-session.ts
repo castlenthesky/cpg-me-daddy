@@ -1,6 +1,6 @@
 // REAL (U3.1.1 part 4, BMO-52): the extension's flows (controller decision 38), in plain node. Owns the host,
 // the verify scheduler and the panel; extension.ts gives it VS Code. U4.2.2 (BMO-132): one watch keeps the
-// graph current (controller decisions 70 to 74).
+// graph current (controller decisions 70 to 74); sprint 26 sends each batch's deltas (decision 83).
 
 import type { CpgEngine, EngineConfig, EngineSession, WatchEvent } from '@cpg/engine';
 import { parseWebviewMessage } from '@cpg/inspector';
@@ -90,10 +90,17 @@ interface Watch {
  * debounce window and rescan interval coming from the configuration's `watch.*`. Its session is
  * closed once `watch()` has resolved and its refresh has settled. VS Code's own file events are not
  * used (VD-33, P-A).
- * - `ready` and each `batch` ask for a refresh at the event's seq: `engine.inspect` on the watch's
- *   session, then `host.onSnapshot({ ...payload, seq }, { seq, cause })`. Refreshes are latest-wins:
- *   one in flight, at most one queued, and a newer request replaces the queued one. There are no
- *   graph deltas (decision 67's reasons).
+ * - Sprint 26 (controller decision 83): the watch's work for the host runs as one queue of jobs, one at a
+ *   time, in order. `ready` asks for a refresh; each `batch` queues its `deltas`. The store is read only
+ *   by a refresh, never per batch.
+ * - A refresh: `engine.inspect` on the watch's session, then `host.onSnapshot({ ...payload, seq }, { seq,
+ *   cause })`, `seq` being the `graphSeq` of the latest event this watch has seen when it calls
+ *   `engine.inspect` (decision 82). Asking for one drops every job still queued (the read covers them) and queues one.
+ * - A batch's deltas go through `host.onDelta(delta, { seq: delta.seq, cause: 'live' })`, one after
+ *   another. The job falls back to one refresh, and its remaining deltas are dropped, when the watch has
+ *   delivered no graph yet, when onDelta rejects (a malformed delta), or when the host's seq is still
+ *   below the delta's once onDelta resolves (a gap: the host recorded seq-gap). BMO-102 is settled for
+ *   the panel by that fallback, and BMO-103's answer is the same fallback: onDelta's answers are kept.
  * - The first snapshot a watch delivers is `initial` (a new epoch, C-EXT I-13); verify then judges by
  *   that watch's scope, and the warnings follow it. Every later one is `catch-up`: the epoch is kept and
  *   the seq grows (I-12). When ready's refresh succeeds, as it normally does, ready is the initial one.
@@ -378,6 +385,7 @@ export class GraphSession {
         return;
       }
       case 'batch':
+        // SEAT: sprint 26 (decision 83): the batch's deltas through host.onDelta, not a refresh.
         this.log.info(
           `changes at seq ${String(event.seq)}: ${String(event.changes.length)} file(s); ${String(event.write.nodesWritten)} nodes, ${String(event.write.edgesWritten)} edges written`,
         );

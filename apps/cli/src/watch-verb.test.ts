@@ -13,6 +13,10 @@
 // - The sprint 23 design notes: the line formats, the ms rounding, `none`, the eof and missing-closed
 //   ends, render-reconciliation against the payload last sent (S23-1), the inspector-end precedence.
 // - renderReconciliation's semantics (stale for an older seq; C-EXT I-19).
+// - Sprint 26, controller decisions 81, 82 and 84: a batch event carries its deltas and graph seq;
+//   --inspect sends a graph at start (cause 'initial') and each batch's deltas as graph-delta lines,
+//   then a verification; a delta that does not apply falls back to one graph (cause 'catch-up') at the
+//   latest graph seq; the picture is judged as the inspector holds it.
 // Expected values come from those sources, never from running the code.
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -33,7 +37,13 @@ import type {
   WatchRequest,
 } from '@cpg/engine';
 import { createEngine, DEFAULT_EXCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from '@cpg/engine';
-import { isWorkspacePath, makeNodeId, type GraphPayload, type RenderReport } from '@cpg/model';
+import {
+  isWorkspacePath,
+  makeNodeId,
+  type GraphDelta,
+  type GraphPayload,
+  type RenderReport,
+} from '@cpg/model';
 import type { RawWatchEvent, WatchBackend, WatchCapabilities } from '@cpg/watch';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -96,12 +106,34 @@ const ready = (report = REPORT): WatchEvent => ({
   at: 1000,
   root: '/w',
   report,
+  graphSeq: 0,
+});
+const SRC_A = ((path: string) => {
+  if (!isWorkspacePath(path)) throw new Error(path);
+  return path;
+})('src/a.ts');
+/** A delta at `seq` that adds node `id` (a FILE named `id`, as payloadOf makes them). */
+const adds = (seq: number, id: string, type = 'FILE'): GraphDelta => ({
+  seq,
+  file: SRC_A,
+  revision_id: '',
+  producer: 'filesystem',
+  addedNodes: [{ id, type, name: id }],
+  addedEdges: [],
+  removedNodeIds: [],
+});
+/** A delta at `seq` that removes node `id`. */
+const drops = (seq: number, id: string): GraphDelta => ({
+  ...adds(seq, id),
+  addedNodes: [],
+  removedNodeIds: [id],
 });
 const batch = (
   seq: number,
   total: number,
   paths = ['src/a.ts'],
   cause: 'live' | 'rescan' = 'live',
+  deltas: readonly GraphDelta[] = [],
 ): WatchEvent => ({
   kind: 'batch',
   seq,
@@ -114,7 +146,12 @@ const batch = (
   // prints them instead of changes.length fails.
   write: { nodesWritten: 5, edgesWritten: 6, statementCount: 1 },
   latencyMs: { t0_t1: null, t1_t2: 3, t2_t3: total - 3, total },
+  deltas,
+  graphSeq: deltas.at(-1)?.seq ?? 0,
 });
+/** A live batch at event seq `seq` of just `deltas`. */
+const deltaBatch = (seq: number, ...deltas: GraphDelta[]): WatchEvent =>
+  batch(seq, 4, ['src/a.ts'], 'live', deltas);
 const warning = (seq: number, message: string): WatchEvent => ({
   kind: 'warning',
   seq,
@@ -331,6 +368,9 @@ function fakeInspector(o: { failStart?: Error; startGate?: Promise<void> } = {})
     stops: () => stops,
     exit: (exit: InspectorExit) => settle?.(exit),
     graphs: () => sent.flatMap((l) => (l.type === 'graph' ? [l.payload] : [])),
+    causes: () => sent.flatMap((l) => (l.type === 'graph' ? [l.cause] : [])),
+    deltas: () => sent.flatMap((l) => (l.type === 'graph-delta' ? [l.delta] : [])),
+    kinds: () => sent.map((l) => l.type),
     verifications: () => sent.flatMap((l) => (l.type === 'verification' ? [l.report] : [])),
   };
 }
@@ -801,7 +841,7 @@ describe('cpg watch --inspect (decision 67)', () => {
     expect(f.starts()).toBe(0);
     s.emit(ready());
     await until(l, () => f.sent.length >= 2, 'the first graph and verdict');
-    expect(f.sent[0]).toEqual({ type: 'graph', payload: { ...P2, seq: 0 } });
+    expect(f.sent[0]).toEqual({ type: 'graph', payload: { ...P2, seq: 0 }, cause: 'initial' });
     expect(f.verifications()[0]?.checks).toEqual(
       VERIFIED.map((c) => (c.id === 'render-reconciliation' ? waitingFor(0) : c)),
     );
@@ -810,9 +850,9 @@ describe('cpg watch --inspect (decision 67)', () => {
     expect(l.io.stderr).toContain(
       `cpg: inspector at ${URL} (open it in a browser; Ctrl-C stops it)`,
     );
-    s.emit(batch(1, 4));
-    await until(l, () => f.verifications().length >= 2, 'the second graph and verdict');
-    // Round two (review 6): each refresh sends its own verify's checks
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    await until(l, () => f.verifications().length >= 2, 'the delta and its verdict');
+    // Round two (review 6): each refresh sends its own verify's checks; sprint 26: a batch's too
     expect(f.verifications()[1]?.checks).toEqual(
       verifiedAt(1).map((c) => (c.id === 'render-reconciliation' ? waitingFor(1) : c)),
     );
@@ -824,27 +864,32 @@ describe('cpg watch --inspect (decision 67)', () => {
         .map((r) => r.what)
         .toSorted(byText)
         .join(),
-    ).toBe('inspect,inspect,verify,verify');
+    ).toBe('inspect,verify,verify');
     expect(
       s.reads.filter((r) => r.session !== s.sessions[0] || field(r.config, 'root') !== '/w'),
     ).toEqual([]);
     expect(s.reads.filter((r) => r.what === 'verify').map((r) => r.expected)).toEqual([null, null]);
   });
 
-  it('the graph seq is the triggering event seq, not a count: ready 0, batches 2 and 4', async () => {
+  // Reworked in sprint 26: the picture's seq is the graph seq (decision 82), not the event seq.
+  it('the graph seq, not the event seq: ready 0, deltas 1 and 2, a fallback graph at 4', async () => {
     const s = scripted();
     const { l, f } = await inspecting(s);
     s.emit(warning(1, 'w1'));
-    s.emit(batch(2, 4));
-    await until(l, () => f.graphs().length >= 2, 'graph 2');
+    s.emit(deltaBatch(2, adds(1, 'n3')));
     s.emit(warning(3, 'w3'));
-    s.emit(batch(4, 4));
-    await until(l, () => f.graphs().length >= 3, 'graph 4');
-    expect([f.graphs().map((p) => p.seq), s.inspects()]).toEqual([[0, 2, 4], 3]);
+    s.emit(deltaBatch(4, adds(2, 'n4')));
+    s.emit(deltaBatch(5, adds(4, 'n5')));
+    await until(l, () => f.graphs().length >= 2, 'the fallback graph');
+    expect([f.graphs().map((p) => p.seq), f.deltas().map((d) => d.seq), s.inspects()]).toEqual([
+      [0, 4],
+      [1, 2],
+      2,
+    ]);
   });
 
-  it('render-reconciliation is judged against the payload last sent (S23-1)', async () => {
-    const s = scripted({ payloads: [P2, P3] });
+  it('render-reconciliation is judged against the picture the inspector holds (S23-1)', async () => {
+    const s = scripted({ payloads: [P2] });
     const { l, f } = await inspecting(s);
     expect(renderOf(f, 0)).toEqual(waitingFor(0));
     f.report(0);
@@ -852,9 +897,9 @@ describe('cpg watch --inspect (decision 67)', () => {
     expect(renderOf(f, 1)).toEqual(render('pass', 2, 2, { asOfSeq: 0 }));
     expect(l.io.stderr).toContain('cpg: render-reconciliation pass');
 
-    s.emit(batch(1, 4));
-    await until(l, () => f.verifications().length >= 3, 'graph 1 and its verdict');
-    expect(f.graphs()[1]).toEqual({ ...P3, seq: 1 });
+    s.emit(deltaBatch(1, adds(1, 'n3')));
+    await until(l, () => f.verifications().length >= 3, 'delta 1 and its verdict');
+    expect([f.graphs().length, f.deltas()]).toEqual([1, [adds(1, 'n3')]]);
     const detail = "render-report at seq 0 lags the payload's seq 1";
     expect(renderOf(f, 2)).toEqual(render('stale', 2, 3, { detail, asOfSeq: 1 }));
     // the page still reporting the old graph changes nothing
@@ -871,34 +916,48 @@ describe('cpg watch --inspect (decision 67)', () => {
     expect(renderOf(f, 4)).toEqual(render('pass', 3, 3, { asOfSeq: 1 }));
   });
 
-  it('latest-wins: one refresh in flight, one queued at the newest seq; stdout never waits', async () => {
+  // Reworked in sprint 26: the deltas of batches during a snapshot follow it, then one verify.
+  it('deltas that arrive while a snapshot reads wait for it, then follow it in order; stdout never waits', async () => {
     const gate = gated();
     const s = scripted({ gate: gate.promise });
     const f = fakeInspector();
     const l = await watching(['watch', '/w', '--inspect'], s, f);
     s.emit(ready());
     await until(l, () => s.inspects() === 1, 'the first refresh to read');
-    for (const seq of [1, 2, 3]) s.emit(batch(seq, 4));
+    for (const seq of [1, 2, 3]) s.emit(deltaBatch(seq, adds(seq, `n${String(seq + 2)}`)));
     expect(l.io.stdout).toHaveLength(4);
     await tick();
     await tick();
-    expect([s.inspects(), f.graphs()]).toEqual([1, []]);
+    expect([s.inspects(), f.sent]).toEqual([1, []]);
     gate.open();
-    await until(l, () => f.graphs().length >= 2, 'the queued refresh');
+    await until(l, () => f.verifications().length >= 2, 'the verify after the deltas');
     await tick();
     await tick();
-    expect([f.graphs().map((p) => p.seq), s.inspects()]).toEqual([[0, 3], 2]);
+    expect([f.graphs().map((p) => p.seq), f.deltas().map((d) => d.seq), s.inspects()]).toEqual([
+      [0],
+      [1, 2, 3],
+      1,
+    ]);
+    expect(f.kinds()).toEqual([
+      'graph',
+      'verification',
+      'graph-delta',
+      'graph-delta',
+      'graph-delta',
+      'verification',
+    ]);
   });
 
   it('a refresh that throws is a warning, and the watch goes on', async () => {
     const s = scripted({ failInspect: [1] });
     const { l, f } = await inspecting(s);
-    s.emit(batch(1, 4));
-    const line = 'cpg: warning: inspector refresh at seq 1 failed: inspect-boom-1';
+    // Sprint 26: only a delta that does not apply (here a gap) reads the store again.
+    s.emit(deltaBatch(1, adds(2, 'n3')));
+    const line = 'cpg: warning: inspector refresh at seq 2 failed: inspect-boom-1';
     await until(l, () => l.io.stderr.includes(line), 'the refresh warning');
-    s.emit(batch(2, 4));
-    await until(l, () => f.graphs().length >= 2, 'graph 2');
-    expect(f.graphs().map((p) => p.seq)).toEqual([0, 2]);
+    s.emit(deltaBatch(2, adds(3, 'n4')));
+    await until(l, () => f.graphs().length >= 2, 'graph 3');
+    expect(f.graphs().map((p) => p.seq)).toEqual([0, 3]);
     l.abort();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
   });
@@ -997,7 +1056,7 @@ describe('cpg watch --inspect (decision 67)', () => {
     const l = await watching(['watch', '/w', '--inspect'], s, f);
     s.emit(ready());
     await until(l, () => s.inspects() === 1, 'the first refresh to read');
-    s.emit(batch(1, 4));
+    s.emit(deltaBatch(1, adds(1, 'n3')));
     l.abort();
     await until(l, () => s.log.includes('watch resolved'), 'the watch to resolve');
     await tick();
@@ -1015,12 +1074,13 @@ describe('cpg watch --inspect (decision 67)', () => {
     const l = await watching(['watch', '/w', '--inspect'], s, f);
     s.emit(ready());
     await until(l, () => f.starts() === 1, 'the start');
-    s.emit(batch(1, 4));
+    s.emit(deltaBatch(1, adds(1, 'n3')));
     start.open();
     await until(l, () => f.graphs().length >= 1, 'the first graph');
     await tick();
     await tick();
-    expect([f.graphs().map((p) => p.seq), s.inspects()]).toEqual([[1], 1]);
+    // Sprint 26: the graph read after the batch holds its delta, which is then already applied.
+    expect([f.graphs().map((p) => p.seq), s.inspects(), f.deltas()]).toEqual([[1], 1, []]);
   });
 
   // Round two (review 8): design note 7, a failure after the signal keeps 130.
@@ -1036,6 +1096,43 @@ describe('cpg watch --inspect (decision 67)', () => {
     start.open();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
   });
+
+  it("a batch's deltas go out at once, in order, as graph-delta lines, then its verification", async () => {
+    const s = scripted();
+    const { l, f } = await inspecting(s);
+    s.emit(deltaBatch(1, adds(1, 'n3'), drops(2, 'n1')));
+    expect(f.deltas()).toEqual([adds(1, 'n3'), drops(2, 'n1')]);
+    await until(l, () => f.verifications().length >= 2, 'its verification');
+    expect([f.kinds(), s.inspects()]).toEqual([
+      ['graph', 'verification', 'graph-delta', 'graph-delta', 'verification'],
+      1,
+    ]);
+    // Judged against what the inspector holds: n2 and n3 at seq 2, none drawn yet.
+    f.report(2, { payloadNodeCount: 2, renderedNodeCount: 2 });
+    await until(l, () => f.verifications().length >= 3, 'the pass at seq 2');
+    expect(renderOf(f, 2)).toEqual(render('pass', 2, 2, { asOfSeq: 2 }));
+  });
+
+  it.each([
+    ['a gap', adds(2, 'n3'), 2],
+    ['a malformed delta', adds(1, 'n1', 'DIRECTORY'), 1],
+  ] as const)(
+    '%s: one catch-up graph at the graph seq instead, and the next batch goes on from it',
+    async (_name, bad, at) => {
+      const s = scripted({ payloads: [P2, P3] });
+      const { l, f } = await inspecting(s);
+      s.emit(deltaBatch(1, bad));
+      await until(l, () => f.graphs().length >= 2, 'the catch-up graph');
+      s.emit(deltaBatch(2, adds(at + 1, 'n4')));
+      await until(l, () => f.deltas().length >= 1, 'the next delta');
+      expect([f.graphs().map((p) => p.seq), f.causes(), f.deltas(), s.inspects()]).toEqual([
+        [0, at],
+        ['initial', 'catch-up'],
+        [adds(at + 1, 'n4')],
+        2,
+      ]);
+    },
+  );
 
   it('without inspect nothing starts and nothing is read', async () => {
     const s = scripted();
@@ -1109,7 +1206,11 @@ describe('cpg watch over the real engine (I-23, decision 67)', () => {
     expect(events[0]).toMatchObject({ root });
     expect(events[1]).toMatchObject({
       changes: [{ kind: 'created', entry: 'file', path: 'b.ts' }],
+      // Sprint 26 (decisions 81, 82): its delta, on the NDJSON line too.
+      deltas: [{ seq: 1, file: 'b.ts', removedNodeIds: [] }],
+      graphSeq: 1,
     });
+    expect(events[0]).toMatchObject({ graphSeq: 0 });
     expect(events[2]).toMatchObject({ reason: 'signal' });
     expect(l.io.stderr.some((e) => e.startsWith(`cpg: watching ${root}: indexed `))).toBe(true);
     expect(
@@ -1119,7 +1220,8 @@ describe('cpg watch over the real engine (I-23, decision 67)', () => {
     ).toHaveLength(1);
   });
 
-  it('--inspect: each refresh is the memory store whole, at the triggering seq', async () => {
+  // Reworked in sprint 26: the store whole at start, then the batch's delta (decision 84).
+  it('--inspect: the memory store whole at graph seq 0, then each batch as its deltas', async () => {
     const root = await workspace(FAST);
     const b = scriptedBackend();
     const f = fakeInspector();
@@ -1133,11 +1235,11 @@ describe('cpg watch over the real engine (I-23, decision 67)', () => {
       fileIds('.', 'a.ts', 'cpg.config.yaml'),
     ]);
     await b.create(root, 'b.ts');
-    await until(l, () => f.graphs().length >= 2, 'graph 1');
-    expect([f.graphs()[1]?.seq, idsOf(f.graphs()[1])]).toEqual([
-      1,
-      fileIds('.', 'a.ts', 'b.ts', 'cpg.config.yaml'),
-    ]);
+    await until(l, () => f.deltas().length >= 1, 'delta 1');
+    expect([
+      f.graphs().length,
+      f.deltas().map((d) => [d.seq, d.file, d.addedNodes[0]?.id]),
+    ]).toEqual([1, [[1, 'b.ts', fileIds('b.ts')[0]]]]);
     l.abort();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
     expect(field(parsed(l).at(-1), 'kind')).toBe('closed');

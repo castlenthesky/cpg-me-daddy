@@ -1,6 +1,6 @@
 // `cpg watch`'s event stream (U4.2.1 part b, BMO-60; controller decisions 65-67): every WatchEvent
-// on stdout as it arrives, the human lines on stderr, and with the inspector on, a full graph per
-// refresh. run() turns the WatchEnd into an exit code (decision 66).
+// on stdout as it arrives, the human lines on stderr, and with the inspector on, a full graph at start
+// and each batch's deltas after it (decision 84). run() turns the WatchEnd into an exit code (decision 66).
 
 import type {
   CpgEngine,
@@ -82,17 +82,24 @@ function inspectorExitMessage(code: number | null, signal: string | null): strin
  * is no stdin mode). `closed { reason: 'error' }` with no `error` event before it, or a watch that
  * resolves with no `closed`, is `error` with an `engine-rejected` failure.
  *
- * With `inspector` (decision 67): after `ready`, the inspector starts once and
- * `cpg: inspector at <url> (open it in a browser; Ctrl-C stops it)` is printed. `ready` (seq 0) and
- * each `batch` (its seq) trigger a refresh: `engine.verify(session, config, null)` and
- * `engine.inspect(session, config)` on the request's session, then a `graph` whose payload has `seq`
- * set to the trigger's seq, and a `verification`. Refreshes are latest-wins: one in flight, at most
- * one queued; a newer trigger replaces the queued one, and a refresh takes its seq when it starts
- * reading. A refresh that throws prints `cpg: warning: inspector refresh at seq <n> failed:
- * <message>` and the watch goes on. Render-reconciliation is judged against the payload last sent;
- * the verification sent with a graph uses the latest render-report received so far (`stale` for an
- * older graph, `unavailable` before any), and a render-report that changes the check re-sends the
- * verification (serveLive's rule).
+ * With `inspector` (decisions 67, 84): after `ready`, the inspector starts once and
+ * `cpg: inspector at <url> (open it in a browser; Ctrl-C stops it)` is printed. The store is read
+ * whole only by a snapshot: `engine.verify(session, config, null)` and `engine.inspect(session,
+ * config)` on the request's session, then a `graph` (LivePicture.show) whose payload has `seq` set to
+ * the `graphSeq` of the latest event seen when the snapshot calls `engine.inspect`, and its
+ * `verification`.
+ * `ready` asks for one. Sprint 26 (decision 84): each `batch`'s deltas go to the picture at once,
+ * inside `onEvent` (LivePicture.apply), unless a snapshot is asked for or in flight, or none has been
+ * shown: then they wait, and are applied in arrival order right after the next snapshot is shown
+ * (already-applied ones are skipped). Each batch whose deltas were applied asks for a verify:
+ * `engine.verify`, then LivePicture.reverify. A batch whose deltas do not apply (a gap, a malformed
+ * delta) asks for a snapshot instead, and so does one that arrives before any. Snapshots and verifies
+ * are latest-wins: one in flight, at most one queued; a queued snapshot replaces a queued verify (it
+ * verifies too). A snapshot or verify that throws prints `cpg: warning: inspector refresh at seq <n>
+ * failed: <message>` (`<n>` the graph seq it was for) and the watch goes on. Render-reconciliation is
+ * judged against the picture the inspector holds; the verification sent uses the latest render-report
+ * received so far (`stale` for an older graph seq, `unavailable` before any), and a render-report that
+ * changes the check re-sends the verification (serveLive's rule).
  *
  * The inspector ending: an exit by SIGINT aborts the watch (the same Ctrl-C), and the end is the
  * watch's. Any other exit, or a start that rejects, aborts the watch, and the end is `inspector`
@@ -202,6 +209,7 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
         break;
       }
       case 'batch': {
+        // SEAT: sprint 26 (decision 84): the batch's deltas to the picture, then a verify.
         if (!quiet) {
           const label = event.cause === 'rescan' ? 'rescan batch' : 'batch';
           io.err(

@@ -3,8 +3,11 @@
 // disk with a fresh real engine, so a payload is what an engine holding just those files gives. The
 // configuration, the host, verify and its scheduler are real; VS Code is fake: the panel, the clock and the
 // messages. One group runs the real engine and @parcel/watcher. Expected values: those decisions, C-EXT
-// I-12, I-13, I-19 and I-22, 08-verification §3.1, and the doc comments.
+// I-12, I-13, I-19 and I-22, 08-verification §3.1, and the doc comments. Sprint 26 (controller decisions
+// 82, 83): a scripted batch carries deltas at the next graph seqs, built as filesystemTier builds a FILE;
+// the store is read only by a refresh; a gap, a malformed delta or no graph yet falls back to one.
 
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +20,18 @@ import {
   type WatchEvent,
   type WatchRequest,
 } from '@cpg/engine';
-import type { HostToWebview, ThemeSnapshot, VerificationReport } from '@cpg/model';
+import {
+  applyGraphDelta,
+  isWorkspacePath,
+  makeNodeId,
+  type GraphDelta,
+  type GraphNode,
+  type GraphPayload,
+  type HostToWebview,
+  type ThemeSnapshot,
+  type VerificationReport,
+  type WorkspacePath,
+} from '@cpg/model';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SourceOpener, WebviewTransport } from './contract';
 import type { PanelSurface } from './graph-panel';
@@ -99,11 +113,83 @@ async function onDisk(engineConfig: EngineConfig, config: IndexConfig) {
 
 const NO_LATENCY = { t0_t1: null, t1_t2: 0, t2_t3: 0, total: 0 };
 
+// ── deltas as the engine builds them for one top-level file (filesystemTier's FILE, decision 81) ──
+type DeltaBody = Omit<GraphDelta, 'seq'>;
+const LANGUAGES: Readonly<Record<string, string>> = { ts: 'typescript', py: 'python' };
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
+function wp(path: string): WorkspacePath {
+  if (!isWorkspacePath(path)) throw new Error(`not a WorkspacePath: ${path}`);
+  return path;
+}
+const fileId = (path: string): string => makeNodeId({ form: 'file', path: wp(path) });
+const dirId = (path: string): string => makeNodeId({ form: 'directory', path: wp(path) });
+const ROOT_ID = dirId('.');
+const base = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
+const parentId = (path: string): string =>
+  dirId(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.');
+function fileNode(path: string, text: string): GraphNode {
+  const language = LANGUAGES[path.slice(path.lastIndexOf('.') + 1)];
+  const revision = sha256(text);
+  const data = { path, name: base(path), content_hash: revision, revision_id: revision };
+  return {
+    id: fileId(path),
+    type: 'FILE',
+    name: base(path),
+    data: language === undefined ? data : { ...data, language },
+  };
+}
+const delta = (file: string, over: Partial<DeltaBody>): DeltaBody => ({
+  file: wp(file),
+  revision_id: '',
+  producer: 'filesystem',
+  addedNodes: [],
+  addedEdges: [],
+  removedNodeIds: [],
+  ...over,
+});
+/** A created file: its node, attached to its parent directory. */
+const created = (path: string, text: string): DeltaBody =>
+  delta(path, {
+    revision_id: sha256(text),
+    addedNodes: [fileNode(path, text)],
+    addedEdges: [{ source: parentId(path), target: fileId(path), type: 'HAS_ENTRY' }],
+  });
+/** A created directory: its node, attached to its parent. */
+const folder = (path: string): DeltaBody =>
+  delta(path, {
+    addedNodes: [
+      {
+        id: dirId(path),
+        type: 'DIRECTORY',
+        name: base(path),
+        data: { path, name: base(path), status: 'ready' },
+      },
+    ],
+    addedEdges: [{ source: parentId(path), target: dirId(path), type: 'HAS_ENTRY' }],
+  });
+/** A rename: the old path's node goes, the new one arrives attached (one delta, the new path's). */
+const moved = (path: string, from: string, text: string): DeltaBody => ({
+  ...created(path, text),
+  removedNodeIds: [fileId(from)],
+});
+/** A changed file: its node again, no link (S26-1). */
+const changed = (path: string, text: string): DeltaBody =>
+  delta(path, { revision_id: sha256(text), addedNodes: [fileNode(path, text)] });
+const deleted = (path: string): DeltaBody => delta(path, { removedNodeIds: [fileId(path)] });
+/** The root re-added as it is: the graph moves on, and nothing in it changes. */
+const TOUCH: DeltaBody = delta('.', {
+  addedNodes: [
+    { id: ROOT_ID, type: 'DIRECTORY', name: '.', data: { path: '.', name: '.', status: 'ready' } },
+  ],
+});
+
 /** One engine.watch, driven by the test. Its events' seqs are dense from 0, as the engine's (C-CLI I-23). */
 class ScriptedWatch {
   ended = false;
   readonly done: Promise<void>;
   private next = 0;
+  /** The graph seq (decision 82): 0 at ready, one more per delta. */
+  private graphSeq = 0;
   private closed = false;
   private finish: () => void = () => undefined;
 
@@ -133,14 +219,25 @@ class ScriptedWatch {
     const seq = this.seq();
     const { root } = this.request.config;
     const sent = warnings === undefined ? report : { ...report, warnings };
-    this.onEvent({ kind: 'ready', seq, at: seq, root, report: sent });
+    this.onEvent({ kind: 'ready', seq, at: seq, root, report: sent, graphSeq: 0 });
   }
 
-  batch(): void {
+  /** A batch of `deltas`, each at the next graph seq; its graphSeq is the last one's. */
+  batch(deltas: readonly DeltaBody[] = [TOUCH], cause: 'live' | 'rescan' = 'live'): void {
     const seq = this.seq();
+    const stamped = deltas.map((body): GraphDelta => {
+      this.graphSeq += 1;
+      return { ...body, seq: this.graphSeq };
+    });
     const write = { nodesWritten: 1, edgesWritten: 1, statementCount: 1 };
-    const event = { kind: 'batch', seq, at: seq, cause: 'live', changes: [], write } as const;
-    this.onEvent({ ...event, latencyMs: NO_LATENCY });
+    const event = { kind: 'batch', seq, at: seq, cause, changes: [], write } as const;
+    this.onEvent({ ...event, latencyMs: NO_LATENCY, deltas: stamped, graphSeq: this.graphSeq });
+  }
+
+  /** A batch whose first delta is a graph seq past the next, as if one were lost: a gap. */
+  gap(deltas: readonly DeltaBody[] = [TOUCH]): void {
+    this.graphSeq += 1;
+    this.batch(deltas);
   }
 
   warning(message: string): void {
@@ -241,15 +338,26 @@ class FakeSurface implements PanelSurface {
   send(message: unknown): void {
     this.handler(message);
   }
-  /** The page draws the latest graph it was sent, whole. */
-  draw(over: Readonly<Record<string, number>> = {}): void {
+  /** What the page holds: the latest graph, with every delta posted after it applied (sprint 26). */
+  picture(): { readonly epoch: number; readonly seq: number; readonly payload: GraphPayload } {
     const graph = this.graphs.at(-1);
     if (graph?.type !== 'graph') throw new Error('the page has no graph');
-    const count = graph.payload.nodes.length;
+    let { payload } = graph;
+    for (const message of this.posted.slice(this.posted.indexOf(graph) + 1)) {
+      if (message.type !== 'graph-delta') continue;
+      const result = applyGraphDelta(payload, message.delta);
+      if (result.outcome === 'applied') payload = result.payload;
+    }
+    return { epoch: graph.epoch, seq: payload.seq, payload };
+  }
+  /** The page draws what it holds, whole. */
+  draw(over: Readonly<Record<string, number>> = {}): void {
+    const { epoch, seq, payload } = this.picture();
+    const count = payload.nodes.length;
     this.send({
       type: 'render-report',
-      epoch: graph.epoch,
-      seq: graph.seq,
+      epoch,
+      seq,
       report: {
         payloadNodeCount: count,
         renderedNodeCount: count,
@@ -480,6 +588,9 @@ const names = (message: HostToWebview | undefined): string[] =>
     : ['no graph'];
 /** `<epoch>/<seq>` of each graph a page was sent. */
 const stamps = (page: FakeSurface): string[] => page.graphs.map(stamp);
+/** `<epoch>/<seq> <file>` of each graph-delta a page was sent. */
+const deltasOf = (page: FakeSurface): string[] =>
+  page.posted.flatMap((m) => (m.type === 'graph-delta' ? [`${stamp(m)} ${m.delta.file}`] : []));
 function pending<T extends { readonly cancelled: boolean }>(timers: readonly T[]): T[] {
   return timers.filter((timer) => !timer.cancelled);
 }
@@ -537,44 +648,44 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
     ]);
   });
 
-  it('each batch: a catch-up snapshot at its seq, so the epoch is kept and the seq grows (I-12, I-13)', async () => {
+  // Reworked in sprint 26: a batch is its deltas, not a catch-up snapshot (decision 83).
+  it('each batch: its deltas at their graph seqs, so the epoch is kept and the seq grows (I-12, I-13)', async () => {
     const root = await directory({ 'a.ts': 'a', 'gone.ts': '' });
     const s = setUp({ root });
     const watch = await s.opened();
     await writeFile(join(root, 'new.ts'), '');
-    watch.batch();
-    await until(() => s.page().graphs.length === 2);
+    watch.batch([created('new.ts', '')]);
     await rm(join(root, 'gone.ts'));
-    watch.warning('one event between takes a seq');
-    watch.batch();
-    await until(() => s.page().graphs.length === 3);
-    expect(s.page().graphs.map(names)).toEqual([
-      ['.', 'a.ts', 'gone.ts'],
-      ['.', 'a.ts', 'gone.ts', 'new.ts'],
-      ['.', 'a.ts', 'new.ts'],
+    watch.warning('one event between takes no graph seq');
+    watch.batch([deleted('gone.ts')]);
+    await until(() => deltasOf(s.page()).length === 2);
+    expect([stamps(s.page()), deltasOf(s.page())]).toEqual([
+      ['1/0'],
+      ['1/1 new.ts', '1/2 gone.ts'],
     ]);
-    expect(stamps(s.page())).toEqual(['1/0', '1/1', '1/3']);
     const report = await s.session.verify();
-    expect([report?.epoch, report?.seq, s.engines.length, s.closes]).toEqual([1, 3, 1, []]);
+    expect([report?.epoch, report?.seq, s.engines.length, s.closes]).toEqual([1, 2, 1, []]);
+    expect(states(report)).toBe('pass unavailable pass unavailable pass unavailable');
   });
 
-  it('refreshes are latest-wins: one in flight, at most one queued, the newest taken', async () => {
+  // Reworked in sprint 26: only a gap asks for a refresh after ready, so the gaps drive it.
+  it('refreshes are latest-wins: one in flight, at most one queued, stamped when its read starts', async () => {
     const root = await directory({ 'a.ts': 'a' });
     const s = setUp({ root });
     const watch = await s.opened();
     const held = s.holdInspect();
-    watch.batch();
+    watch.gap();
     await held.reached;
-    watch.batch();
-    watch.batch();
-    watch.batch();
+    watch.gap();
+    watch.gap();
+    watch.gap();
     await allMicrotasks();
     expect(s.inspected).toEqual([1, 1]);
     held.open();
     await until(() => s.page().graphs.length === 3);
     await until(() => s.answered.length === 3);
     await allMicrotasks();
-    expect([stamps(s.page()), s.inspected.length]).toEqual([['1/0', '1/1', '1/4'], 3]);
+    expect([stamps(s.page()), s.inspected.length]).toEqual([['1/0', '1/2', '1/8'], 3]);
   });
 
   it('a refresh that throws is said and the watch goes on; the first graph it brings is the initial one', async () => {
@@ -591,15 +702,16 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
     ]);
     // Round two (R10): no graph, so nothing to judge; the first graph is judged.
     expect([await s.session.verify(), s.timers]).toEqual([undefined, []]);
+    // Sprint 26: with no graph yet, the batch's deltas fall back to a refresh (decision 83).
     watch.batch();
     await until(() => s.page().graphs.length === 1);
     expect(s.timers.map(({ ms }) => ms)).toEqual([500]);
     expect((await s.session.verify())?.seq).toBe(1);
-    watch.batch();
+    watch.gap();
     await until(() => s.messages.length === 3);
-    watch.batch();
+    watch.gap();
     await until(() => s.page().graphs.length === 2);
-    expect(stamps(s.page())).toEqual(['1/1', '1/3']);
+    expect(stamps(s.page())).toEqual(['1/1', '1/5']);
     expect(s.messages).toEqual([
       'error: CPG: the graph refresh failed: disk on fire',
       `warning: CPG: ${U6A}`,
@@ -620,6 +732,108 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
   });
 });
 
+describe("each batch's deltas reach the panel (decision 83)", () => {
+  it('a file, a folder of two files, a delete and a rename, then a rescan: in order, and the store is never read', async () => {
+    const root = await directory({ 'a.ts': 'a', 'gone.ts': 'g', 'old.ts': 'o' });
+    const s = setUp({ root });
+    const watch = await s.opened();
+    await writeFile(join(root, 'new.ts'), 'n');
+    await mkdir(join(root, 'lib'));
+    await writeFile(join(root, 'lib', 'x.ts'), 'x');
+    await writeFile(join(root, 'lib', 'y.py'), 'y');
+    await rm(join(root, 'gone.ts'));
+    await rm(join(root, 'old.ts'));
+    await writeFile(join(root, 'lib', 'old.ts'), 'o');
+    watch.batch([created('new.ts', 'n')]);
+    watch.batch([folder('lib'), created('lib/x.ts', 'x'), created('lib/y.py', 'y')]);
+    watch.batch([deleted('gone.ts')]);
+    watch.batch([moved('lib/old.ts', 'old.ts', 'o')], 'rescan');
+    await until(() => deltasOf(s.page()).length === 6);
+    expect([stamps(s.page()), deltasOf(s.page()), s.inspected]).toEqual([
+      ['1/0'],
+      ['1/1 new.ts', '1/2 lib', '1/3 lib/x.ts', '1/4 lib/y.py', '1/5 gone.ts', '1/6 lib/old.ts'],
+      [1],
+    ]);
+    const held = s.page().picture();
+    expect(held.payload.nodes.map((n) => n.name ?? '').toSorted()).toEqual([
+      '.',
+      'a.ts',
+      'lib',
+      'new.ts',
+      'old.ts',
+      'x.ts',
+      'y.py',
+    ]);
+    s.page().draw();
+    expect(await s.verified()).toBe(ALL_PASS);
+    expect([s.reports.at(-1)?.seq, s.messages]).toEqual([6, [`warning: CPG: ${U6A}`]]);
+  });
+
+  it("a gap: one catch-up snapshot at the batch's graph seq instead, the batch's later deltas dropped, the next batch on top", async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    const watch = await s.opened();
+    await writeFile(join(root, 'b.ts'), 'b');
+    watch.gap([created('b.ts', 'b'), TOUCH]);
+    await until(() => s.page().graphs.length === 2);
+    await writeFile(join(root, 'c.ts'), 'c');
+    watch.batch([created('c.ts', 'c')]);
+    await until(() => deltasOf(s.page()).length === 1);
+    expect([stamps(s.page()), deltasOf(s.page()), s.inspected.length]).toEqual([
+      ['1/0', '1/3'],
+      ['1/4 c.ts'],
+      2,
+    ]);
+    expect(names(s.page().graphs[1])).toEqual(['.', 'a.ts', 'b.ts']);
+    expect(s.messages).toEqual([`warning: CPG: ${U6A}`]);
+  });
+
+  it('a malformed delta (onDelta rejects): the same fallback, and nothing is said', async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    const watch = await s.opened();
+    const clash = delta('a.ts', { addedNodes: [{ id: fileId('a.ts'), type: 'DIRECTORY' }] });
+    watch.batch([clash, TOUCH]);
+    await until(() => s.page().graphs.length === 2);
+    await allMicrotasks();
+    expect([stamps(s.page()), deltasOf(s.page()), s.inspected.length]).toEqual([
+      ['1/0', '1/2'],
+      [],
+      2,
+    ]);
+    expect(s.messages).toEqual([`warning: CPG: ${U6A}`]);
+  });
+
+  it("a batch during ready's refresh waits for it: its deltas land on the initial snapshot", async () => {
+    const root = await directory({ 'a.ts': 'a' });
+    const s = setUp({ root });
+    const opening = s.session.openGraph();
+    const watch = await s.watching(1);
+    s.page().send(READY);
+    const held = s.holdInspect();
+    void watch.ready();
+    await held.reached;
+    // a.ts is still on disk, so the snapshot holds it; the delta after it takes it out.
+    watch.batch([deleted('a.ts')]);
+    await allMicrotasks();
+    expect(deltasOf(s.page())).toEqual([]);
+    held.open();
+    await opening;
+    await until(() => deltasOf(s.page()).length === 1);
+    expect([stamps(s.page()), deltasOf(s.page()), s.inspected.length]).toEqual([
+      ['1/0'],
+      ['1/1 a.ts'],
+      1,
+    ]);
+    expect(
+      s
+        .page()
+        .picture()
+        .payload.nodes.map((n) => n.name),
+    ).toEqual(['.']);
+  });
+});
+
 describe('a watch that is replaced (decision 71, BMO-121)', () => {
   // Round two (R7, R8, R9): the old refresh is still in flight when the old watch() resolves, one more is
   // queued behind it, and the configuration changes while the old watch ends.
@@ -628,9 +842,9 @@ describe('a watch that is replaced (decision 71, BMO-121)', () => {
     const s = setUp({ root, holdEnd: true });
     const first = await s.opened();
     const held = s.holdInspect();
-    first.batch();
+    first.gap();
     await held.reached;
-    first.batch();
+    first.gap();
     first.fail('the root went away');
     const reopening = s.session.openGraph();
     await allMicrotasks();
@@ -713,12 +927,9 @@ describe('while a watch is live (decision 72, BMO-109)', () => {
     await writeFile(join(root, 'b.ts'), '');
     await s.session.openGraph();
     expect([s.engines.length, s.page().revealed, s.page().graphs.length]).toEqual([1, 1, 1]);
-    watch.batch();
-    await until(() => s.page().graphs.length === 2);
-    expect([stamps(s.page()), names(s.page().graphs[1])]).toEqual([
-      ['1/0', '1/1'],
-      ['.', 'a.ts', 'b.ts'],
-    ]);
+    watch.batch([created('b.ts', '')]);
+    await until(() => deltasOf(s.page()).length === 1);
+    expect([stamps(s.page()), deltasOf(s.page())]).toEqual([['1/0'], ['1/1 b.ts']]);
   });
 
   it('a restored panel is shown at once; it starts a watch when none is live, and none while one is', async () => {
@@ -793,8 +1004,8 @@ describe('a verify run that finishes after a newer graph landed (decision 73, BM
     });
     await held.reached;
     await writeFile(join(root, 'b.ts'), 'b');
-    watch.batch();
-    await until(() => s.page().graphs.length === 2);
+    watch.batch([created('b.ts', 'b')]);
+    await until(() => deltasOf(s.page()).length === 1);
     const reads = s.read.length;
     held.open();
     await until(() => s.read.length > reads);
@@ -843,7 +1054,7 @@ describe('what the watch says (decision 74)', () => {
     const watch = await s.opened([]);
     watch.warning('cannot watch sub: EACCES');
     watch.batch();
-    await until(() => s.page().graphs.length === 2);
+    await until(() => deltasOf(s.page()).length === 1);
     expect(s.messages).toEqual(['warning: CPG: cannot watch sub: EACCES']);
   });
 
@@ -907,14 +1118,14 @@ describe('what the watch says (decision 74)', () => {
     const s = setUp({ root });
     const watch = await s.opened();
     const held = s.holdInspect();
-    watch.batch();
+    watch.gap();
     await held.reached;
-    watch.batch();
+    watch.gap();
     watch.fail('gone');
     held.open();
     await until(() => s.closes.length === 1);
     await allMicrotasks();
-    expect([s.inspected.length, stamps(s.page())]).toEqual([2, ['1/0', '1/1']]);
+    expect([s.inspected.length, stamps(s.page())]).toEqual([2, ['1/0', '1/2']]);
   });
 
   it('a session that will not close: said once the watch has ended', async () => {
@@ -1078,8 +1289,8 @@ describe('cpg.verify', () => {
     // At once, in place of the debounced run.
     expect(pending(s.timers)).toEqual([]);
     expect(s.page().verifications).toHaveLength(2);
-    watch.batch();
-    await until(() => s.page().graphs.length === 2);
+    watch.batch([changed('a.ts', 'A')]);
+    await until(() => deltasOf(s.page()).length === 1);
     s.page().draw();
     expect(await s.verified()).toBe(ALL_PASS);
     expect(s.engines).toHaveLength(1);
@@ -1265,9 +1476,9 @@ describe('deactivation (decision 74)', () => {
     const s = setUp({ root, holdEnd: true });
     const watch = await s.opened();
     const held = s.holdInspect();
-    watch.batch();
+    watch.gap();
     await held.reached;
-    watch.batch();
+    watch.gap();
     s.session.dispose();
     held.open();
     await until(() => s.answered.length === 2);
@@ -1335,16 +1546,24 @@ describe('on the real engine and @parcel/watcher', () => {
       await s.session.openGraph();
       s.page().send(READY);
       expect(names(s.page().graphs[0])).toEqual(['.', 'a.ts']);
+      // Sprint 26: the page is sent one graph, then each batch's deltas (decision 83).
+      const held = (): string[] =>
+        s
+          .page()
+          .picture()
+          .payload.nodes.map((n) => n.name ?? '')
+          .toSorted();
       await writeFile(join(root, 'b.ts'), 'b');
-      await until(() => names(s.page().graphs.at(-1)).includes('b.ts'), 10_000);
+      await until(() => held().includes('b.ts'), 10_000);
       await rm(join(root, 'a.ts'));
-      await until(() => !names(s.page().graphs.at(-1)).includes('a.ts'), 10_000);
-      expect(names(s.page().graphs.at(-1))).toEqual(['.', 'b.ts']);
-      const seen = stamps(s.page()).map((at) => at.split('/').map(Number));
+      await until(() => !held().includes('a.ts'), 10_000);
+      expect([held(), s.page().graphs.length]).toEqual([['.', 'b.ts'], 1]);
+      const sent = s.page().posted.filter((m) => m.type === 'graph' || m.type === 'graph-delta');
+      const seen = sent.map((m) => stamp(m).split('/').map(Number));
       expect([...new Set(seen.map(([epoch]) => epoch))]).toEqual([1]);
       expect(seen[0]).toEqual([1, 0]);
       const seqs = seen.map(([, seq]) => seq ?? -1);
-      expect(seqs.every((seq, at) => at === 0 || seq > (seqs[at - 1] ?? seq))).toBe(true);
+      expect(seqs).toEqual(seqs.map((_, at) => at));
       s.session.dispose();
       await until(() => s.closes.length === 1);
     },

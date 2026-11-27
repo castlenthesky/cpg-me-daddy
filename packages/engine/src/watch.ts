@@ -1,8 +1,9 @@
 // CpgEngine.watch (U4.2.1 part a, BMO-60; controller decisions 59-63): index, then a @cpg/watch
 // session seeded from the walk, each batch written as one merge-filesystem op, and the C-CLI
-// WatchEvent stream. The CLI verb is part b.
+// WatchEvent stream. The CLI verb is part b. Sprint 26 (decisions 81, 82): each batch event carries
+// one GraphDelta per change, built from the op, and the watch's one graph seq.
 
-import { isWorkspacePath, WORKSPACE_ROOT, type WorkspacePath } from '@cpg/model';
+import { isWorkspacePath, WORKSPACE_ROOT, type GraphDelta, type WorkspacePath } from '@cpg/model';
 import type { EdgeRow, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
 import {
   createWatchSession,
@@ -174,6 +175,73 @@ export function toBatchOp(
 }
 
 /**
+ * The FILE and DIRECTORY paths the watch's sinks hold (controller decision 81): the engine's own
+ * record of what it wrote, never a read of the store (C-EXT may_not). runWatch seeds it with the
+ * walk's files and directories (`'.'` included), which `index()` made the store hold exactly
+ * (decision 77), then advances it with the initial batch and with every batch it writes.
+ */
+export class HeldPaths {
+  constructor(files: Iterable<WorkspacePath>, directories: Iterable<WorkspacePath>) {
+    // SEAT: sprint 26 (decision 81)
+    void files;
+    void directories;
+  }
+
+  /**
+   * The node ids the store's merge-filesystem removal of `path` drops: when `path` is a held
+   * directory, the DIRECTORY id of every held directory and the FILE id of every held file at or
+   * under it; else, when `path` is a held file, its FILE id; else none. In no particular order.
+   */
+  removedBy(path: WorkspacePath): readonly string[] {
+    // SEAT: sprint 26 (decision 81)
+    throw new Error(`SEAT: HeldPaths.removedBy(${path}) lands in sprint 26 (decision 81)`);
+  }
+
+  /**
+   * One written change: a deleted forgets `path` (a held directory with everything under it); a
+   * moved forgets `fromPath` the same way, then holds `path`; a created or changed holds `path` as
+   * its entry (a file, or a directory).
+   */
+  advance(change: NormalizedChange): void {
+    // SEAT: sprint 26 (decision 81)
+    throw new Error(`SEAT: HeldPaths.advance(${change.path}) lands in sprint 26 (decision 81)`);
+  }
+}
+
+/**
+ * One GraphDelta per change, in `changes` order (controller decisions 81, 82), each from
+ * `toBatchOp([change], languageOf)`, the op's rows for that change alone, so a delta is exactly what
+ * the batch op writes for its path:
+ * - `seq`: `firstSeq`, then one more for each later delta;
+ * - `file`: the change's `path` (a move's delta belongs to the new path); `producer: 'filesystem'`;
+ * - `revision_id`: the change's, or `''` when it has none (a deletion, a directory);
+ * - `addedNodes`: the op's DIRECTORY and FILE rows as the store holds them: `{ id: makeNodeId(the
+ *   row's form and key), type: the label, name: properties.name, data: the properties without the
+ *   null or undefined ones }` (the store prunes them);
+ * - `addedEdges`: the op's HAS_ENTRY link as `{ source, target, type: 'HAS_ENTRY' }` (no `data`),
+ *   so a new file or folder arrives attached to its parent; none for a `changed` file, whose link
+ *   the store already holds (S26-1: applyGraphDelta concatenates edges, stop-list 50, so re-sending
+ *   it would add one duplicate per save to every host's payload);
+ * - `removedNodeIds`: `held.removedBy` of the op's removal (`path` for a deleted, `fromPath` for a
+ *   moved), read before the change advances `held`; none otherwise.
+ * `held` is advanced by each change once its delta is built, so a later change in the same batch
+ * sees the earlier ones. A file change with no `revision_id` throws, as toBatchOp does.
+ */
+export function toBatchDeltas(
+  changes: readonly NormalizedChange[],
+  languageOf: (path: string) => string | undefined,
+  held: HeldPaths,
+  firstSeq: number,
+): readonly GraphDelta[] {
+  // SEAT: sprint 26 (decisions 81, 82)
+  void languageOf;
+  void held;
+  throw new Error(
+    `SEAT: toBatchDeltas(${String(changes.length)} changes at ${String(firstSeq)}) lands in sprint 26`,
+  );
+}
+
+/**
  * CpgEngine.watch. Resolves after `closed`, never rejects, and emits nothing after `closed`.
  *
  * Start (decision 60):
@@ -194,8 +262,15 @@ export function toBatchOp(
  * - the initial batch emits `ready { root: req.config.root, report }`, the first event (seq 0);
  * - every other batch emits `batch { cause: batch.cause, changes, write: { nodesWritten,
  *   edgesWritten, statementCount } of the receipt, latencyMs: { t0_t1: null, t1_t2: settledAt -
- *   firstEventAt, t2_t3: at - settledAt, total: t1_t2 + t2_t3 } }`.
+ *   firstEventAt, t2_t3: at - settledAt, total: t1_t2 + t2_t3 }, deltas, graphSeq }`.
  * A throw from `onEvent` is contained: it never rejects the batch (that would rewrite it).
+ *
+ * Deltas (decisions 81, 82): one graph seq counter per watch. `ready` carries `graphSeq: 0`. A
+ * batch event's `deltas` are `toBatchDeltas(changes, languageOf, held, graphSeq + 1)`, built once
+ * its write has resolved and only when the event is emitted, and its `graphSeq` is then the last
+ * delta's. `held` is a HeldPaths of the walk's files and directories; the initial batch advances it
+ * with its changes (they are in the snapshot a host reads after ready, so they carry no deltas).
+ * A batch whose event is not emitted takes no graph seq.
  *
  * Drift crawl (decisions 78, 79; S25-1, S25-3): `interval = req.config.rescanIntervalMs ?? 0`.
  * `onRescanDone` re-arms a single countdown timer (`deps.timers ?? globalThis`) for `interval` ms
@@ -345,7 +420,7 @@ export async function runWatch(
             const at = deps.now();
             if (stop !== undefined) return;
             if (batch.cause === 'initial') {
-              emit({ kind: 'ready', root: req.config.root, report }, at);
+              emit({ kind: 'ready', root: req.config.root, report, graphSeq: 0 }, at);
               readyEmitted = true;
               flushWarnings();
               return;
@@ -364,6 +439,9 @@ export async function runWatch(
                   statementCount: receipt.statementCount,
                 },
                 latencyMs: { t0_t1: null, t1_t2, t2_t3, total: t1_t2 + t2_t3 },
+                // SEAT: sprint 26 (decisions 81, 82): toBatchDeltas over the held paths.
+                deltas: [],
+                graphSeq: 0,
               },
               at,
             );

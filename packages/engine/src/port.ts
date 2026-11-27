@@ -5,6 +5,7 @@
 import type {
   CheckResult,
   CheckState,
+  GraphDelta,
   GraphPayload,
   SchemaDocInput,
   WorkspacePath,
@@ -234,6 +235,11 @@ export type WatchEvent =
       readonly root: string;
       /** The IndexReport of the index the watch started with. */
       readonly report: IndexReport;
+      /**
+       * The graph seq (controller decision 82): 0. A host stamps the snapshot it reads after ready
+       * with it, and the first batch's first delta is 1.
+       */
+      readonly graphSeq: number;
     }
   | {
       readonly kind: 'batch';
@@ -249,6 +255,13 @@ export type WatchEvent =
         readonly statementCount: number;
       };
       readonly latencyMs: WatchLatency;
+      /**
+       * One per entry of `changes`, in that order (controller decision 81), built from the op this
+       * batch wrote, never from a read of the store (C-EXT may_not). Each takes the next graph seq.
+       */
+      readonly deltas: readonly GraphDelta[];
+      /** The graph seq after this batch: its last delta's (decision 82). */
+      readonly graphSeq: number;
     }
   | {
       readonly kind: 'warning';

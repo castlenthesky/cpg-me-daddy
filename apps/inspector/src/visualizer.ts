@@ -48,6 +48,8 @@ export interface SurfaceEvents {
   readonly onPointClick: (index: number) => void;
   readonly onLinkMouseOver: (linkIndex: number) => void;
   readonly onLinkMouseOut: () => void;
+  /** A position transition ended; `interrupted` when another replaced it (sprint 26, decision 85). */
+  readonly onTransitionEnd: (interrupted: boolean) => void;
 }
 
 /** Where the two legends go (part 2b writes the buttons); `onToggle` gets a row's key. */
@@ -143,6 +145,8 @@ export class GraphVisualizer {
       onPointClick: (index) => this.handlePointClick(index),
       onLinkMouseOver: (linkIndex) => this.showLinkTooltip(linkIndex),
       onLinkMouseOut: () => this.views.tooltip.hide(),
+      // SEAT: sprint 26 (decision 85): the simulation restarts gently once a delta's transition ends.
+      onTransitionEnd: () => undefined,
     };
 
     try {
@@ -182,7 +186,18 @@ export class GraphVisualizer {
     }
   }
 
-  /** No early return on node-empty deltas so edge-only deltas are delivered (fixes archive :290). */
+  /**
+   * Draws a delta where the picture already is (controller decision 85). No early return on node-empty
+   * deltas, so edge-only deltas are delivered (fixes archive :290). Live positions are synced first, so
+   * a surviving point stays where the simulation left it; a new point starts next to its parent
+   * (deltaParents); a removed point's position becomes NaN, which cosmos.gl fades out in place on the
+   * next render. Then the buffers are pushed, point 0 re-pinned and `render()` called, starting that
+   * transition. Neither `unpause()` nor `start()` is called here: either ends the transition at once,
+   * cutting the fade. The simulation restarts at alpha 0.1 (never 1) when a transition a delta began
+   * ends uninterrupted (`onTransitionEnd(false)`): once for any number of deltas, and never for one
+   * after a full render or a legend toggle. The camera is not moved: no `fitViewByPointPositions`, no
+   * follow reset; the throttled follow (`fitView(250)`) glides while the user has not zoomed.
+   */
   applyDelta(delta: GraphDelta): void {
     const surface = this.surface;
     if (!surface) {

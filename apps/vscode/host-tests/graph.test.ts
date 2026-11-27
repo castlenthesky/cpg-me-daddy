@@ -65,8 +65,8 @@ const check = ({ checks }: VerificationReport, id: string) => {
 };
 /**
  * The verdict once the page has reported on the graph held, or the last one when it does not in time.
- * Round two (R5): under a live watch a catch-up keeps the page's last report, which is `stale` until
- * the page draws the new graph.
+ * Round two (R5): under a live watch a new graph seq keeps the page's last report, which is `stale`
+ * until the page draws it (sprint 26: a delta, not a catch-up graph).
  */
 async function reported(): Promise<VerificationReport> {
   const deadline = Date.now() + REPORT_MS;
@@ -220,7 +220,7 @@ suite('the graph in VS Code', () => {
       const more = `pass ${String(FILES + 1)}/${String(FILES + 1)}`;
       const added = await verdict((report) => fileCount(report) === more);
       assert.equal(fileCount(added), more, 'the new file never joined the graph');
-      assert.equal(added.epoch, before.epoch); // a catch-up snapshot (C-EXT I-13)
+      assert.equal(added.epoch, before.epoch); // the file's delta keeps the epoch (C-EXT I-13)
       assert.ok(added.seq > before.seq, `seq ${String(added.seq)} after ${String(before.seq)}`);
       await rm(join(root, ADDED));
       const fewer = `pass ${String(FILES)}/${String(FILES)}`;

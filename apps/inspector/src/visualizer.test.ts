@@ -4,7 +4,10 @@
 // stand in for the simulation. Payload P1 is d (DIRECTORY) holding f and g (FILEs): the layout puts
 // d at index 0, then f, then g, with sizes 20, 17.6, 17.6, so each HAS_ENTRY link is
 // (20 + 17.6) / 2 * 0.2 = 3.76 wide. The fake maps space (x, y) to screen (2x, 3y), radius r to 10r,
-// and every point radius is 1.5.
+// and every point radius is 1.5. Sprint 26 (controller decision 85): a delta never moves the camera,
+// never re-runs the layout and never restarts the simulation at full energy; a removed point goes to
+// NaN, which cosmos.gl 3.6 fades out in place on render() unless start() or unpause() ends the
+// transition (their doc comments), so the gentle restart waits for onTransitionEnd(false).
 
 import {
   isWorkspacePath,
@@ -38,6 +41,8 @@ class FakeSurface implements GraphSurface {
   linkWidths: number[] = [];
   pinned: number[] | null = null;
   readonly starts: (number | undefined)[] = [];
+  /** The arguments of each render() call. */
+  readonly renders: unknown[][] = [];
   readonly fits: (number | undefined)[] = [];
   readonly framed: { positions: number[]; duration: number | undefined }[] = [];
   destroyed = false;
@@ -71,8 +76,9 @@ class FakeSurface implements GraphSurface {
     this.record('setPinnedPoints');
     this.pinned = pinnedIndices === null ? null : [...pinnedIndices];
   }
-  render(): void {
+  render(...args: unknown[]): void {
     this.record('render');
+    this.renders.push(args);
   }
   start(alpha?: number): void {
     this.record('start');
@@ -382,7 +388,8 @@ describe('GraphVisualizer.applyDelta', () => {
     expect(legend.texts('relationship')).toEqual(['Has entry (2)', 'Imports (1)']);
   });
 
-  it('pushes, re-pins point 0, renders, unpauses and reheats gently', () => {
+  // Reworked in sprint 26 (decision 85): no unpause() or start() here, since either cuts the fade.
+  it('pushes, re-pins point 0 and renders, and neither restarts the simulation nor moves the camera', () => {
     const { viz, surface } = mount();
     viz.render(P1);
     surface.log.length = 0;
@@ -403,9 +410,56 @@ describe('GraphVisualizer.applyDelta', () => {
     // round two (review a9)
     expect(at('setPinnedPoints')).toBeLessThan(at('render'));
     expect(surface.pinned).toEqual([0]);
-    expect(at('unpause')).toBeGreaterThan(at('render'));
-    expect(at('start')).toBeGreaterThan(at('render'));
+    // render() with no arguments: the transition animates (render(_, 0) would snap it).
+    expect([surface.renders.at(-1), surface.starts, surface.framed.length]).toEqual([[], [1], 1]);
+    expect(surface.log.filter((name) => /^(unpause|start|fitView)/.test(name))).toEqual([]);
+  });
+
+  it('restarts the simulation once, at 0.1, when the transition a delta began ends uninterrupted', () => {
+    const { viz, surface, events } = mount();
+    viz.render(P1);
+    events.onTransitionEnd(false);
+    viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('f', 'h')] }));
+    viz.applyDelta(delta({ removedNodeIds: ['g'] }));
+    events.onTransitionEnd(true);
+    expect(surface.starts).toEqual([1]);
+    surface.log.length = 0;
+    events.onTransitionEnd(false);
+    expect([surface.log, surface.starts]).toEqual([
+      ['unpause', 'start'],
+      [1, 0.1],
+    ]);
+    events.onTransitionEnd(false);
     expect(surface.starts).toEqual([1, 0.1]);
+  });
+
+  it('never restarts after a render or a legend toggle has started the simulation itself', () => {
+    const { viz, surface, events, legend } = mount();
+    viz.render(P1);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    viz.render(P1);
+    events.onTransitionEnd(false);
+    viz.applyDelta(edgeOnly(IMPORTS));
+    legend.toggleNode('FILE');
+    events.onTransitionEnd(false);
+    expect(surface.starts).toEqual([1, 1, 0.1]);
+  });
+
+  it('keeps following with a glide (fitView 250), never a snap, and stays put once the user zoomed', () => {
+    const { viz, surface, events, setNow } = mount();
+    viz.render(P1);
+    viz.applyDelta(delta({ addedNodes: [node('h')], addedEdges: [entry('f', 'h')] }));
+    events.onTransitionEnd(false);
+    setNow(300);
+    events.onSimulationTick();
+    expect([surface.fits, surface.framed.length]).toEqual([[250], 1]);
+    events.onZoomStart(undefined, true);
+    viz.applyDelta(delta({ removedNodeIds: ['h'] }));
+    events.onTransitionEnd(false);
+    setNow(10_000);
+    events.onSimulationTick();
+    events.onSimulationEnd();
+    expect([surface.fits, surface.framed.length]).toEqual([[250], 1]);
   });
 
   it('keeps every point where the simulation left it (the archive pushed stale seed positions)', () => {

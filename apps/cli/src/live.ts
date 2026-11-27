@@ -11,6 +11,7 @@ import {
 } from '@cpg/engine';
 import {
   validatePayload,
+  type GraphDelta,
   type GraphEdge,
   type GraphNode,
   type GraphPayload,
@@ -129,12 +130,27 @@ export interface LivePicture {
   /** Pass as the inspector's onRenderReport. A report before the first show(), or after close(), is ignored. */
   readonly onRenderReport: (message: RenderReportMessage) => void;
   /**
-   * Sends `{ type: 'graph', payload }`, then a verification (`checks` with render-reconciliation
+   * Sends `{ type: 'graph', payload, cause }`, `cause` being `'initial'` on the first show() and
+   * `'catch-up'` after it (decision 84), then a verification (`checks` with render-reconciliation
    * replaced) whose render-reconciliation is judged against `payload` (its seq and node count) from
    * the latest render-report received since the first show(), or none.
    */
   show(proc: InspectorProcess, payload: GraphPayload, checks: readonly CheckResult[]): void;
-  /** After it, show() and render-reports do nothing. */
+  /**
+   * Sprint 26 (decision 84): merges each delta, in order, into the payload last shown with
+   * applyGraphDelta, the inspector's own merge, so render-reconciliation is judged against the
+   * picture the inspector holds. Applied: sent as `{ type: 'graph-delta', delta }` to the process
+   * last shown. Already-applied: skipped, nothing sent. Returns false, and stops there, on a gap or
+   * a malformed delta, or before any show(); true otherwise. Sends no verification. After close():
+   * nothing, and true.
+   */
+  apply(deltas: readonly GraphDelta[]): boolean;
+  /**
+   * Sends a verification of `checks` for the payload held now, judged as show() judges, and makes
+   * them the checks a later render-report re-judges. Before any show() or after close(): nothing.
+   */
+  reverify(checks: readonly CheckResult[]): void;
+  /** After it, show(), apply(), reverify() and render-reports do nothing. */
   close(): void;
 }
 
@@ -176,6 +192,16 @@ export function livePicture(io: Io): LivePicture {
 
   return {
     onRenderReport,
+    apply(deltas: readonly GraphDelta[]): boolean {
+      // SEAT: sprint 26 (decision 84)
+      throw new Error(
+        `SEAT: LivePicture.apply(${String(deltas.length)} deltas) lands in sprint 26`,
+      );
+    },
+    reverify(checks: readonly CheckResult[]): void {
+      // SEAT: sprint 26 (decision 84)
+      void checks;
+    },
     show(proc: InspectorProcess, payload: GraphPayload, checks: readonly CheckResult[]): void {
       if (closed) return;
       const render = renderReconciliation({
