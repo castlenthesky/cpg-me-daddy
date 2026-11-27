@@ -84,7 +84,7 @@ export interface RunOptions {
   readonly signal?: AbortSignal;
   /**
    * The composition root's rescan command (controller decision 79): main.ts listens for SIGHUP only
-   * while `cpg watch` is subscribed. SEAT: `cpg watch` passes it on in sprint 25.
+   * while `cpg watch` is subscribed.
    */
   readonly rescan?: RescanTrigger;
   /** The process working directory, read in main.ts: the last workspace-root fallback (C-CLI). */
@@ -649,13 +649,13 @@ async function runIndex(
 }
 
 /**
- * `cpg watch` (U4.2.1 part b, decisions 64-66): the same `load()` as index, then
+ * `cpg watch` (U4.2.1 part b, decisions 64-66, 78-79): the same `load()` as index, then
  * `refuseUnbuiltConsumers`, and `--inspect` with no inspector wired is `not-built`, all before any
  * engine is built. One write session (`connectStore`) carries the watch and every inspector refresh,
  * and closes after `streamWatch` resolves. The request's config is `toCpgConfigInput(resolved)` plus
- * `trailingMs`/`ceilingMs` from the resolved `watch.trailingMs`/`watch.ceilingMs`. The end: `signal`
- * is `interrupted` (130), `error` its CliError (exit 1), `inspector` an `inspector` CliError (exit
- * 1), and `eof` exits 0.
+ * `trailingMs`/`ceilingMs`/`rescanIntervalMs` from the resolved `watch.*`, and `streamWatch` gets
+ * `opts.rescan` when provided. The end: `signal` is `interrupted` (130), `error` its CliError
+ * (exit 1), `inspector` an `inspector` CliError (exit 1), and `eof` exits 0.
  */
 async function runWatch(
   spec: CommandSpec,
@@ -689,12 +689,14 @@ async function runWatch(
           ...config,
           trailingMs: config.watch.trailingMs,
           ceilingMs: config.watch.ceilingMs,
+          rescanIntervalMs: config.watch.rescanIntervalMs,
         },
         session,
       },
       io,
       quiet: values['quiet'] === true,
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(opts.rescan !== undefined ? { rescan: opts.rescan } : {}),
       ...(startInspector !== undefined ? { inspector: { start: startInspector, config } } : {}),
     });
   } finally {

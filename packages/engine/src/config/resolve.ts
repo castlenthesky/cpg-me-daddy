@@ -42,6 +42,7 @@ export const CONFIG_DEFAULTS = {
   'watch.trailingMs': 100,
   'watch.ceilingMs': 500,
   'watch.bulkThresholdFiles': 50,
+  'watch.rescanIntervalMs': 300000,
 } as const;
 
 /** A value a layer supplied that is not a valid config value, or a key no layer may set. */
@@ -60,6 +61,7 @@ export class ConfigError extends Error {
 
 export const NON_EMPTY_STRING = z.string().min(1);
 export const POSITIVE_INT = z.number().int().min(1);
+export const NON_NEGATIVE_INT = z.number().int().min(0);
 export const PORT_SCHEMA = z.number().int().min(1).max(65535);
 export const GLOB_LIST = z.array(NON_EMPTY_STRING);
 export const STORE_MODE = z.enum(['remote', 'docker']);
@@ -83,6 +85,7 @@ const KEY_SCHEMAS = {
   'watch.trailingMs': POSITIVE_INT,
   'watch.ceilingMs': POSITIVE_INT,
   'watch.bulkThresholdFiles': POSITIVE_INT,
+  'watch.rescanIntervalMs': NON_NEGATIVE_INT,
 } as const;
 
 type ConfigKey = keyof typeof KEY_SCHEMAS;
@@ -176,8 +179,7 @@ export function resolveConfig(layers: readonly ConfigLayerInput[]): ResolvedConf
       trailingMs: pick('watch.trailingMs', KEY_SCHEMAS['watch.trailingMs']),
       ceilingMs: pick('watch.ceilingMs', KEY_SCHEMAS['watch.ceilingMs']),
       bulkThresholdFiles: pick('watch.bulkThresholdFiles', KEY_SCHEMAS['watch.bulkThresholdFiles']),
-      // SEAT: decision 78's key (default 300000, file watch.rescan_interval_ms) lands in sprint 25.
-      rescanIntervalMs: { value: 0, layer: 'default', source: 'built-in' },
+      rescanIntervalMs: pick('watch.rescanIntervalMs', KEY_SCHEMAS['watch.rescanIntervalMs']),
     },
   };
 }

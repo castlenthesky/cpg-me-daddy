@@ -28,6 +28,10 @@
       {
         "command": "cpg.verify",
         "title": "CPG: Verify"
+      },
+      {
+        "command": "cpg.rescan",
+        "title": "CPG: Rescan Workspace"
       }
     ]
   },

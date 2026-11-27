@@ -2,7 +2,14 @@
 // on stdout as it arrives, the human lines on stderr, and with the inspector on, a full graph per
 // refresh. run() turns the WatchEnd into an exit code (decision 66).
 
-import type { CpgEngine, VerifyConfig, WatchEvent, WatchFailure, WatchRequest } from '@cpg/engine';
+import type {
+  CpgEngine,
+  RescanTrigger,
+  VerifyConfig,
+  WatchEvent,
+  WatchFailure,
+  WatchRequest,
+} from '@cpg/engine';
 import type { InspectorProcess, StartInspector } from './inspector-process';
 import type { Io } from './io';
 import { livePicture } from './live';
@@ -23,6 +30,8 @@ export interface WatchStreamOptions {
   readonly quiet: boolean;
   /** The run's signal (Ctrl-C). */
   readonly signal?: AbortSignal;
+  /** The run's rescan command (SIGHUP in main.ts; decision 79). */
+  readonly rescan?: RescanTrigger;
   /** Set when consumers.inspect is on: the launcher, and the config each refresh reads with. */
   readonly inspector?: { readonly start: StartInspector; readonly config: VerifyConfig };
 }
@@ -55,13 +64,16 @@ function inspectorExitMessage(code: number | null, signal: string | null): strin
  * Stdout (decision 65, C-CLI I-8, I-23): each WatchEvent is `JSON.stringify(event)` on one line,
  * written inside `onEvent` before it returns; nothing else is written to stdout.
  *
- * Stderr (decision 65, I-10, P-A):
+ * Stderr (decisions 65, 79, 80, I-10, P-A):
  * - `ready`: each of `report.warnings` as `cpg: warning: <w>`, then
  *   `cpg: watching <root>: indexed <report.walk.filesIndexed> files in <ms> ms; consumers: <list>`,
  *   `<ms>` being `Math.round(report.durationMs)`;
  * - `warning`: `cpg: warning: <message>`;
- * - `batch`, unless `quiet`: `cpg: batch <seq>: <changes.length> change(s) in <ms> ms; consumers:
- *   <list>`, `<ms>` being `Math.round(latencyMs.total)`.
+ * - rescan command (when `options.rescan` is set): `cpg: rescan requested`, written before the
+ *   engine's listener runs;
+ * - `batch`, unless `quiet`: `cpg: rescan batch <seq>: <changes.length> change(s) in <ms> ms;
+ *   consumers: <list>` when `event.cause === 'rescan'`, else `cpg: batch <seq>: ...`, `<ms>` being
+ *   `Math.round(latencyMs.total)`.
  * `<list>` is the ready report's `consumers` joined by `, `, or `none` when it is empty. Every number
  * comes from the events: the CLI reads no clock (I-30).
  *
@@ -92,7 +104,7 @@ function inspectorExitMessage(code: number | null, signal: string | null): strin
  */
 export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd> {
   // REAL
-  const { engine, request, io, quiet, inspector } = options;
+  const { engine, request, io, quiet, inspector, rescan } = options;
   const stopper = new AbortController();
   const onSignalAbort = (): void => {
     stopper.abort();
@@ -191,8 +203,9 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
       }
       case 'batch': {
         if (!quiet) {
+          const label = event.cause === 'rescan' ? 'rescan batch' : 'batch';
           io.err(
-            `cpg: batch ${String(event.seq)}: ${String(event.changes.length)} change(s) in ${String(Math.round(event.latencyMs.total))} ms; consumers: ${state.consumers}`,
+            `cpg: ${label} ${String(event.seq)}: ${String(event.changes.length)} change(s) in ${String(Math.round(event.latencyMs.total))} ms; consumers: ${state.consumers}`,
           );
         }
         trigger(event.seq);
@@ -213,8 +226,22 @@ export async function streamWatch(options: WatchStreamOptions): Promise<WatchEnd
     }
   };
 
+  const watchRequest: WatchRequest =
+    rescan === undefined
+      ? request
+      : {
+          ...request,
+          rescan: {
+            subscribe: (listener) =>
+              rescan.subscribe(() => {
+                io.err('cpg: rescan requested');
+                listener();
+              }),
+          },
+        };
+
   try {
-    await engine.watch(request, onEvent, stopper.signal);
+    await engine.watch(watchRequest, onEvent, stopper.signal);
   } finally {
     state.watchResolved = true;
     state.pending = undefined;

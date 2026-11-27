@@ -18,7 +18,7 @@ bun install
 bun run compile
 ```
 
-Then press F5 in VS Code to launch the Extension Development Host, and run **CPG: Open Graph** and **CPG: Verify**.
+Then press F5 in VS Code to launch the Extension Development Host, and run **CPG: Open Graph** and **CPG: Verify**. **CPG: Rescan Workspace** crawls the tree for drift now; the watch also crawls every `watch.rescan_interval_ms` (default 5 minutes, 0 turns it off), and `cpg watch` crawls on SIGHUP.
 
 ## Commands
 

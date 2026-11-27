@@ -9,6 +9,7 @@ import {
   ConfigError,
   GLOB_LIST,
   NON_EMPTY_STRING,
+  NON_NEGATIVE_INT,
   PORT_SCHEMA,
   POSITIVE_INT,
   STORE_MODE,
@@ -29,6 +30,7 @@ const CONFIG_FILE_SCHEMA = z.strictObject({
       debounce_ms: POSITIVE_INT.exactOptional(),
       ceiling_ms: POSITIVE_INT.exactOptional(),
       bulk_threshold_files: POSITIVE_INT.exactOptional(),
+      rescan_interval_ms: NON_NEGATIVE_INT.exactOptional(),
     })
     .exactOptional(),
   consumers: z
@@ -131,6 +133,7 @@ export function configFileLayer(
     'watch.trailingMs': watch?.debounce_ms,
     'watch.ceilingMs': watch?.ceiling_ms,
     'watch.bulkThresholdFiles': watch?.bulk_threshold_files,
+    'watch.rescanIntervalMs': watch?.rescan_interval_ms,
   };
 
   const warnings: string[] =
