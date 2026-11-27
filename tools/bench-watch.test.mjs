@@ -119,6 +119,17 @@ describe('benchLines', () => {
     ]);
   });
 
+  // Round two (review 10): under 20 samples the nearest-rank p95 is the largest.
+  it('p95 of twenty is the 19th, not the largest', () => {
+    const matches = [null, ...Array.from({ length: 20 }, (_, i) => m((20 - i) * 10, 20 - i))];
+    // T0->T3 10..200: p50 rank 10 = 100, p95 rank 19 = 190. total 1..20: p50 10, p95 19.
+    expect(benchLines({ ...base, consumers: ['memory'], matches }).slice(2)).toEqual([
+      'T0->T3: p50 100 ms, p95 190 ms, n=20; consumers: memory',
+      'latencyMs.total: p50 10 ms, p95 19 ms, n=20; consumers: memory',
+      'misses: 1 of 21 (no batch within 5000 ms)',
+    ]);
+  });
+
   it('every save missed: nothing is measured, the enabled set is still printed', () => {
     expect(benchLines({ ...base, consumers: ['memory'], matches: [null, null] })).toEqual([
       'cpg watch benchmark: 2 saves of src/f00.ts, 1000 ms apart; trailingMs 100, ceilingMs 500',
@@ -131,22 +142,23 @@ describe('benchLines', () => {
 });
 
 // The spawn path, once (decision 68: a test with a small save count). Each child runs in its own
-// process group, killed in afterEach, so a failing case never leaves a `cpg watch` behind.
+// process group, killed in afterEach, so a failing case never leaves a `cpg watch` behind. Round
+// two (review 11): the group is killed even after the bench itself exited (its child may not have),
+// and the caller's CPG_* variables never reach it.
 const children = [];
 afterEach(() => {
   for (const child of children.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null) {
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        // already gone
-      }
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {
+      // the whole group is gone
     }
   }
 });
+const ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CPG_')));
 
 function bench(args) {
-  const child = spawn(process.execPath, [SCRIPT, ...args], { detached: true });
+  const child = spawn(process.execPath, [SCRIPT, ...args], { detached: true, env: ENV });
   children.push(child);
   let stdout = '';
   let stderr = '';

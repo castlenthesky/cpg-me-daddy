@@ -31,7 +31,7 @@ import type {
   WatchFailure,
   WatchRequest,
 } from '@cpg/engine';
-import { createEngine } from '@cpg/engine';
+import { createEngine, DEFAULT_EXCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES } from '@cpg/engine';
 import { isWorkspacePath, makeNodeId, type GraphPayload, type RenderReport } from '@cpg/model';
 import type { RawWatchEvent, WatchBackend, WatchCapabilities } from '@cpg/watch';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -135,14 +135,17 @@ const CHECK_IDS: readonly VerifyCheckId[] = [
   'revision-reconciliation',
   'resolution-health',
 ];
-const VERIFIED: readonly CheckResult[] = CHECK_IDS.map((id, i) => ({
-  id,
-  state: id === 'render-reconciliation' ? 'unavailable' : 'pass',
-  observed: i,
-  expected: i,
-  localisedTo: [],
-  asOfSeq: -1,
-}));
+/** verify's checks on its `call`-th call (from 0): round two (review 6) tells the calls apart. */
+const verifiedAt = (call: number): readonly CheckResult[] =>
+  CHECK_IDS.map((id, i) => ({
+    id,
+    state: id === 'render-reconciliation' ? 'unavailable' : 'pass',
+    observed: call,
+    expected: i,
+    localisedTo: [],
+    asOfSeq: -1,
+  }));
+const VERIFIED = verifiedAt(0);
 
 /** The store's payload: merge-filesystem allocates no seq, so it is at -1. */
 const payloadOf = (...ids: string[]): GraphPayload => ({
@@ -185,6 +188,8 @@ function scripted(o: ScriptOptions = {}) {
   let lastSeq = -1;
   let closedSent = false;
   let inspects = 0;
+  let verifies = 0;
+  releases.push(() => finish?.());
 
   const emit = (event: WatchEvent): void => {
     lastSeq = event.seq;
@@ -232,9 +237,11 @@ function scripted(o: ScriptOptions = {}) {
     },
     verify: (session, config, expected) => {
       reads.push({ what: 'verify', session, config, expected });
+      const call = verifies;
+      verifies += 1;
       return Promise.resolve({
         state: 'pass',
-        checks: VERIFIED,
+        checks: verifiedAt(call),
         consumers: ['memory'],
         durationMs: 1,
       });
@@ -331,15 +338,31 @@ interface Live {
   ended(): boolean;
 }
 const lives: Live[] = [];
+// Round two (review 12): what afterEach releases (a scripted watch's end, a gate), so a case that
+// fails early never leaves run() waiting and teardown never hangs.
+const releases: (() => void)[] = [];
+const settleFor = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 afterEach(async () => {
+  const settling: Promise<unknown>[] = [];
   for (const l of lives.splice(0)) {
     l.abort();
     l.inspector.exit({ code: 0, signal: null });
-    // oxlint-disable-next-line no-await-in-loop
-    await l.done.catch(noop);
+    settling.push(l.done.catch(noop));
   }
+  for (const release of releases.splice(0)) release();
+  await Promise.race([Promise.all(settling), settleFor(2000)]);
   await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
 });
+
+/** A promise the test opens; afterEach opens it too. */
+function gated(): { readonly promise: Promise<void>; readonly open: () => void } {
+  let open: () => void = noop;
+  const promise = new Promise<void>((r) => {
+    open = () => r();
+  });
+  releases.push(() => open());
+  return { promise, open: () => open() };
+}
 
 interface LiveOptions {
   readonly engine?: CpgEngine;
@@ -348,10 +371,11 @@ interface LiveOptions {
   readonly noInspector?: boolean;
   readonly configs?: EngineConfig[];
   readonly io?: CapturedIo;
+  readonly env?: Record<string, string>;
 }
 
 function live(argv: string[], o: LiveOptions = {}): Live {
-  const io = o.io ?? captureIo();
+  const io = o.io ?? captureIo(o.env !== undefined ? { env: o.env } : {});
   const inspector = o.inspector ?? fakeInspector();
   const controller = new AbortController();
   let code: number | undefined;
@@ -439,43 +463,49 @@ describe('cpg watch: flags and config (decision 64)', () => {
     expect([l.io.stdout, configs, s.log]).toEqual([[], [], []]);
   });
 
+  // Round two (review 1): the built-in include is ['**/*'] (walker defaults); review 9: the walk
+  // scope's other keys travel too.
   it.each([
     [
       'a file sets them',
-      'version: 1\ninclude: [src/**]\nwatch: { debounce_ms: 40, ceiling_ms: 300 }\n',
-      ['src/**'],
-      40,
-      300,
+      'version: 1\ninclude: [src/**]\nexclude: [gen/**]\nmax_file_size_bytes: 1234\nwatch: { debounce_ms: 40, ceiling_ms: 300 }\n',
+      [['src/**'], ['gen/**'], 1234, 40, 300],
     ],
-    ['the built-in 100 / 500', undefined, undefined, 100, 500],
+    [
+      'the built-ins',
+      undefined,
+      [['**/*'], DEFAULT_EXCLUDES, DEFAULT_MAX_FILE_SIZE_BYTES, 100, 500],
+    ],
   ])(
-    'the root, include and window come from the same config as index: %s',
-    async (_w, file, include, trailing, ceiling) => {
+    'the root, walk scope and window come from the same config as index: %s',
+    async (_w, file, expected) => {
       const root = await workspace(file);
       const s = scripted();
       const l = await watching(['watch', root], s);
       const req = s.requests[0];
-      expect([
-        req?.config.root,
-        req?.config.include,
-        req?.config.trailingMs,
-        req?.config.ceilingMs,
-      ]).toEqual([root, include, trailing, ceiling]);
+      const { include, exclude, maxFileSizeBytes, trailingMs, ceilingMs } = req?.config ?? {};
+      expect([req?.config.root, include, exclude, maxFileSizeBytes, trailingMs, ceilingMs]).toEqual(
+        [root, ...expected],
+      );
       expect(req?.session).toBe(s.sessions[0]);
       l.abort();
       expect(await l.done).toBe(EXIT.INTERRUPTED);
     },
   );
 
-  it('the store flags reach the one write session; the engine gets the resolved switches', async () => {
+  // Round two (review 2, 9): the root and the graph from env, the host and port from flags.
+  it('the resolved root and store target reach the one write session; the resolved switches', async () => {
+    const root = await workspace();
     const configs: EngineConfig[] = [];
     const s = scripted();
-    const l = live(['watch', '/w', '--host', 'h', '--port', '7001', '--graph', 'g'], {
+    const l = live(['watch', '--host', 'h', '--port', '7001'], {
       engine: s.engine,
       configs,
+      env: { CPG_WORKSPACE: root, CPG_GRAPH: 'eg' },
     });
     await until(l, () => s.requests.length === 1, 'engine.watch');
-    expect(s.targets).toEqual([{ host: 'h', port: 7001, graph: 'g' }]);
+    expect(s.requests[0]?.config.root).toBe(root);
+    expect(s.targets).toEqual([{ host: 'h', port: 7001, graph: 'eg' }]);
     expect(configs).toEqual([
       { version: '9.8.7', consumers: { inspect: false, store: 'memory', vscode: false } },
     ]);
@@ -519,6 +549,39 @@ describe('cpg watch: flags and config (decision 64)', () => {
     expect(await l.done).toBe(EXIT.USAGE);
     expect(lastErr(l)).toMatch(/^cpg: .*watch --inspect.*not built yet/);
     expect(configs).toEqual([]);
+  });
+
+  // Round two (review 2, 3): the switch is the resolved one, not the flag.
+  it('a file switching inspect on: the engine gets the switch and the inspector starts at ready', async () => {
+    const root = await workspace('version: 1\nconsumers: { inspect: true }\n');
+    const configs: EngineConfig[] = [];
+    const s = scripted();
+    const f = fakeInspector();
+    const l = live(['watch', root], { engine: s.engine, configs, inspector: f });
+    await until(l, () => s.requests.length === 1, 'engine.watch');
+    s.emit(ready());
+    await until(l, () => f.graphs().length >= 1, 'the first graph');
+    expect(configs).toEqual([
+      { version: '9.8.7', consumers: { inspect: true, store: 'memory', vscode: false } },
+    ]);
+  });
+
+  // Round two (review 9): the same load() as index, its errors and warnings included.
+  it('a config error exits 2 before any engine; a loader warning reaches stderr', async () => {
+    const bad = await workspace('version: 1\nincludes: [typo]\n');
+    const configs: EngineConfig[] = [];
+    const refused = live(['watch', bad], { engine: scripted().engine, configs });
+    expect(await refused.done).toBe(EXIT.USAGE);
+    expect([refused.io.stderr.join('\n'), configs]).toEqual([
+      expect.stringContaining('includes'),
+      [],
+    ]);
+    const warned = await workspace('version: 1\nlanguages: { python: false }\n');
+    const s = scripted();
+    const l = await watching(['watch', warned], s);
+    expect(l.io.stderr.join('\n')).toMatch(/^cpg: warning: .*languages/m);
+    l.abort();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
   });
 });
 
@@ -633,6 +696,8 @@ describe('cpg watch: the end (decision 66)', () => {
       s.end();
       expect(await l.done).toBe(EXIT.FAILED);
       expect(lastErr(l)).toBe(`cpg: ${error.message}`);
+      // Round two (review 4): printed once, at the end
+      expect(l.io.stderr.filter((e) => e.includes(error.message))).toHaveLength(1);
       expect(parsed(l).slice(-2)).toEqual([
         failed(before.length, error),
         closed(before.length + 1, 'error'),
@@ -648,9 +713,11 @@ describe('cpg watch: the end (decision 66)', () => {
     const s = scripted({ closeOnAbort: false });
     const l = await watching(['watch', '/w'], s);
     for (const event of events) s.emit(event);
+    const before = l.io.stderr.length;
     s.end();
     expect(await l.done).toBe(EXIT.FAILED);
-    expect(lastErr(l)).toMatch(/^cpg: \S/);
+    // Round two (review 5): the failure itself is printed, not only the ready lines
+    expect(l.io.stderr.slice(before)).toEqual([expect.stringMatching(/^cpg: \S/)]);
     expect(s.log.at(-1)).toBe('close');
   });
 
@@ -727,11 +794,17 @@ describe('cpg watch --inspect (decision 67)', () => {
     expect(f.verifications()[0]?.checks).toEqual(
       VERIFIED.map((c) => (c.id === 'render-reconciliation' ? waitingFor(0) : c)),
     );
+    // Round two (review 6): decision 23, the worst state and the lowest asOfSeq of the checks
+    expect([f.verifications()[0]?.state, f.verifications()[0]?.seq]).toEqual(['unavailable', -1]);
     expect(l.io.stderr).toContain(
       `cpg: inspector at ${URL} (open it in a browser; Ctrl-C stops it)`,
     );
     s.emit(batch(1, 4));
-    await until(l, () => f.graphs().length >= 2, 'the second graph');
+    await until(l, () => f.verifications().length >= 2, 'the second graph and verdict');
+    // Round two (review 6): each refresh sends its own verify's checks
+    expect(f.verifications()[1]?.checks).toEqual(
+      verifiedAt(1).map((c) => (c.id === 'render-reconciliation' ? waitingFor(1) : c)),
+    );
     l.abort();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
     expect([f.starts(), f.stops(), s.targets.length]).toEqual([1, 1, 1]);
@@ -788,11 +861,8 @@ describe('cpg watch --inspect (decision 67)', () => {
   });
 
   it('latest-wins: one refresh in flight, one queued at the newest seq; stdout never waits', async () => {
-    let open = noop;
-    const gate = new Promise<void>((r) => {
-      open = r;
-    });
-    const s = scripted({ gate });
+    const gate = gated();
+    const s = scripted({ gate: gate.promise });
     const f = fakeInspector();
     const l = await watching(['watch', '/w', '--inspect'], s, f);
     s.emit(ready());
@@ -802,7 +872,7 @@ describe('cpg watch --inspect (decision 67)', () => {
     await tick();
     await tick();
     expect([s.inspects(), f.graphs()]).toEqual([1, []]);
-    open();
+    gate.open();
     await until(l, () => f.graphs().length >= 2, 'the queued refresh');
     await tick();
     await tick();
@@ -893,12 +963,9 @@ describe('cpg watch --inspect (decision 67)', () => {
   });
 
   it('a start still pending when the watch ends: run waits for it, then stops it', async () => {
-    let open = noop;
-    const startGate = new Promise<void>((r) => {
-      open = r;
-    });
+    const start = gated();
     const s = scripted();
-    const f = fakeInspector({ startGate });
+    const f = fakeInspector({ startGate: start.promise });
     const l = await watching(['watch', '/w', '--inspect'], s, f);
     s.emit(ready());
     await until(l, () => f.starts() === 1, 'the start');
@@ -906,9 +973,57 @@ describe('cpg watch --inspect (decision 67)', () => {
     await tick();
     await tick();
     expect(l.code()).toBeUndefined();
-    open();
+    start.open();
     expect(await l.done).toBe(EXIT.INTERRUPTED);
     expect(f.stops()).toBe(1);
+  });
+
+  // Round two (review 7): design note 8's order.
+  it('teardown: the queued refresh is dropped; the one in flight ends before the stop and the close', async () => {
+    const gate = gated();
+    const s = scripted({ gate: gate.promise });
+    const f = fakeInspector();
+    const l = await watching(['watch', '/w', '--inspect'], s, f);
+    s.emit(ready());
+    await until(l, () => s.inspects() === 1, 'the first refresh to read');
+    s.emit(batch(1, 4));
+    l.abort();
+    await until(l, () => s.log.includes('watch resolved'), 'the watch to resolve');
+    await tick();
+    expect([l.code(), f.stops(), s.log.includes('close')]).toEqual([undefined, 0, false]);
+    gate.open();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
+    expect([s.inspects(), f.stops(), s.log.at(-1)]).toEqual([1, 1, 'close']);
+  });
+
+  // Round two (review 8): a refresh takes its seq once the inspector is up (design note 5).
+  it('a batch while the start is pending: the first refresh reads at the newest seq', async () => {
+    const start = gated();
+    const s = scripted();
+    const f = fakeInspector({ startGate: start.promise });
+    const l = await watching(['watch', '/w', '--inspect'], s, f);
+    s.emit(ready());
+    await until(l, () => f.starts() === 1, 'the start');
+    s.emit(batch(1, 4));
+    start.open();
+    await until(l, () => f.graphs().length >= 1, 'the first graph');
+    await tick();
+    await tick();
+    expect([f.graphs().map((p) => p.seq), s.inspects()]).toEqual([[1], 1]);
+  });
+
+  // Round two (review 8): design note 7, a failure after the signal keeps 130.
+  it('a pending start that rejects after Ctrl-C keeps 130', async () => {
+    const start = gated();
+    const s = scripted();
+    const f = fakeInspector({ startGate: start.promise, failStart: new Error('too late') });
+    const l = await watching(['watch', '/w', '--inspect'], s, f);
+    s.emit(ready());
+    await until(l, () => f.starts() === 1, 'the start');
+    l.abort();
+    await tick();
+    start.open();
+    expect(await l.done).toBe(EXIT.INTERRUPTED);
   });
 
   it('without inspect nothing starts and nothing is read', async () => {
