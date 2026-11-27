@@ -1,11 +1,22 @@
 // toWriteOp (C-STORE, DQ-03 fold; controller decision 97): the store builds the code tier's
 // replace-file from the extracted file and its resolved edges. A delta cannot build it (CS-3).
 
-import type { EdgeElement, ExtractedFile } from '@cpg/extract';
-import type { WriteOp } from './contract';
+import type { EdgeElement, ExtractedFile, PropertyValue } from '@cpg/extract';
+import { formatRange } from '@cpg/model';
+import type { EdgeRow, NodeRow, WriteOp } from './contract';
 
 /** The replace-file arm of WriteOp. */
 type ReplaceFileOp = WriteOp & { readonly kind: 'replace-file' };
+
+function copyProperties(
+  properties: Readonly<Record<string, PropertyValue>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    out[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return out;
+}
 
 /**
  * The one replace-file for `file` at `seq`: `file`, `seq` and `revision_id` from the file, then
@@ -24,10 +35,56 @@ type ReplaceFileOp = WriteOp & { readonly kind: 'replace-file' };
  * an invalid range (a producer bug).
  */
 export function toWriteOp(
-  _file: ExtractedFile,
-  _edges: readonly EdgeElement[],
-  _seq: number,
+  file: ExtractedFile,
+  edges: readonly EdgeElement[],
+  seq: number,
 ): ReplaceFileOp {
-  // SEAT: U6a.3-1 implements it
-  throw new Error('SEAT: toWriteOp lands in U6a.3-1');
+  // REAL
+  const nodes: NodeRow[] = [
+    ...file.nodes.map((node): NodeRow => ({
+      label: node.label,
+      key: node.id,
+      properties: {
+        ...copyProperties(node.properties),
+        file: node.file,
+        revision_id: node.revision_id,
+        range: formatRange(node.range),
+      },
+    })),
+    ...file.symbols.map((symbol): NodeRow => ({
+      label: 'SYMBOL',
+      key: symbol.fqn,
+      properties: {
+        ...copyProperties(symbol.properties),
+        fqn: symbol.fqn,
+        language: symbol.language,
+      },
+    })),
+    {
+      label: 'FILE',
+      key: file.path,
+      properties: {
+        interface_hash: file.interfaceHash,
+        loc: file.stats.lineCount,
+      },
+    },
+  ];
+
+  const edgeRows: EdgeRow[] = [...file.edges, ...edges].map((edge): EdgeRow => ({
+    type: edge.type,
+    fromLabel: edge.from.label,
+    fromKey: edge.from.key,
+    toLabel: edge.to.label,
+    toKey: edge.to.key,
+    properties: copyProperties(edge.properties),
+  }));
+
+  return {
+    kind: 'replace-file',
+    file: file.path,
+    seq,
+    revision_id: file.revision_id,
+    nodes,
+    edges: edgeRows,
+  };
 }

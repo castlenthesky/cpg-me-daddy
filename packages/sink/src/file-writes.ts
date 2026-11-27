@@ -2,8 +2,17 @@
 // and delete-file, each one statement over the shared graph. memory-graph-store.ts owns the cell,
 // the per-file records and the audit log; this file computes the next graph and says nothing else.
 
-import type { GraphPayload } from '@cpg/model';
-import type { AuditEntry, WriteOp, WriteReceipt } from '@cpg/store';
+import type {
+  EdgeTypeSpec,
+  GraphEdge,
+  GraphNode,
+  GraphPayload,
+  NodeLabel,
+  NodeLabelSpec,
+} from '@cpg/model';
+import { EDGE_TYPES, isWorkspacePath, makeNodeId, NODE_LABELS, WORKSPACE_ROOT } from '@cpg/model';
+import type { AuditEntry, EdgeRow, NodeRow, Properties, WriteOp, WriteReceipt } from '@cpg/store';
+import { storeError } from '@cpg/store';
 
 export type FileWriteOp = Extract<WriteOp, { readonly kind: 'replace-file' | 'delete-file' }>;
 
@@ -24,6 +33,243 @@ export interface FileWriteResult {
   readonly receipt: Omit<WriteReceipt, 'durationMs'>;
   /** Present when the write was applied (C-STORE INV-8); the store stamps `at`. */
   readonly audit?: Omit<AuditEntry, 'at'>;
+}
+
+const NODE_SPEC_BY_LABEL: ReadonlyMap<string, NodeLabelSpec> = new Map(
+  NODE_LABELS.map((spec): [string, NodeLabelSpec] => [spec.label, spec]),
+);
+const EDGE_SPEC_BY_TYPE: ReadonlyMap<string, EdgeTypeSpec> = new Map(
+  EDGE_TYPES.map((spec): [string, EdgeTypeSpec] => [spec.type, spec]),
+);
+const IDENTITY_LABELS: ReadonlySet<string> = new Set(
+  NODE_LABELS.filter((spec) => spec.ownership === 'identity').map((spec) => spec.label),
+);
+const FILE_CODE_OWNED_PROPS: ReadonlySet<string> = new Set(
+  NODE_LABELS.filter((spec) => spec.label === 'FILE').flatMap((spec) =>
+    spec.properties.filter((prop) => prop.owner === 'code').map((prop) => prop.name),
+  ),
+);
+
+interface ValidatedRow {
+  readonly row: NodeRow;
+  readonly id: string;
+  readonly kind: 'file-owned' | 'identity' | 'file';
+}
+
+function pruneAndClone(properties: Properties): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (value !== null && value !== undefined) {
+      out[key] = structuredClone(value);
+    }
+  }
+  return out;
+}
+
+function idOf(label: NodeLabel, key: string): string {
+  if (label !== 'DIRECTORY' && label !== 'FILE') return key;
+  if (!isWorkspacePath(key) || (label === 'FILE' && key === WORKSPACE_ROOT)) {
+    throw storeError('WRITE_SHAPE_VIOLATION', `invalid ${label} key: ${key}`);
+  }
+  return makeNodeId({ form: label === 'DIRECTORY' ? 'directory' : 'file', path: key });
+}
+
+function edgeTripleKey(source: string, type: string | undefined, target: string): string {
+  return JSON.stringify([source, type, target]);
+}
+
+function isFileOwnedNode(node: GraphNode, file: string): boolean {
+  if (node.data?.['file'] !== file) return false;
+  const spec = NODE_SPEC_BY_LABEL.get(node.type);
+  return spec === undefined || spec.ownership === 'file-owned';
+}
+
+function removeFileOwnedSubgraph(
+  graph: GraphPayload,
+  file: string,
+): { keptNodes: GraphNode[]; keptEdges: GraphEdge[]; nodesDeleted: number } {
+  const deletedIds = new Set<string>();
+  const keptNodes: GraphNode[] = [];
+  let nodesDeleted = 0;
+
+  for (const node of graph.nodes) {
+    if (isFileOwnedNode(node, file)) {
+      deletedIds.add(node.id);
+      nodesDeleted += 1;
+    } else {
+      keptNodes.push(node);
+    }
+  }
+
+  const keptEdges: GraphEdge[] = [];
+  for (const edge of graph.edges) {
+    if (!deletedIds.has(edge.source) && !deletedIds.has(edge.target)) {
+      keptEdges.push(edge);
+    }
+  }
+
+  return { keptNodes, keptEdges, nodesDeleted };
+}
+
+function notAppliedResult(
+  graph: GraphPayload,
+  file: CodeTierFile,
+  notApplied: NonNullable<WriteReceipt['notApplied']>,
+): FileWriteResult {
+  return {
+    graph,
+    file,
+    receipt: {
+      applied: false,
+      notApplied,
+      nodesWritten: 0,
+      edgesWritten: 0,
+      nodesDeleted: 0,
+      statementCount: 1,
+    },
+  };
+}
+
+function validateRows(
+  rows: readonly NodeRow[],
+  file: string,
+  fileNodeId: string,
+): readonly ValidatedRow[] {
+  const prefix = `${fileNodeId}:`;
+  const seen = new Set<string>();
+  const validated: ValidatedRow[] = [];
+
+  for (const row of rows) {
+    const spec = NODE_SPEC_BY_LABEL.get(row.label);
+    if (spec === undefined) {
+      throw storeError('WRITE_SHAPE_VIOLATION', `unknown node label: ${row.label}`);
+    }
+    const rowKey = JSON.stringify([row.label, row.key]);
+    if (seen.has(rowKey)) {
+      throw storeError('WRITE_SHAPE_VIOLATION', `duplicate node row: ${row.label} ${row.key}`);
+    }
+    seen.add(rowKey);
+
+    if (spec.ownership === 'file-owned') {
+      if (!row.key.startsWith(prefix) || row.properties['file'] !== file) {
+        throw storeError(
+          'OWNERSHIP_VIOLATION',
+          `file-owned row ${row.label} ${row.key} does not belong to ${file}`,
+        );
+      }
+      validated.push({ row, id: row.key, kind: 'file-owned' });
+    } else if (spec.ownership === 'identity') {
+      if (!spec.key.every((keyProp) => row.properties[keyProp] === row.key)) {
+        throw storeError(
+          'WRITE_SHAPE_VIOLATION',
+          `identity row ${row.label} key mismatch: ${row.key}`,
+        );
+      }
+      validated.push({ row, id: row.key, kind: 'identity' });
+    } else if (spec.label === 'FILE') {
+      if (row.key !== file) {
+        throw storeError('OWNERSHIP_VIOLATION', `FILE row ${row.key} does not match ${file}`);
+      }
+      for (const prop of Object.keys(row.properties)) {
+        if (!FILE_CODE_OWNED_PROPS.has(prop)) {
+          throw storeError(
+            'OWNERSHIP_VIOLATION',
+            `FILE row may only name code-owned properties, got ${prop}`,
+          );
+        }
+      }
+      validated.push({ row, id: fileNodeId, kind: 'file' });
+    } else {
+      throw storeError('OWNERSHIP_VIOLATION', `disallowed row label in replace-file: ${row.label}`);
+    }
+  }
+
+  return validated;
+}
+
+function isAllowedEndpoint(
+  id: string,
+  label: NodeLabel,
+  opRowIds: ReadonlySet<string>,
+  fileNodeId: string,
+): boolean {
+  return opRowIds.has(id) || id === fileNodeId || IDENTITY_LABELS.has(label);
+}
+
+function applyEdges(
+  keptEdges: readonly GraphEdge[],
+  edgeRows: readonly EdgeRow[],
+  nodeMap: ReadonlyMap<string, GraphNode>,
+  opRowIds: ReadonlySet<string>,
+  fileNodeId: string,
+): GraphEdge[] {
+  // An edge merges onto the first edge with its (source, type, target); duplicates elsewhere in the
+  // graph (the GraphSink half concatenates) stay as they are, since they are other files' (INV-12).
+  const edges = [...keptEdges];
+  const firstAt = new Map<string, number>();
+  for (const [at, edge] of edges.entries()) {
+    const key = edgeTripleKey(edge.source, edge.type, edge.target);
+    if (!firstAt.has(key)) firstAt.set(key, at);
+  }
+
+  for (const edgeRow of edgeRows) {
+    const spec = EDGE_SPEC_BY_TYPE.get(edgeRow.type);
+    if (spec === undefined) {
+      throw storeError('WRITE_SHAPE_VIOLATION', `unknown edge type: ${edgeRow.type}`);
+    }
+    if (spec.ownership !== 'file-owned' && spec.ownership !== 'identity') {
+      throw storeError(
+        'OWNERSHIP_VIOLATION',
+        `disallowed edge type in replace-file: ${edgeRow.type}`,
+      );
+    }
+
+    const source = idOf(edgeRow.fromLabel, edgeRow.fromKey);
+    const target = idOf(edgeRow.toLabel, edgeRow.toKey);
+    const fromNode = nodeMap.get(source);
+    const toNode = nodeMap.get(target);
+    if (
+      fromNode === undefined ||
+      fromNode.type !== edgeRow.fromLabel ||
+      toNode === undefined ||
+      toNode.type !== edgeRow.toLabel
+    ) {
+      throw storeError(
+        'WRITE_SHAPE_VIOLATION',
+        `dangling edge ${edgeRow.fromLabel}(${edgeRow.fromKey}) -[${edgeRow.type}]-> ${edgeRow.toLabel}(${edgeRow.toKey})`,
+      );
+    }
+
+    if (
+      !isAllowedEndpoint(source, edgeRow.fromLabel, opRowIds, fileNodeId) ||
+      !isAllowedEndpoint(target, edgeRow.toLabel, opRowIds, fileNodeId)
+    ) {
+      throw storeError(
+        'OWNERSHIP_VIOLATION',
+        `edge endpoint outside file scope: ${edgeRow.fromLabel}(${edgeRow.fromKey}) -[${edgeRow.type}]-> ${edgeRow.toLabel}(${edgeRow.toKey})`,
+      );
+    }
+
+    const pruned = pruneAndClone(edgeRow.properties);
+    const key = edgeTripleKey(source, edgeRow.type, target);
+    const at = firstAt.get(key);
+    const existing = at === undefined ? undefined : edges[at];
+    const data = existing?.data !== undefined ? { ...existing.data, ...pruned } : pruned;
+    const next: GraphEdge = {
+      source,
+      target,
+      type: edgeRow.type,
+      ...(Object.keys(data).length > 0 ? { data } : {}),
+    };
+    if (at === undefined) {
+      firstAt.set(key, edges.length);
+      edges.push(next);
+    } else {
+      edges[at] = next;
+    }
+  }
+
+  return edges;
 }
 
 /**
@@ -68,10 +314,119 @@ export interface FileWriteResult {
  * `edgesWritten` 0. The record becomes `{ seq, revision_id: undefined }`.
  */
 export function writeFileOp(
-  _graph: GraphPayload,
-  _op: FileWriteOp,
-  _record: CodeTierFile | undefined,
+  graph: GraphPayload,
+  op: FileWriteOp,
+  record: CodeTierFile | undefined,
 ): FileWriteResult {
-  // SEAT: U6a.3-1 implements it
-  throw new Error('SEAT: replace-file and delete-file land in U6a.3-1');
+  // REAL
+  if (!Number.isSafeInteger(op.seq) || op.seq < 0) {
+    throw storeError('WRITE_SHAPE_VIOLATION', `invalid seq: ${String(op.seq)}`);
+  }
+  if (!isWorkspacePath(op.file) || op.file === WORKSPACE_ROOT) {
+    throw storeError('WRITE_SHAPE_VIOLATION', `invalid file path: ${op.file}`);
+  }
+
+  if (record !== undefined && op.seq <= record.seq) {
+    return notAppliedResult(graph, record, { reason: 'stale-seq', current: record.seq });
+  }
+
+  if (op.kind === 'delete-file') {
+    const { keptNodes, keptEdges, nodesDeleted } = removeFileOwnedSubgraph(graph, op.file);
+    return {
+      graph: { seq: graph.seq, nodes: keptNodes, edges: keptEdges },
+      file: { seq: op.seq, revision_id: undefined },
+      receipt: {
+        applied: true,
+        nodesWritten: 0,
+        edgesWritten: 0,
+        nodesDeleted,
+        statementCount: 1,
+      },
+      audit: {
+        scope: { kind: 'file', file: op.file },
+        nodesDeleted,
+        calledBy: 'delete-file',
+      },
+    };
+  }
+
+  if (record !== undefined && record.revision_id === op.revision_id) {
+    return notAppliedResult(
+      graph,
+      { seq: op.seq, revision_id: record.revision_id },
+      { reason: 'revision-unchanged', revision_id: op.revision_id },
+    );
+  }
+
+  const fileNodeId = makeNodeId({ form: 'file', path: op.file });
+  const existingFile = graph.nodes.find((node) => node.id === fileNodeId && node.type === 'FILE');
+  if (existingFile === undefined) {
+    throw storeError('WRITE_SHAPE_VIOLATION', `no FILE node for ${op.file}`);
+  }
+
+  const validatedRows = validateRows(op.nodes, op.file, fileNodeId);
+  const { keptNodes, keptEdges, nodesDeleted } = removeFileOwnedSubgraph(graph, op.file);
+
+  const nodeMap = new Map<string, GraphNode>();
+  for (const node of keptNodes) {
+    nodeMap.set(node.id, node);
+  }
+
+  for (const entry of validatedRows) {
+    if (entry.kind === 'file-owned' && nodeMap.has(entry.id)) {
+      throw storeError(
+        'OWNERSHIP_VIOLATION',
+        `file-owned row id collides with existing node: ${entry.id}`,
+      );
+    }
+  }
+
+  const priorVersion =
+    typeof existingFile.data?.['version'] === 'number' ? existingFile.data['version'] : 0;
+  let fileNode: GraphNode = existingFile;
+  const opRowIds = new Set<string>();
+
+  for (const { row, id, kind } of validatedRows) {
+    opRowIds.add(id);
+    const pruned = pruneAndClone(row.properties);
+    const existing = kind === 'file-owned' ? undefined : nodeMap.get(id);
+    const data = existing?.data !== undefined ? { ...existing.data, ...pruned } : pruned;
+    const name = typeof pruned['name'] === 'string' ? pruned['name'] : existing?.name;
+    const nextNode: GraphNode = {
+      id,
+      type: row.label,
+      ...(name !== undefined ? { name } : {}),
+      data,
+    };
+    nodeMap.set(id, nextNode);
+    if (kind === 'file') fileNode = nextNode;
+  }
+
+  nodeMap.set(fileNodeId, {
+    ...fileNode,
+    data: {
+      ...fileNode.data,
+      status: 'ready',
+      version: priorVersion + 1,
+    },
+  });
+
+  const edges = applyEdges(keptEdges, op.edges, nodeMap, opRowIds, fileNodeId);
+
+  return {
+    graph: { seq: graph.seq, nodes: [...nodeMap.values()], edges },
+    file: { seq: op.seq, revision_id: op.revision_id },
+    receipt: {
+      applied: true,
+      nodesWritten: op.nodes.length,
+      edgesWritten: op.edges.length,
+      nodesDeleted,
+      statementCount: 1,
+    },
+    audit: {
+      scope: { kind: 'file', file: op.file },
+      nodesDeleted,
+      calledBy: 'replace-file',
+    },
+  };
 }
