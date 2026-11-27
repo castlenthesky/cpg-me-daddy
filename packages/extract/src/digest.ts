@@ -2,8 +2,43 @@
 // Pure and synchronous. `node:crypto`'s createHash is in-memory hashing, not I/O: the I2 trap
 // (src/purity.test.ts) allows exactly that one builtin, which goes beyond the contract's text.
 
+import { createHash } from 'node:crypto';
+import type { WorkspacePath } from '@cpg/model';
 import type { BuiltElements } from './builder';
-import type { NodeElement, SealExtractedFiles } from './contract';
+import type {
+  ExtractedFile,
+  ExtractedFileSet,
+  NodeElement,
+  RefSite,
+  SealExtractedFiles,
+} from './contract';
+
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function canonical(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'undefined';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => (item === undefined ? 'null' : canonical(item))).join(',')}]`;
+  }
+  const entries = Object.entries(value)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .toSorted(([a], [b]) => compareCodeUnits(a, b))
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonical(entryValue)}`);
+  return `{${entries.join(',')}}`;
+}
+
+function fnv1a32(input: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
 
 /**
  * `fnv1a32:<8 lowercase hex>`, the content anchor. A pure function of the four arrays that ignores
@@ -16,8 +51,22 @@ import type { NodeElement, SealExtractedFiles } from './contract';
  * - FNV-1a 32-bit over the UTF-16 code units of that text (offset 2166136261, prime 16777619), the
  *   spelling `@cpg/model`'s graphDigest uses. Four empty arrays give `fnv1a32:811c9dc5`.
  */
-export function elementDigest(_elements: BuiltElements): string {
-  throw new Error('SEAT: elementDigest lands in U6a.2-2');
+export function elementDigest(elements: BuiltElements): string {
+  const lines: string[] = [];
+  for (const node of elements.nodes) {
+    const { revision_id: _revisionId, ...rest } = node;
+    lines.push(`N:${canonical(rest)}`);
+  }
+  for (const symbol of elements.symbols) {
+    lines.push(`S:${canonical(symbol)}`);
+  }
+  for (const edge of elements.edges) {
+    lines.push(`E:${canonical(edge)}`);
+  }
+  for (const site of elements.refSites) {
+    lines.push(`R:${canonical(site)}`);
+  }
+  return fnv1a32(lines.toSorted(compareCodeUnits).join('\n'));
 }
 
 /**
@@ -32,8 +81,23 @@ export function elementDigest(_elements: BuiltElements): string {
  * Ranges, docstrings and revision_id do not enter: moving a function down the file changes nothing.
  * Re-exports join when IMPORT nodes exist (U6a.2-4, U6b); Python's `__all__` is a documented gap.
  */
-export function interfaceHash(_nodes: readonly NodeElement[]): string {
-  throw new Error('SEAT: interfaceHash lands in U6a.2-2');
+export function interfaceHash(nodes: readonly NodeElement[]): string {
+  const sortedEntries = nodes
+    .filter((node) => node.properties['exported'] === true)
+    .map((node) => {
+      const kind = node.properties['kind'];
+      const signature = node.properties['signature'];
+      const entry: readonly [string, string | null, string | null] = [
+        node.id,
+        typeof kind === 'string' ? kind : null,
+        typeof signature === 'string' ? signature : null,
+      ];
+      return { entry, text: JSON.stringify(entry) };
+    })
+    .toSorted((a, b) => compareCodeUnits(a.text, b.text))
+    .map((item) => item.entry);
+  const digest = createHash('sha256').update(JSON.stringify(sortedEntries), 'utf8').digest('hex');
+  return `sha256:${digest}`;
 }
 
 /**
@@ -43,6 +107,34 @@ export function interfaceHash(_nodes: readonly NodeElement[]): string {
  * - Otherwise `ok`: `files` maps each path to its file, inserted in path order (UTF-16 code unit);
  *   `refSites` is every file's ref sites, sorted by (the file's path, site id), both by code unit.
  */
-export const sealExtractedFiles: SealExtractedFiles = () => {
-  throw new Error('SEAT: sealExtractedFiles lands in U6a.2-2');
+export const sealExtractedFiles: SealExtractedFiles = (input) => {
+  const list = [...input];
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const file of list) {
+    if (seen.has(file.path)) {
+      duplicates.add(file.path);
+    } else {
+      seen.add(file.path);
+    }
+  }
+  if (duplicates.size > 0) {
+    return { kind: 'failed', duplicatePaths: [...duplicates].toSorted(compareCodeUnits) };
+  }
+
+  const sortedFiles = list.toSorted((a, b) => compareCodeUnits(a.path, b.path));
+  const fileMap = new Map<WorkspacePath, ExtractedFile>();
+  const collectedSites: RefSite[] = [];
+  for (const file of sortedFiles) {
+    fileMap.set(file.path, file);
+    for (const site of file.refSites.toSorted((a, b) => compareCodeUnits(a.id, b.id))) {
+      collectedSites.push(site);
+    }
+  }
+
+  const files: ReadonlyMap<WorkspacePath, ExtractedFile> = fileMap;
+  const refSites: readonly RefSite[] = collectedSites;
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- decision 88: only sealExtractedFiles mints the brand.
+  const set = { files, refSites } as ExtractedFileSet;
+  return { kind: 'ok', set };
 };

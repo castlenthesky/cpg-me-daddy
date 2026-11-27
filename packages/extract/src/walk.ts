@@ -4,8 +4,9 @@
 // `makeSymbolFqn` (decision 90), and resolveCallee is gone (U6a.2 acceptance). SEAT: Pass A
 // declarations (U6a.2-3) and Pass B regions (U6a.2-4).
 
+import { makeNodeId, makeSymbolFqn, MODULE_SCOPE, type SourceRange } from '@cpg/model';
 import type { ElementBuilder } from './builder';
-import type { ExtractOutcome, ExtractRequest, LanguageAdapter } from './contract';
+import type { ExtractOutcome, ExtractRequest, LanguageAdapter, SyntaxNode } from './contract';
 
 /** The truncation report of an `ExtractOutcome` of kind `truncated`. */
 type Truncation = Extract<ExtractOutcome, { kind: 'truncated' }>['truncation'];
@@ -15,6 +16,15 @@ export interface WalkResult {
   readonly astNodesVisited: number;
   /** Present iff a budget limit stopped the walk (I17). */
   readonly truncation?: Truncation;
+}
+
+function nodeRange(node: SyntaxNode): SourceRange {
+  return {
+    startRow: node.startPosition.row,
+    startColumn: node.startPosition.column,
+    endRow: node.endPosition.row,
+    endColumn: node.endPosition.column,
+  };
 }
 
 /**
@@ -39,9 +49,80 @@ export interface WalkResult {
  * before it stays.
  */
 export function walkFile(
-  _request: ExtractRequest,
-  _adapter: LanguageAdapter,
-  _builder: ElementBuilder,
+  request: ExtractRequest,
+  adapter: LanguageAdapter,
+  builder: ElementBuilder,
 ): WalkResult {
-  throw new Error('SEAT: walkFile lands in U6a.2-2');
+  const { path, root, revision_id, budget } = request;
+  const moduleId = makeNodeId({ form: 'scoped', path, kind: 'MODULE', scope: [MODULE_SCOPE] });
+  const moduleFqn = makeSymbolFqn({ form: 'local', path, descriptors: [] });
+
+  builder.addNode({
+    label: 'MODULE',
+    id: moduleId,
+    file: path,
+    revision_id,
+    tier: 'structural',
+    range: {
+      startRow: 0,
+      startColumn: 0,
+      endRow: root.endPosition.row,
+      endColumn: root.endPosition.column,
+    },
+    properties: {
+      name: adapter.moduleName(path),
+      status: 'ready',
+    },
+  });
+
+  builder.addSymbol({
+    fqn: moduleFqn,
+    origin: 'local',
+    language: adapter.language,
+    properties: { kind: 'module' },
+  });
+
+  builder.addEdge({
+    type: 'DEFINES',
+    from: { by: 'id', label: 'MODULE', key: moduleId },
+    to: { by: 'fqn', label: 'SYMBOL', key: moduleFqn },
+    properties: {},
+  });
+
+  let astNodesVisited = 1;
+  const maxDepth = budget?.maxDepth;
+  const maxNodes = budget?.maxNodes;
+  const childDepth = 1;
+
+  for (const child of root.namedChildren) {
+    if (maxDepth !== undefined && childDepth > maxDepth) {
+      return {
+        astNodesVisited,
+        truncation: {
+          limit: 'maxDepth',
+          limitValue: maxDepth,
+          droppedAtNodeType: child.type,
+          droppedRange: nodeRange(child),
+        },
+      };
+    }
+    if (maxNodes !== undefined && astNodesVisited + 1 > maxNodes) {
+      return {
+        astNodesVisited,
+        truncation: {
+          limit: 'maxNodes',
+          limitValue: maxNodes,
+          droppedAtNodeType: child.type,
+          droppedRange: nodeRange(child),
+        },
+      };
+    }
+    astNodesVisited += 1;
+    const declaration = adapter.classify(child, 'MODULE');
+    if (declaration !== undefined) {
+      throw new Error('SEAT: Pass A declarations land in U6a.2-3');
+    }
+  }
+
+  return { astNodesVisited };
 }

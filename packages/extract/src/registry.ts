@@ -4,14 +4,19 @@
 // class field, a quietly wrong graph), so extract FAILS `grammar-unsupported` for them (I25).
 
 import type { GrammarId, LanguageAdapter } from './contract';
+import { pythonAdapter } from './python';
 
 /** The grammars with an adapter, in this order: `Extractor.grammars`. */
-export const ADAPTER_GRAMMARS: readonly GrammarId[] = ['python'];
+export const ADAPTER_GRAMMARS: readonly GrammarId[] = Object.freeze(['python']);
+
+const REGISTRY: Readonly<Record<string, LanguageAdapter>> = {
+  python: pythonAdapter,
+};
 
 /**
  * The adapter for `grammarId`, or `undefined`. An own-key lookup: a name on Object.prototype
  * (`toString`, `__proto__`) has no adapter.
  */
-export function adapterFor(_grammarId: GrammarId): LanguageAdapter | undefined {
-  throw new Error('SEAT: adapterFor lands in U6a.2-2');
+export function adapterFor(grammarId: GrammarId): LanguageAdapter | undefined {
+  return Object.hasOwn(REGISTRY, grammarId) ? REGISTRY[grammarId] : undefined;
 }

@@ -2,8 +2,38 @@
 // f18ee71:packages/engine/src/extract/index.ts, minus the parse: the caller owns the tree, so extract
 // is synchronous and does no I/O (I2).
 
-import type { ExtractOutcome, ExtractRequest, Extractor, LanguageAdapter } from './contract';
+import { isWorkspacePath } from '@cpg/model';
+import { ElementBuilder } from './builder';
+import type {
+  ExtractErrorCode,
+  ExtractedFile,
+  ExtractOutcome,
+  ExtractRequest,
+  Extractor,
+  GrammarId,
+  LanguageAdapter,
+} from './contract';
+import { elementDigest, interfaceHash } from './digest';
+import { ADAPTER_GRAMMARS, adapterFor } from './registry';
+import { EXTRACT_CONTRACT_VERSION } from './version';
 import { walkFile } from './walk';
+
+function safePath(request: ExtractRequest): string {
+  try {
+    const path: unknown = request.path;
+    return typeof path === 'string' ? path : '';
+  } catch {
+    return '';
+  }
+}
+
+function fail(code: ExtractErrorCode, message: string, path: string): ExtractOutcome {
+  return { kind: 'failed', error: { code, message, path } };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Extracts one file through `adapter`. Never throws (I4): every failure is an outcome whose
@@ -21,8 +51,86 @@ import { walkFile } from './walk';
  * tier and `lineCount` the request's; `elementDigest` and `interfaceHash` over what was built. A walk
  * that stopped on the budget gives `truncated` with its report, never a short `ok` (I17).
  */
-export function extractFile(_request: ExtractRequest, _adapter: LanguageAdapter): ExtractOutcome {
-  throw new Error(`SEAT: extractFile (over ${walkFile.name}) lands in U6a.2-2`);
+export function extractFile(request: ExtractRequest, adapter: LanguageAdapter): ExtractOutcome {
+  try {
+    const rawPath: unknown = request.path;
+    if (typeof rawPath !== 'string' || !isWorkspacePath(rawPath) || rawPath === '.') {
+      return fail(
+        'path-not-relative',
+        `path is not a workspace-relative file path: ${JSON.stringify(rawPath)}`,
+        typeof rawPath === 'string' ? rawPath : '',
+      );
+    }
+
+    if (request.tiers?.expression === true) {
+      return fail('tier-disabled', 'expression tier is not supported yet', rawPath);
+    }
+
+    const maxNodes = request.budget?.maxNodes;
+    if (maxNodes !== undefined && (!Number.isSafeInteger(maxNodes) || maxNodes < 1)) {
+      return fail(
+        'budget-invalid',
+        `budget.maxNodes must be a positive safe integer, got ${String(maxNodes)}`,
+        rawPath,
+      );
+    }
+
+    const maxDepth = request.budget?.maxDepth;
+    if (maxDepth !== undefined && (!Number.isSafeInteger(maxDepth) || maxDepth < 0)) {
+      return fail(
+        'budget-invalid',
+        `budget.maxDepth must be a non-negative safe integer, got ${String(maxDepth)}`,
+        rawPath,
+      );
+    }
+
+    if (request.root.type !== adapter.moduleRootType) {
+      return fail(
+        'root-type-mismatch',
+        `expected root node type "${adapter.moduleRootType}", got "${request.root.type}"`,
+        rawPath,
+      );
+    }
+
+    const builder = new ElementBuilder(rawPath, request.revision_id);
+    const walk = walkFile(request, adapter, builder);
+    const built = builder.build();
+
+    let structuralNodes = 0;
+    let expressionNodes = 0;
+    for (const node of built.nodes) {
+      if (node.tier === 'structural') {
+        structuralNodes += 1;
+      } else {
+        expressionNodes += 1;
+      }
+    }
+
+    const file: ExtractedFile = {
+      path: rawPath,
+      grammarId: request.grammarId,
+      revision_id: request.revision_id,
+      nodes: built.nodes,
+      symbols: built.symbols,
+      edges: built.edges,
+      refSites: built.refSites,
+      stats: {
+        astNodesVisited: walk.astNodesVisited,
+        structuralNodes,
+        expressionNodes,
+        lineCount: request.lineCount,
+      },
+      elementDigest: elementDigest(built),
+      interfaceHash: interfaceHash(built.nodes),
+    };
+
+    if (walk.truncation !== undefined) {
+      return { kind: 'truncated', file, truncation: walk.truncation };
+    }
+    return { kind: 'ok', file };
+  } catch (error: unknown) {
+    return fail('internal', errorMessage(error), safePath(request));
+  }
 }
 
 /**
@@ -36,5 +144,33 @@ export function extractFile(_request: ExtractRequest, _adapter: LanguageAdapter)
  *   always has an adapter.
  */
 export function createExtractor(): Extractor {
-  throw new Error('SEAT: createExtractor lands in U6a.2-2');
+  const covered = ADAPTER_GRAMMARS.join(', ');
+  return {
+    contractVersion: EXTRACT_CONTRACT_VERSION,
+    grammars: ADAPTER_GRAMMARS,
+    coverage(grammarId: GrammarId) {
+      const adapter = adapterFor(grammarId);
+      if (adapter === undefined) {
+        throw new Error(
+          `C-EXTRACT: no CoverageManifest for grammar "${grammarId}"; extract covers ${covered}`,
+        );
+      }
+      return adapter.coverage();
+    },
+    extract(request: ExtractRequest) {
+      try {
+        const adapter = adapterFor(request.grammarId);
+        if (adapter === undefined) {
+          return fail(
+            'grammar-unsupported',
+            `no extractor for grammar "${request.grammarId}" (extract covers ${covered})`,
+            safePath(request),
+          );
+        }
+        return extractFile(request, adapter);
+      } catch (error: unknown) {
+        return fail('internal', errorMessage(error), safePath(request));
+      }
+    },
+  };
 }
