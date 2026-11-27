@@ -19,18 +19,23 @@ const word = (alphabet: string[], max: number): fc.Arbitrary<string> =>
 
 const name = word(['a', 'b', '`', '/', '#', '.', '(', ')', ' ', 'é'], 4);
 const kind = fc.constantFrom('namespace', 'type', 'term', 'method');
-const descriptor: fc.Arbitrary<SymbolDescriptor> = fc.record({ kind, name });
+// noNullPrototype: structuredClone always yields Object.prototype, and isDeepStrictEqual compares prototypes.
+const plain = { noNullPrototype: true } as const;
+const descriptor: fc.Arbitrary<SymbolDescriptor> = fc.record({ kind, name }, plain);
 const descriptors = fc.array(descriptor, { maxLength: 3 });
 const pathSeg = word(['a', '`', '.', ':', '#'], 3).filter((s) => s !== '.' && s !== '..');
 const path = fc.array(pathSeg, { minLength: 1, maxLength: 2 }).map((s) => asWp(s.join('/')));
 const parts: fc.Arbitrary<SymbolFqnParts> = fc.oneof(
-  fc.record({ form: fc.constant('local' as const), path, descriptors }),
-  fc.record({
-    form: fc.constant('external' as const),
-    scheme: word(['a', 'b', '-'], 2),
-    package: word(['a', ':', '/', '@'], 3),
-    descriptors,
-  }),
+  fc.record({ form: fc.constant('local' as const), path, descriptors }, plain),
+  fc.record(
+    {
+      form: fc.constant('external' as const),
+      scheme: word(['a', 'b', '-'], 2),
+      package: word(['a', ':', '/', '@'], 3),
+      descriptors,
+    },
+    plain,
+  ),
 );
 
 /** Half the pairs are deep copies, so "equal parts give one fqn" is exercised too. */
