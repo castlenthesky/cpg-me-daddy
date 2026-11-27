@@ -1,7 +1,7 @@
 // C-EXTRACT: parse tree in, graph elements out, per file, with zero cross-file knowledge. Types only
 // (check-deps rule `contract-types-only`: statement-level `import type` from @cpg/model alone, so the
-// emitted JS is empty). SEAT: the walker, the Python adapter, the builder, the digests and
-// `sealExtractedFiles` land in U6a.2-2..4; nothing here runs yet.
+// emitted JS is empty). What runs lives beside it: U6a.2-2's front door, builder, digests, seal and the
+// walker's MODULE tier; Pass A declarations and Pass B calls, imports and ref sites are U6a.2-3..4.
 //
 // Controller decision 88 (owner delegation, 2026-11-26): this file owns FileOwnedLabel, PropertyValue,
 // EndpointRef, EdgeElement and the ExtractedFileSet brand, moved out of @cpg/resolve. `SyntaxNode` is

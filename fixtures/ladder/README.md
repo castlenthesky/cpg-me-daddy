@@ -64,13 +64,13 @@ A language server is the independent oracle for `[resolution]`. `bun run ladder:
 
 ## Open questions
 
-A line tagged `# ?Qn` is a judgment call the plan does not settle yet. Each tagged line is the author's best reading, and the owner's ruling replaces it. Q1 to Q3 are ruled (controller decisions 90 to 92, owner delegation, 2026-11-26), and their tags are gone.
+A line tagged `# ?Qn` is a judgment call the plan does not settle yet. Each tagged line is the author's best reading, and the owner's ruling replaces it. Q1 to Q3 and Q5 are ruled (controller decisions 90 to 92 and 95, owner delegation, 2026-11-26), and their tags are gone.
 
 - **Q1, ruled.** A MODULE mints a SYMBOL whose fqn is its path with no descriptor, `` `main.py`/ ``, and DEFINES it from the MODULE (decision 90). A whole-module import needs it as a target.
 - **Q2, ruled.** A PARAM mints no SYMBOL in v1 (decision 91): AM-5 bans local symbols, and a parameter is local in most SCIP indexers. `DEFINES` still allows PARAM as a source; removing that endpoint is the owner's call.
 - **Q3, ruled.** The CALL ordinal counts every call in its region, in pre-order (an outer call before the calls in its arguments, then source order), and the region is the enclosing METHOD, or `$root` at module level. IMPORT ordinals count the same way (decision 92). Inserting an unrelated statement above rung 04's two calls changes no id. Inserting a call above them renumbers both, as intended.
 - **Q4.** Does a constructor call resolve to the class (`Greeter#`) or to its initializer? basedpyright and tsserver both answer with the class.
-- **Q5.** What does the extractor emit for a region with a syntax error: nothing, an UNKNOWN, or the declarations tree-sitter recovered?
+- **Q5, ruled.** For a region with a syntax error the extractor emits the declarations tree-sitter recovered (decision 95). An ERROR node is not descended; each ERROR node directly under a container gets one `UNKNOWN` with `reason=syntax-error`. Rung 09's code-tier sections were written by hand from its source.
 - **Q6.** For `export function f()`, does `range` span the `export_statement` or the `function_declaration` inside it?
 
 ## Not on the ladder yet

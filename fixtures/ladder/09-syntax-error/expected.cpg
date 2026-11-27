@@ -1,6 +1,6 @@
 # Rung 09. A file that does not parse cleanly. A syntax error is still a successful parse (C-PARSE I22).
-# The parser returns a walkable tree with hasError=true. What the extractor emits for the broken
-# region is not asserted yet (?Q5), so this rung has no code-tier sections.
+# The parser returns a walkable tree with hasError=true. The extractor emits the declarations the
+# source still holds (Q5, decision 95): `broken` is a function with no parameter written.
 
 [parse]
 PARSE main.py language=python root=module hasError=true
@@ -9,3 +9,13 @@ PARSE main.py language=python root=module hasError=true
 DIRECTORY dir:.
 FILE file:main.py name=main.py language=python
 HAS_ENTRY dir:. -> file:main.py
+
+[structural]
+MODULE file:main.py:MODULE:$root name=main range=1:0-3:0
+METHOD file:main.py:METHOD:broken name=broken kind=function params_count=0 range=1:0-2:8
+SOURCE_FILE file:main.py:MODULE:$root -> file:main.py
+DECLARES file:main.py:MODULE:$root -> file:main.py:METHOD:broken
+
+[symbols]
+DEFINES file:main.py:MODULE:$root -> `main.py`/
+DEFINES file:main.py:METHOD:broken -> `main.py`/broken().

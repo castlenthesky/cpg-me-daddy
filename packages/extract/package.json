@@ -2,7 +2,7 @@
   "name": "@cpg/extract",
   "version": "0.0.1",
   "private": true,
-  "description": "C-EXTRACT: parse tree in, graph elements out, per file. Types only until U6a.2-2.",
+  "description": "C-EXTRACT: parse tree in, graph elements out, per file. The python MODULE tier from U6a.2-2.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -14,5 +14,9 @@
   },
   "dependencies": {
     "@cpg/model": "*"
+  },
+  "devDependencies": {
+    "@cpg/parse": "*",
+    "@vscode/tree-sitter-wasm": "0.3.1"
   }
 }
