@@ -48,6 +48,6 @@ Then press F5 in VS Code to launch the Extension Development Host, and run **CPG
 | `bun run spike:vscode-host` | the panel's render-leg and postMessage spikes inside VS Code (§7; not in `check`)                                |
 | `bun run bench:watch`       | `cpg watch`'s T0->T3 over 50 saves, on a built tree (`tools/bench-watch.mjs`, `--saves N`; not in `check`)       |
 | `bun run clean`             | SAFE FULL RESET: out, dist, tsbuildinfo, turbo, coverage, reports, stryker                                       |
-| `bun run compile` / `watch` | `tsc -b`, then the page bundle (F5's build task) / `tsc -b -w`                                                   |
+| `bun run compile` / `watch` | `tsc -b`, then the page bundle and the grammars (F5's build task) / `tsc -b -w`                                  |
 | `bun run changeset`         | record a semver change for a package                                                                             |
 | `bun run version-packages`  | apply changesets (`changeset version`)                                                                           |
