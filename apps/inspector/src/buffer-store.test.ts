@@ -394,6 +394,29 @@ describe('BufferStore.applyDelta additions', () => {
     ]);
   });
 
+  // Post-implementation (sabotage survivor: the last duplicate taken as the awaited parent). A child
+  // waits for the first node with its parent's id; a later duplicate still refreshes in its place.
+  it('waits for the first of a duplicated parent id, and keeps the later one as the node', () => {
+    const store = loaded();
+    const first = node('x', 'FILE', 'first');
+    const later = node('x', 'DIRECTORY', 'later');
+    store.applyDelta(
+      add(node('c'), first, later),
+      new Map([
+        ['c', 'x'],
+        ['x', 'f'],
+      ]),
+      always(0.75),
+    );
+    const at = (id: string): number[] => xy(store, store.liveIndex(id) ?? -1);
+    expect([at('x'), at('c')]).toEqual([
+      [310, 410],
+      [320, 420],
+    ]);
+    expect(store.node('x')).toBe(later);
+    expect(rgba(store, store.liveIndex('x') ?? -1)).toEqual(f32(DIRECTORY_RGBA));
+  });
+
   // Round two (review 4): the chain's top has a parent no one can locate.
   it('seeds a chain listed child first beside its parents when its top is unlocatable', () => {
     const store = loaded();
