@@ -367,7 +367,26 @@ describe('the manifest', () => {
   });
 });
 
+/** The FILE paths of a graph message. */
+const filePaths = (graph) =>
+  graph.payload.nodes.filter(({ type }) => type === 'FILE').map(({ data }) => data.path);
+
 describe('cpg.rescan (decision 79)', () => {
+  // Round two (R2): a file grown past the cap is dropped by the live path (decision 48), so only a crawl
+  // takes it out of the graph.
+  it('during a live watch it crawls now: what no event reported reaches the panel, and nothing is said', async () => {
+    writeFileSync(join(root, 'cpg.config.yaml'), 'version: 1\nmax_file_size_bytes: 60\n');
+    const { seen, run, panel } = await opened();
+    writeFileSync(join(root, 'b.py'), '#'.repeat(61));
+    await run('cpg.rescan');
+    await until(() => ofType(panel, 'graph').length === 2);
+    expect(ofType(panel, 'graph').map((graph) => filePaths(graph).includes('b.py'))).toEqual([
+      true,
+      false,
+    ]);
+    expect([seen.warnings, seen.errors]).toEqual([[], []]);
+  });
+
   it('with no graph being watched it only says so', async () => {
     const { seen, run } = activate();
     await run('cpg.rescan');
@@ -662,10 +681,12 @@ describe('deactivation', () => {
     await until(() => seen.diagnostics.size === 1);
     // Round two (review a9): a run is pending, and the editor's own items are released.
     draw(panel);
-    expect(vi.getTimerCount()).toBe(1);
+    // Round two (R1): the verify run, and the watch's rescan interval (decision 78's 300000).
+    await until(() => vi.getTimerCount() === 2);
     const before = panel.posted.length;
     deactivate();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
+    await until(() => vi.getTimerCount() === 0);
     expect(new Set(seen.disposed)).toEqual(new Set(['diagnostics', 'status bar', 'log']));
     expect([seen.commands.size, seen.serializers.size, seen.themeListeners.length]).toEqual([
       0, 0, 0,

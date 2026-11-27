@@ -1056,6 +1056,10 @@ describe('cpg.rescan (decisions 78, 79)', () => {
     s.session.dispose();
     const said = s.messages.length;
     s.session.rescan();
+    // Round two (R8): and once the watch has ended, with none live.
+    await until(() => second.ended);
+    await allMicrotasks();
+    s.session.rescan();
     expect([heard, s.messages.length]).toEqual([['second'], said]);
   });
 });

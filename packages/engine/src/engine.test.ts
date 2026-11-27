@@ -358,6 +358,9 @@ describe('index removes what the store holds that the walk did not find (decisio
       { id: 'm', type: 'MODULE', name: 'm', data: { path: 'mod.ts' } },
       { id: 'd', type: 'DIRECTORY', name: 'x' },
       { id: 'a', type: 'FILE', name: 'a.ts', data: { path: 'a.ts' } },
+      // Round two (R6): never the root (C-STORE INV-7), and never a path that is not a WorkspacePath.
+      { id: 'dot', type: 'FILE', name: '.', data: { path: '.' } },
+      { id: 'abs', type: 'FILE', name: 'abs', data: { path: '/abs' } },
     ];
     await memory.onSnapshot({ seq: 3, nodes, edges: [] }, { seq: 3, cause: 'initial' });
     const host = recording('panel');
