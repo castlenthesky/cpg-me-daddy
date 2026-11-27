@@ -2,7 +2,7 @@
   "name": "@cpg/store",
   "version": "0.0.1",
   "private": true,
-  "description": "C-STORE: the GraphStore thin waist (types and StoreError). The Cypher planner and FalkorStore land in U5.",
+  "description": "C-STORE: the GraphStore thin waist (types, StoreError, toWriteOp). The Cypher planner and FalkorStore land in U5.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -13,6 +13,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@cpg/extract": "*",
     "@cpg/model": "*"
   }
 }

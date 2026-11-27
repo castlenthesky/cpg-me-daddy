@@ -1,7 +1,8 @@
 // C-STORE (05-contracts.yaml): the store thin waist. One interface, two tiers (MemoryStore always;
 // FalkorStore from U5). Types only (check-deps rule contract-types-only).
-// SEAT: CypherStatement / WritePlanner / toWriteOp arrive with the Cypher planner (U5) and the
-// extractor (U6a); OverlayBatch with the first overlay job (U10).
+// toWriteOp is REAL in write-op.ts (U6a.3-1): it takes @cpg/extract's types, which rule 7 keeps out
+// of this file. SEAT: CypherStatement / WritePlanner arrive with the Cypher planner (U5);
+// OverlayBatch with the first overlay job (U10).
 
 import type { EdgeType, NodeLabel, WorkspacePath } from '@cpg/model';
 
