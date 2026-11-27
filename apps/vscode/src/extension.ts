@@ -31,6 +31,9 @@ function toDiagnostic({ message, checkId }: VerificationDiagnostic): vscode.Diag
 /** The command that shows the log, and the button an error offers for it. */
 const SHOW_LOG = 'cpg.showLog';
 
+/** Where `bun run compile` copies the grammar .wasm files inside the extension install (controller decision 112). */
+const GRAMMAR_DIR_PARTS = ['apps', 'vscode', 'dist', 'grammars'] as const;
+
 export function activate(context: vscode.ExtensionContext): void {
   // Output > CPG. Timestamped; its level follows "Developer: Set Log Level..." (default info).
   const log = vscode.window.createOutputChannel('CPG', { log: true });
@@ -38,8 +41,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const uriOf = (path: WorkspacePath): vscode.Uri => vscode.Uri.file(join(root ?? '', path));
   const version = String(context.extension.packageJSON.version);
   const directory = pageDirectory();
+  const grammarDir = vscode.Uri.joinPath(context.extensionUri, ...GRAMMAR_DIR_PARTS).fsPath;
   log.info(
-    `activated: cpg ${version} in VS Code ${vscode.version}; workspace ${root ?? '(none)'}; page bundle ${directory}`,
+    `activated: cpg ${version} in VS Code ${vscode.version}; workspace ${root ?? '(none)'}; page bundle ${directory}; grammars ${grammarDir}`,
   );
 
   const statusBar = vscode.window.createStatusBarItem('cpg.verify', vscode.StatusBarAlignment.Left);
@@ -49,6 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const session = new GraphSession({
     root,
     version,
+    grammarDir,
     createEngine,
     fileSystem: workspaceFileSystem(uriOf),
     opener: createSourceOpener(uriOf),

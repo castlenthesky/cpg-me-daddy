@@ -113,6 +113,30 @@ function readResolutionValue(raw: unknown): EdgeResolution | undefined {
   return out;
 }
 
+const SCHEMA_RANGE = /^([1-9][0-9]*):(0|[1-9][0-9]*)-([1-9][0-9]*):(0|[1-9][0-9]*)$/;
+
+function readSchemaRange(v: unknown): SourceRange | undefined {
+  if (typeof v !== 'string') return undefined;
+  const match = SCHEMA_RANGE.exec(v);
+  if (match === null) return undefined;
+  const startLine = Number(match[1]);
+  const startColumn = Number(match[2]);
+  const endLine = Number(match[3]);
+  const endColumn = Number(match[4]);
+  if (
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(startColumn) ||
+    !Number.isSafeInteger(endLine) ||
+    !Number.isSafeInteger(endColumn)
+  ) {
+    return undefined;
+  }
+  const startRow = startLine - 1;
+  const endRow = endLine - 1;
+  if (endRow < startRow || (endRow === startRow && endColumn < startColumn)) return undefined;
+  return { startRow, startColumn, endRow, endColumn };
+}
+
 /**
  * The location the code tier writes as schema properties (controller decision 108), read when
  * `data.location` is absent and `data.range` or `data.name_range` is present:
@@ -130,9 +154,23 @@ function readResolutionValue(raw: unknown): EdgeResolution | undefined {
  * `node <JSON id> data.<key> is malformed` for the first key that fails, in the order `range`, `file`,
  * `name_range` (a missing `range` fails as `range`).
  */
-// SEAT (decision 108)
+// REAL
 function readSchemaLocation(node: GraphNode): Read<NodeLocation> {
-  throw new Error(`SEAT: readSchemaLocation(${node.id}) is decision 108`);
+  const fail = (key: 'range' | 'file' | 'name_range') =>
+    bad('malformed-location', `node ${JSON.stringify(node.id)} data.${key}`, node.id);
+  const { data } = node;
+  if (!isRecord(data)) return fail('range');
+  const range = readSchemaRange(data['range']);
+  if (range === undefined) return fail('range');
+  const filePath = data['file'];
+  if (typeof filePath !== 'string' || filePath === '.' || !isWorkspacePath(filePath)) {
+    return fail('file');
+  }
+  if (!isPresent(data['name_range'])) return { state: 'present', value: { filePath, range } };
+  const nameRange = readSchemaRange(data['name_range']);
+  return nameRange === undefined
+    ? fail('name_range')
+    : { state: 'present', value: { filePath, range, nameRange } };
 }
 
 /**

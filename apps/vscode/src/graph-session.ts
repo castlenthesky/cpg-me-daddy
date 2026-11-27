@@ -25,7 +25,6 @@ export interface GraphSessionOptions {
    * the extension's install that `bun run compile` copies the grammar .wasm files into (controller
    * decision 112, C-PARSE Q1). Absent: the engine's own default, the grammar package's directory.
    */
-  // SEAT (decision 112): not passed to createEngine yet
   readonly grammarDir?: string;
   readonly createEngine: (config: EngineConfig) => CpgEngine;
   /** The workspace at `root`. */
@@ -328,6 +327,7 @@ export class GraphSession {
       const engine = this.options.createEngine({
         version: this.options.version,
         consumers: config.consumers,
+        ...(this.options.grammarDir === undefined ? {} : { grammarDir: this.options.grammarDir }),
       });
 
       failed = 'cannot open the graph store';

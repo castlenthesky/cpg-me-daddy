@@ -23,6 +23,8 @@ export interface NodeTypeDescriptor {
 export const NODE_TYPES: readonly NodeTypeDescriptor[] = [
   { key: 'DIRECTORY', label: 'Directories', color: '#ff9933' },
   { key: 'FILE', label: 'Files', color: '#4db3ff' },
+  // The code tier's per-file root; Dark+'s numeric green, the one unused hue.
+  { key: 'MODULE', label: 'Modules', color: '#B5CEA8' },
   // CPG code-tier node labels from the schema (`packages/model/src/schema`,
   // `docs/outline/04-schema.yaml`), keeping the archive palette verbatim.
   { key: 'METHOD', label: 'Methods', color: '#4FC1FF' },

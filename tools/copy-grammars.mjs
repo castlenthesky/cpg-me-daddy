@@ -1,14 +1,18 @@
 #!/usr/bin/env node
-// SEAT (U6a.3-3 part 2, BMO-43; controller decision 112, C-PARSE Q1): `bun run compile`'s last step.
+// REAL (U6a.3-3 part 2, BMO-43; controller decision 112, C-PARSE Q1): `bun run compile`'s last step.
 // Copies the grammar .wasm files the extension's code tier loads into the extension's own install, so a
 // VSIX finds them beside its build and never through node_modules. The extension names the same folder
 // as the grammar locator's `explicit` rule (apps/vscode/src/extension.ts).
 //
 // Usage: node tools/copy-grammars.mjs [--outdir <path>]
 
-import { resolve } from 'node:path';
+import { copyFile, mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 /** The package that ships the grammar .wasm files (C-PARSE pinned; @cpg/parse's registry names it). */
 export const GRAMMAR_PACKAGE = '@vscode/tree-sitter-wasm';
@@ -30,9 +34,20 @@ export const DEFAULT_OUTDIR = 'apps/vscode/dist/grammars';
  * @param {{ outdir?: string }} [options]
  * @returns {Promise<{ outdir: string, files: string[] }>}
  */
-// SEAT (decision 112)
+// REAL
 export async function copyGrammars({ outdir = DEFAULT_OUTDIR } = {}) {
-  throw new Error(`SEAT: copyGrammars(${outdir}) is decision 112`);
+  const packageJson = createRequire(import.meta.url).resolve(`${GRAMMAR_PACKAGE}/package.json`);
+  const sourceDir = join(dirname(packageJson), 'wasm');
+  const targetDir = resolve(ROOT, outdir);
+  await mkdir(targetDir, { recursive: true });
+  const files = await Promise.all(
+    GRAMMARS.map(async (name) => {
+      const dest = join(targetDir, name);
+      await copyFile(join(sourceDir, name), dest);
+      return dest;
+    }),
+  );
+  return { outdir: targetDir, files };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
