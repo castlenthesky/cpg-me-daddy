@@ -359,6 +359,8 @@ describe('cpg.rescan (decision 79)', () => {
   it('during a live watch it crawls now: what no event reported reaches the panel, and nothing is said', async () => {
     writeFileSync(join(root, 'cpg.config.yaml'), 'version: 1\nmax_file_size_bytes: 60\n');
     const { seen, run, panel } = await opened();
+    // Post-implementation: the first graph brings the index's own U6a warning; the crawl adds none.
+    const said = [...seen.warnings];
     writeFileSync(join(root, 'b.py'), '#'.repeat(61));
     await run('cpg.rescan');
     await until(() => ofType(panel, 'graph').length === 2);
@@ -366,7 +368,7 @@ describe('cpg.rescan (decision 79)', () => {
       true,
       false,
     ]);
-    expect([seen.warnings, seen.errors]).toEqual([[], []]);
+    expect([said.length, seen.warnings, seen.errors]).toEqual([1, said, []]);
   });
 
   it('with no graph being watched it only says so', async () => {
