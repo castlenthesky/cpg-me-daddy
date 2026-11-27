@@ -4,13 +4,17 @@
 // @cpg/model and node:crypto; extract and seal may request nothing. Allowing node:crypto (createHash
 // for interfaceHash, decision 94) goes beyond the contract's text. If the package's own modules did not
 // load through the trap (a native-ESM build, Q4), the probe fails loudly instead of passing empty.
+// Round two: each request records who made it and where it resolves, so @cpg/model's own loads cannot
+// stand in for the package's, and a relative request may not leave the two packages' dist.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const DIST = join(realpathSync(join(__dirname, '..')), 'dist', 'index.js');
+const DIST_DIR = join(realpathSync(join(__dirname, '..')), 'dist');
+const DIST = join(DIST_DIR, 'index.js');
+const MODEL_DIST_DIR = join(realpathSync(join(__dirname, '../../model')), 'dist');
 const ALLOWED = new Set(['@cpg/model', 'node:crypto']);
 
 const PROBE = `
@@ -18,9 +22,11 @@ const Module = require('node:module');
 const loads = { require: [], run: [] };
 let phase = 'require';
 const load = Module._load;
-Module._load = function (request, ...rest) {
-  loads[phase].push(request);
-  return load.call(this, request, ...rest);
+Module._load = function (request, parent, ...rest) {
+  let resolved = null;
+  try { resolved = Module._resolveFilename(request, parent); } catch {}
+  loads[phase].push({ request, from: parent ? parent.filename : null, resolved });
+  return load.call(this, request, parent, ...rest);
 };
 let result = null;
 let failure = null;
@@ -39,8 +45,14 @@ try {
 process.stdout.write(JSON.stringify({ loads, result, failure }));
 `;
 
+interface Load {
+  readonly request: string;
+  readonly from: string | null;
+  readonly resolved: string | null;
+}
+
 interface Probe {
-  readonly loads: { readonly require: readonly string[]; readonly run: readonly string[] };
+  readonly loads: { readonly require: readonly Load[]; readonly run: readonly Load[] };
   readonly result: unknown;
   readonly failure: string | null;
 }
@@ -73,20 +85,25 @@ function probe(entry: string): Probe {
 }
 
 const relative = (request: string) => request.startsWith('./') || request.startsWith('../');
+const inside = (dir: string, file: string | null) => file !== null && file.startsWith(`${dir}/`);
+
+/** One request made while loading: allowed, or the reason it breaks I2. */
+function verdict({ request, resolved }: Load): string | undefined {
+  if (!relative(request)) return ALLOWED.has(request) ? undefined : request;
+  const kept = inside(DIST_DIR, resolved) || inside(MODEL_DIST_DIR, resolved);
+  return kept ? undefined : `outside the packages: ${request}`;
+}
 
 /** I2's verdict on one probe: every request that breaks the rule, or the loud ESM failure. */
 function violations({ loads }: Probe): string[] {
-  const own = loads.require.filter(relative);
+  // The first request is the probe's own require of the entry, not the package loading something.
+  const made = loads.require.slice(1);
+  const own = made.filter((l) => inside(DIST_DIR, l.from));
   return [
     ...(own.length === 0 ? ['the package did not load through Module._load'] : []),
-    ...loads.require.filter((r) => !relative(r) && !ALLOWED.has(r) && r !== entryOf(loads)),
-    ...loads.run.map((r) => `during extract: ${r}`),
+    ...made.flatMap((l) => verdict(l) ?? []),
+    ...loads.run.map((l) => `during extract: ${l.request}`),
   ];
-}
-
-/** The probe's own require of the entry is not the package loading something. */
-function entryOf(loads: Probe['loads']): string | undefined {
-  return loads.require[0];
 }
 
 const temporary: string[] = [];
@@ -112,7 +129,7 @@ describe('extract performs no I/O (I2)', () => {
       const loaded = probe(DIST);
       expect(loaded.failure).toBeNull();
       expect(loaded.result).toEqual({ extract: 'ok', seal: 'ok', nodes: 1 });
-      expect(loaded.loads.require).toContain('@cpg/model');
+      expect(loaded.loads.require.map((l) => l.request)).toContain('@cpg/model');
       expect(violations(loaded)).toEqual([]);
     },
   );
@@ -141,4 +158,34 @@ describe('extract performs no I/O (I2)', () => {
     );
     expect(violations(probe(entry))).toContain('the package did not load through Module._load');
   });
+
+  it(
+    'anti-vacuity: @cpg/model loading its own modules does not vouch for the package (r2)',
+    {
+      timeout: 20_000,
+    },
+    () => {
+      const model = JSON.stringify(join(MODEL_DIST_DIR, 'index.js'));
+      const entry = plant(
+        `require(${model});\nmodule.exports = { createExtractor: () => ({}) };\n`,
+      );
+      const loaded = probe(entry);
+      expect(loaded.loads.require.some((l) => inside(MODEL_DIST_DIR, l.from))).toBe(true);
+      expect(violations(loaded)).toContain('the package did not load through Module._load');
+    },
+  );
+
+  it(
+    'anti-vacuity: reports a relative request that leaves the packages (r2)',
+    {
+      timeout: 20_000,
+    },
+    () => {
+      const entry = plant(
+        `module.exports = require(${JSON.stringify(DIST)});\nrequire('./sibling.cjs');\n`,
+      );
+      writeFileSync(join(dirname(entry), 'sibling.cjs'), 'module.exports = 1;\n');
+      expect(violations(probe(entry))).toContain('outside the packages: ./sibling.cjs');
+    },
+  );
 });

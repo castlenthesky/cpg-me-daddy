@@ -9,6 +9,7 @@ import type {
   ExtractRequest,
   LanguageAdapter,
   SyntaxNode,
+  TypeDeclInfo,
 } from './contract';
 import { createExtractor, extractFile } from './extractor';
 import { pythonAdapter } from './python';
@@ -144,6 +145,8 @@ describe('request checks', () => {
     { maxDepth: -1 },
     { maxDepth: 0.5 },
     { maxDepth: Number.POSITIVE_INFINITY },
+    { maxDepth: 2 ** 53 },
+    { maxDepth: Number.NaN },
     { maxNodes: 10, maxDepth: -2 },
   ])('fails budget-invalid for %j', (budget) => {
     expect(errorOf(extract({ budget }))).toEqual({ code: 'budget-invalid', path: 'main.py' });
@@ -160,7 +163,45 @@ describe('request checks', () => {
     const root = fake('program', [0, 0], [0, 0]);
     expect(errorOf(extract({ root }))).toEqual({ code: 'root-type-mismatch', path: 'main.py' });
   });
+
+  it.each([
+    [
+      'the path before the tier',
+      { path: '/abs.py', tiers: { expression: true } },
+      'path-not-relative',
+    ],
+    [
+      'the tier before the budget',
+      { tiers: { expression: true }, budget: { maxNodes: 0 } },
+      'tier-disabled',
+    ],
+    [
+      'the budget before the root',
+      { budget: { maxNodes: 0 }, root: fake('program', [0, 0], [0, 0]) },
+      'budget-invalid',
+    ],
+  ] as const)('checks %s (r2)', (_name, over, code) => {
+    const forged = Object.assign(request(), over);
+    expect(errorOf(createExtractor().extract(forged))).toMatchObject({ code });
+  });
+
+  it("reports '' as the path of an unsupported grammar when the path is not a string (r2)", () => {
+    const forged = Object.assign(request({ grammarId: 'ruby' }), { path: null });
+    expect(errorOf(createExtractor().extract(forged))).toEqual({
+      code: 'grammar-unsupported',
+      path: '',
+    });
+  });
 });
+
+const DECLARATION: TypeDeclInfo = {
+  declares: 'TYPE_DECL',
+  name: 'Greeter',
+  kind: 'class',
+  exported: true,
+  structural: true,
+  body: undefined,
+};
 
 const throwing = (part: 'classify' | 'moduleName'): LanguageAdapter => ({
   ...pythonAdapter,
@@ -193,6 +234,16 @@ describe('extract never throws (I4)', () => {
     if (outcome.kind !== 'failed') throw new Error(`expected failed, got ${outcome.kind}`);
     expect(outcome.error.code).toBe('internal');
     expect(outcome.error.message).toMatch(/^C-EXTRACT I19: /);
+  });
+
+  it('fails internal on a declaration: Pass A is SEAT until U6a.2-3 (r2)', () => {
+    const declaring: LanguageAdapter = { ...pythonAdapter, classify: () => DECLARATION };
+    const outcome = extractFile(request({ root: THREE }), declaring);
+    if (outcome.kind !== 'failed') throw new Error(`expected failed, got ${outcome.kind}`);
+    expect([outcome.error.code, outcome.error.message]).toEqual([
+      'internal',
+      'SEAT: Pass A declarations land in U6a.2-3',
+    ]);
   });
 });
 
@@ -269,6 +320,33 @@ describe('the MODULE tier', () => {
     const file = okFile(extract({ path: wsPath('a:b.py') }));
     expect(file.nodes[0]?.id).toBe('file:a%3Ab.py:MODULE:$root');
     expect(file.symbols[0]?.fqn).toBe('`a:b.py`/');
+    // r2: makeSymbolFqn doubles a backtick; makeNodeId leaves it.
+    const quoted = okFile(extract({ path: wsPath('a`b.py') }));
+    expect([quoted.nodes[0]?.id, quoted.symbols[0]?.fqn]).toEqual([
+      'file:a`b.py:MODULE:$root',
+      '`a``b.py`/',
+    ]);
+  });
+
+  it('reads the root type, the language and the module name from the adapter (r2)', () => {
+    const other: LanguageAdapter = {
+      ...pythonAdapter,
+      grammarId: 'other',
+      language: 'otherlang',
+      moduleRootType: 'source_file',
+      moduleName: () => 'M',
+    };
+    const root = fake('source_file', [0, 0], [1, 0]);
+    const file = okFile(extractFile(request({ grammarId: 'other', root }), other));
+    expect([file.grammarId, file.nodes[0]?.properties['name'], file.symbols[0]?.language]).toEqual([
+      'other',
+      'M',
+      'otherlang',
+    ]);
+    expect(errorOf(extractFile(request({ grammarId: 'other' }), other))).toEqual({
+      code: 'root-type-mismatch',
+      path: 'main.py',
+    });
   });
 
   it('classifies each top-level named child once, in order, as a MODULE child', () => {
@@ -321,6 +399,27 @@ describe('the budget (I17)', () => {
     expect(outcome.file.stats.astNodesVisited).toBe(visited);
     expect(outcome.file.nodes.map((n) => n.id)).toEqual([MOD]);
     expect(outcome.file.edges).toHaveLength(1);
+  });
+
+  it('has no hidden cap: 5000 statements and no budget are all visited (r2)', () => {
+    const many = Array.from({ length: 5000 }, (_, i) =>
+      fake('expression_statement', [i, 0], [i, 5]),
+    );
+    const file = okFile(extract({ root: fake('module', [0, 0], [5000, 0], many) }));
+    expect(file.stats.astNodesVisited).toBe(5001);
+  });
+
+  it('does not classify the child it drops (r2)', () => {
+    const seen: string[] = [];
+    const recording: LanguageAdapter = {
+      ...pythonAdapter,
+      classify: (node) => {
+        seen.push(node.type);
+        return undefined;
+      },
+    };
+    const outcome = extractFile(request({ root: THREE, budget: { maxNodes: 2 } }), recording);
+    expect([outcome.kind, seen]).toEqual(['truncated', [FIRST.type]]);
   });
 
   it.each([{ maxNodes: 4 }, { maxDepth: 1 }, { maxNodes: 4, maxDepth: 1 }])(

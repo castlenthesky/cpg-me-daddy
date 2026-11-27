@@ -162,14 +162,28 @@ describe('ElementBuilder: each rule fails as its own invariant', () => {
     ['I7: two nodes with one id', { nodes: [method(), method()] }, 'I7'],
     ['I7: one fqn, other fields', { symbols: [symbol({ language: 'typescript' })] }, 'I7'],
     ['I7: one fqn, other properties', { symbols: [symbol({ properties: { kind: 'x' } })] }, 'I7'],
+    ['I7: one fqn, other origin (r2)', { symbols: [symbol({ origin: 'external' })] }, 'I7'],
     ['I8: a FILE in nodes', { nodes: [forgedLabel('FILE')] }, 'I8'],
     ['I8: a SYMBOL in nodes', { nodes: [forgedLabel('SYMBOL')] }, 'I8'],
     ['I8: a DIRECTORY in nodes', { nodes: [forgedLabel('DIRECTORY')] }, 'I8'],
+    ['I8: a COMMUNITY in nodes (r2)', { nodes: [forgedLabel('COMMUNITY')] }, 'I8'],
+    ['I8: a TAG in nodes (r2)', { nodes: [forgedLabel('TAG')] }, 'I8'],
+    ['I8: a META_DATA in nodes (r2)', { nodes: [forgedLabel('META_DATA')] }, 'I8'],
     ['I9: an edge to no node', { edges: [edge({ to: byId(FN, 'METHOD') })] }, 'I9'],
     ['I9: an edge from no node', { edges: [edge({ from: byId(FN, 'METHOD') })] }, 'I9'],
     ['I9: a node under another label', { nodes: [fn], edges: [edge({ from: byId(FN) })] }, 'I9'],
     ['I9: an fqn no SYMBOL has', { edges: [edge({ to: byFqn('`main.py`/nope().') })] }, 'I9'],
     ['I10: an endpoint of another file', { edges: [edge({ to: byId('file:o.py:M:x') })] }, 'I10'],
+    [
+      'I10: a source of another file (r2)',
+      { edges: [edge({ from: byId('file:o.py:M:x') })] },
+      'I10',
+    ],
+    [
+      'I10: a path that only starts like it (r2)',
+      { edges: [edge({ to: byId('file:main.pyc:M:x') })] },
+      'I10',
+    ],
     ['I19: NUL in a property', { nodes: [method({ properties: { name: `a${NUL}` } })] }, 'I19'],
     ['I19: NUL in a property key', { nodes: [method({ properties: { [`k${NUL}`]: 1 } })] }, 'I19'],
     ['I19: NUL in a list item', { nodes: [method({ properties: { t: ['a', NUL] } })] }, 'I19'],
@@ -178,6 +192,24 @@ describe('ElementBuilder: each rule fails as its own invariant', () => {
     ['I19: NUL in an edge property', { edges: [edge({ properties: { why: NUL } })] }, 'I19'],
     ['I19: NUL in a site name', { refSites: [site({ nameParts: ['g', `x${NUL}`] })] }, 'I19'],
     ['I19: NUL in a site binding', { refSites: [site({ importBinding: binding(NUL) })] }, 'I19'],
+    ['I19: NUL in a node id (r2)', { nodes: [method({ id: `${FN}${NUL}` })] }, 'I19'],
+    [
+      'I19: NUL in an unused fqn (r2)',
+      { symbols: [symbol({ fqn: `\`main.py\`/n${NUL}.` })] },
+      'I19',
+    ],
+    [
+      'I19: NUL in a symbol property (r2)',
+      { symbols: [symbol({ fqn: 'x', properties: { k: NUL } })] },
+      'I19',
+    ],
+    ['I19: NUL in a site id (r2)', { refSites: [site({ id: `s${NUL}` })] }, 'I19'],
+    ['I19: NUL in a site node id (r2)', { refSites: [site({ nodeId: `${FN}${NUL}` })] }, 'I19'],
+    [
+      'I19: NUL in a binding module (r2)',
+      { refSites: [site({ importBinding: { ...binding('j'), module: NUL } })] },
+      'I19',
+    ],
   ];
 
   it('the extra method, its SYMBOL and DEFINES are valid on their own', () => {

@@ -149,6 +149,13 @@ const moduleTier = (w: Fact) =>
 const files = () =>
   extracted.flatMap((e) => (e.outcome.kind === 'ok' ? [{ ...e, file: e.outcome.file }] : []));
 
+/** What extract emitted for one rung's files. Round two: recall is per rung, so one rung's main.py
+ * cannot stand in for another's. */
+const ofRung = (rung: string): Fact[] =>
+  files()
+    .filter((f) => f.rung === rung)
+    .flatMap(({ file }) => emitted(file).facts);
+
 describe('fixtures/ladder through the real grammar and extract', () => {
   it('extracts every Python file of rungs 01-09 ok, the syntax error included', () => {
     expect(extracted.map((e) => `${e.rung}/${e.path} ${e.outcome.kind}`)).toEqual(
@@ -174,13 +181,12 @@ describe('fixtures/ladder through the real grammar and extract', () => {
   });
 
   it('emits every MODULE line and every DEFINES from a MODULE of a .py file (recall at this tier)', () => {
-    const all = files().flatMap(({ file }) => emitted(file).facts);
     const wanted = RUNGS.flatMap((rung) =>
       factsOf(rung)
         .filter(moduleTier)
         .map((w) => ({ rung, w })),
     );
-    const missing = wanted.filter(({ w }) => !all.some((g) => holds([w], g)));
+    const missing = wanted.filter(({ rung, w }) => !ofRung(rung).some((g) => holds([w], g)));
     expect(missing.map(({ rung, w }) => `${rung}: ${w.head} ${w.key}`)).toEqual([]);
     // 12 .py files in rungs 01-09: one MODULE line and one DEFINES from it each.
     expect(wanted.length).toBe(24);
@@ -211,6 +217,18 @@ describe('fixtures/ladder through the real grammar and extract', () => {
       .filter(([, d]) => d.state === 'emits')
       .map(([key]) => key);
     expect([...shown].toSorted()).toEqual(marked.toSorted());
+  });
+
+  it('counts columns in UTF-16 code units on a real tree (I23, r2)', async () => {
+    // Line 2 is `x = "` (5), two emoji (2 code units each, 4 UTF-8 bytes each), `"` (1): column 10.
+    const outcome = await parseAndExtract('emoji.py', 'y = 1\nx = "\u{1F600}\u{1F600}"');
+    if (outcome.kind !== 'ok') throw new Error(`expected ok, got ${outcome.kind}`);
+    expect(outcome.file.nodes[0]?.range).toEqual({
+      startRow: 0,
+      startColumn: 0,
+      endRow: 1,
+      endColumn: 10,
+    });
   });
 
   it('is deterministic over real trees: a second parse gives byte-identical output (I3)', () => {

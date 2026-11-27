@@ -33,6 +33,9 @@ describe('pythonAdapter', () => {
     ['pkg/x__init__.py', 'pkg.x__init__'],
     ['pkg/__init___.py', 'pkg.__init___'],
     ['tool.py.py', 'tool.py'],
+    ['pkg.py/mod.py', 'pkg.py.mod'],
+    ['a.pyx', 'a.pyx'],
+    ['py.py', 'py'],
   ])('names %s %s', (path, name) => {
     if (!isWorkspacePath(path)) throw new Error(`not a workspace path: ${path}`);
     expect(pythonAdapter.moduleName(path)).toBe(name);

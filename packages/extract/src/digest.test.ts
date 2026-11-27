@@ -74,6 +74,24 @@ describe('elementDigest', () => {
     expect(elementDigest(rung01())).toBe('fnv1a32:ac9b85e9');
   });
 
+  it('matches the oracle with a ref site, a list and mixed-case keys (r2)', () => {
+    // Lines N:, R:, S: in that order; keys by code unit, so "Zed" before "alpha"; lists keep order.
+    const nodes = [moduleNode({ properties: { alpha: 'a', Zed: ['b', 'a'], name: 'main' } })];
+    const refSites: RefSite[] = [
+      site('s1', {
+        nodeId: 'file:main.py:IMPORT:$root:0',
+        kind: 'import',
+        position: { row: 0, column: 5 },
+        nameParts: ['os', 'path'],
+        importBinding: { module: 'os.path', relativeDepth: 0, imported: 'join', local: 'j' },
+      }),
+    ];
+    // R: after S: would give fnv1a32:3516bbcf.
+    expect(elementDigest({ ...NONE, nodes, symbols: [moduleSymbol()], refSites })).toBe(
+      'fnv1a32:fba52f35',
+    );
+  });
+
   it('hashes UTF-16 code units, not UTF-8 bytes', () => {
     const symbols = [{ ...moduleSymbol({ fqn: '`a.py`/' }), properties: { doc: 'café 😀' } }];
     // UTF-8 bytes would give fnv1a32:eda50417.
@@ -116,6 +134,12 @@ describe('elementDigest', () => {
   });
 });
 
+const exportedFn = (name: string): NodeElement =>
+  exported(`file:main.py:METHOD:${name}`, {
+    exported: true,
+    kind: 'function',
+    signature: `${name}()`,
+  });
 const run = (cls: string, signature: string): NodeElement =>
   exported(`file:main.py:METHOD:${cls}.run`, { exported: true, kind: 'method', signature });
 
@@ -171,6 +195,12 @@ describe('interfaceHash', () => {
     expect(interfaceHash([redoc])).toBe(h);
   });
 
+  it('sorts entries by code unit, not by locale (r2)', () => {
+    // [["file:main.py:METHOD:Zeta","function","Zeta()"],["file:main.py:METHOD:alpha","function","alpha()"]]
+    const want = 'sha256:303ad47a87032dd589c0ccda84007a46caf34f252ee5e0a65ea8c17d7dc2c79e';
+    expect(interfaceHash([exportedFn('alpha'), exportedFn('Zeta')])).toBe(want);
+  });
+
   it('keeps two classes with same-named methods apart', () => {
     const before = [run('A', 'run(self)'), run('B', 'run(self, x)')];
     const swapped = [run('A', 'run(self, x)'), run('B', 'run(self)')];
@@ -200,7 +230,7 @@ describe('sealExtractedFiles', () => {
   it('maps each path to its file in path order, ref sites in (path, site id) order', () => {
     const b = fileAt('b.py', ['s2', 's1']);
     const upper = fileAt('B.py', ['z']);
-    const a = fileAt('a.py', ['r2', 'r10', 'r1']);
+    const a = fileAt('a.py', ['r2', 'r10', 'a1', 'r1', 'Z1']);
     const nested = fileAt('a/x.py', ['q']);
     const outcome = sealExtractedFiles([b, a, upper, nested]);
     if (outcome.kind !== 'ok') throw new Error(`expected ok, got ${outcome.kind}`);
@@ -209,6 +239,8 @@ describe('sealExtractedFiles', () => {
     expect(outcome.set.files.get(wsPath('a.py'))).toBe(a);
     expect(outcome.set.refSites.map((s) => `${s.filePath} ${s.id}`)).toEqual([
       'B.py z',
+      'a.py Z1',
+      'a.py a1',
       'a.py r1',
       'a.py r10',
       'a.py r2',
@@ -221,6 +253,9 @@ describe('sealExtractedFiles', () => {
   it('fails naming each repeated path once, sorted', () => {
     const files = ['c.py', 'b.py', 'a.py', 'b.py', 'c.py', 'b.py'].map((p) => fileAt(p));
     expect(sealExtractedFiles(files)).toEqual({ kind: 'failed', duplicatePaths: ['b.py', 'c.py'] });
+    // r2: by code unit, 'B.py' before 'a.py'.
+    const mixed = ['a.py', 'B.py', 'a.py', 'B.py'].map((p) => fileAt(p));
+    expect(sealExtractedFiles(mixed)).toEqual({ kind: 'failed', duplicatePaths: ['B.py', 'a.py'] });
   });
 
   it('seals nothing into an empty set, and takes any iterable', () => {
