@@ -659,11 +659,16 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
     const given = setUp({ root, runtimeDir });
     void given.session.openGraph();
     await given.watching(1);
+    // Round two (review 4): an empty folder is passed on, for the parse service to refuse.
+    const blank = setUp({ root, runtimeDir: '' });
+    void blank.session.openGraph();
+    await blank.watching(1);
     const none = setUp({ root });
     void none.session.openGraph();
     await none.watching(1);
     const consumers = { inspect: false, store: 'memory', vscode: true };
     expect(given.engines).toEqual([{ version: '9.8.7', consumers, runtimeDir }]);
+    expect(blank.engines).toEqual([{ version: '9.8.7', consumers, runtimeDir: '' }]);
     expect(none.engines.map((config) => Object.hasOwn(config, 'runtimeDir'))).toEqual([false]);
   });
 

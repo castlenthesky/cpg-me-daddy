@@ -4,15 +4,18 @@
 //
 // web-tree-sitter keeps its first SUCCESSFUL init for the rest of the process, and a failed one leaves
 // nothing behind. Vitest runs each test file in a process of its own, so the runtime is cold when this
-// file starts. Every case that needs a failed init runs before the one case that lets init succeed,
-// which is last. Add no case after it.
+// file starts. Every case that needs a failed init runs before the one case that lets init succeed; only
+// a case that needs a warm runtime may come after it. The suite never shuffles (round two, review 6).
 
+import type * as Fs from 'node:fs';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isWorkspacePath, type WorkspacePath } from '@cpg/model';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ParserRuntime } from './abi';
 import type { GrammarSource, ParseService } from './contract';
 import { BUILTIN_LANGUAGES, createLanguageRegistry } from './registry';
@@ -22,6 +25,8 @@ const RUNTIME = 'web-tree-sitter.wasm';
 /** The runtime beside web-tree-sitter's module: what a missing runtimeDir would fall back to. */
 const NODE_MODULES_RUNTIME = require.resolve(`web-tree-sitter/${RUNTIME}`);
 const WASM_DIR = join(dirname(require.resolve('@vscode/tree-sitter-wasm/package.json')), 'wasm');
+/** node:fs as web-tree-sitter requires it: it reads its runtime with readFileSync (0.27.0). */
+const cjsFs: typeof Fs = createRequire(__filename)('node:fs');
 const source: GrammarSource = {
   describe: () => `test source ${WASM_DIR}`,
   async load(ref) {
@@ -44,6 +49,7 @@ afterAll(() => {
 });
 const services: ParseService[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const service of services.splice(0)) service.dispose();
 });
 
@@ -70,7 +76,7 @@ function folder(name: string, wasm?: string): string {
 }
 const unavailable = (message: string) => [{ code: 'runtime-unavailable', message }];
 
-describe('ParseServiceOptions.runtimeDir (stop-list 192)', () => {
+describe('ParseServiceOptions.runtimeDir (stop-list 192)', { shuffle: false }, () => {
   it('is ignored when a runtime is given: that runtime is the one started', async () => {
     let started = 0;
     const runtime: ParserRuntime = {
@@ -80,7 +86,8 @@ describe('ParseServiceOptions.runtimeDir (stop-list 192)', () => {
       },
       abiBindings: () => ({ minCompatible: 13, languageVersion: 15 }),
     };
-    const errors = await make(folder('ignored'), runtime).ensureReady(['python']);
+    // Round two (review 2): a folder the default runtime would refuse.
+    const errors = await make('ignored', runtime).ensureReady(['python']);
     expect([started, errors]).toEqual([
       1,
       unavailable(expect.stringContaining('the stand-in runtime')),
@@ -126,7 +133,8 @@ describe('ParseServiceOptions.runtimeDir (stop-list 192)', () => {
     expect(errors).toEqual(unavailable(expect.stringContaining(join(junk, RUNTIME))));
   });
 
-  // Last: the first init that succeeds holds for the rest of this process.
+  // The first init that succeeds holds for the rest of this process. Round two (review 3): the copy in
+  // the folder is what web-tree-sitter reads, and node_modules' copy is never read.
   it('the same service parses once the file is there: a failed init is not memoised (I15)', async () => {
     const later = folder('later');
     const service = make(later);
@@ -134,11 +142,31 @@ describe('ParseServiceOptions.runtimeDir (stop-list 192)', () => {
       unavailable(expect.stringContaining(join(later, RUNTIME))),
     );
     copyFileSync(NODE_MODULES_RUNTIME, join(later, RUNTIME));
+    const reads = vi.spyOn(cjsFs, 'readFileSync');
     const parsed = await service.parse({ key: wp('a.py'), text: 'x = 1\n' });
+    // web-tree-sitter's ESM build reads its own folder through a file: URL.
+    const read = reads.mock.calls.map(([file]) =>
+      file instanceof URL ? fileURLToPath(file) : String(file),
+    );
     expect(parsed.ok && [parsed.handle.rootType, parsed.handle.hasError]).toEqual([
       'module',
       false,
     ]);
+    expect([read.includes(join(later, RUNTIME)), read.includes(NODE_MODULES_RUNTIME)]).toEqual([
+      true,
+      false,
+    ]);
     if (parsed.ok) parsed.handle.release();
+  });
+
+  // Round two (review 1): with the runtime warm, Parser.init would resolve at once, so a relative folder
+  // is refused before it.
+  it('after a successful init, a relative or empty folder is still refused', async () => {
+    const relative = await make('rel').ensureReady(['python']);
+    const empty = await make('').ensureReady(['python']);
+    expect([relative, empty]).toEqual([
+      unavailable(expect.stringContaining('must be an absolute path')),
+      unavailable(expect.stringContaining('must be an absolute path')),
+    ]);
   });
 });

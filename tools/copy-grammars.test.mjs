@@ -16,11 +16,11 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
+import Module, { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   copyGrammars,
   DEFAULT_OUTDIR,
@@ -117,6 +117,24 @@ describe('copyGrammars', () => {
       sameAsPackage(join(outdir, 'tree-sitter-python.wasm')),
       existsSync(join(elsewhere, RELATIVE_CALL)),
     ]).toEqual([true, false]);
+  });
+
+  // Round two (review 5): from @cpg/parse, whose web-tree-sitter's JS loads the runtime. This repository
+  // hoists one web-tree-sitter, so the copied bytes cannot tell that anchor from the root's.
+  it("resolves the runtime from @cpg/parse's own dependencies, not the repository root's", async () => {
+    // oxlint-disable-next-line no-underscore-dangle -- the resolver every require.resolve goes through
+    const resolving = vi.spyOn(Module, '_resolveFilename');
+    let calls = [];
+    try {
+      await copyGrammars({ outdir: join(dir, 'anchored') });
+      calls = [...resolving.mock.calls];
+    } finally {
+      resolving.mockRestore();
+    }
+    const parents = calls
+      .filter(([request]) => request === 'web-tree-sitter/web-tree-sitter.wasm')
+      .map(([, parent]) => parent?.filename);
+    expect(parents).toEqual([PARSE_JSON]);
   });
 
   // Post-implementation (sabotage): the folder is made, but the grammar cannot be written into it.

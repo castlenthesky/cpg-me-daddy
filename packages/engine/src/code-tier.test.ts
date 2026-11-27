@@ -365,13 +365,17 @@ describe('createCodeTier (decisions 96, 100)', () => {
   // Stop-list 192: the folder of web-tree-sitter's own runtime reaches the one ParseService.
   it('hands createParseService the runtimeDir it was given, and no runtimeDir without one', async () => {
     const given = rig({ runtimeDir: '/install/apps/vscode/dist/grammars' });
+    // Round two (review 4): an empty folder is given, so the parse service can refuse it.
+    const blank = rig({ runtimeDir: '' });
     const none = rig();
     await given.tier.run(walked('a.py', utf8('a')), utf8('a'));
+    await blank.tier.run(walked('a.py', utf8('a')), utf8('a'));
     await none.tier.run(walked('a.py', utf8('a')), utf8('a'));
     expect([
       given.created.map((options) => options.runtimeDir),
+      blank.created.map((options) => options.runtimeDir),
       none.created.map((options) => Object.hasOwn(options, 'runtimeDir')),
-    ]).toEqual([['/install/apps/vscode/dist/grammars'], [false]]);
+    ]).toEqual([['/install/apps/vscode/dist/grammars'], [''], [false]]);
   });
 
   it('hands PARSE the decoded text, never a path to read (C-PARSE I19), and extract the walk revision', async () => {

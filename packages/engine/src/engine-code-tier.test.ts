@@ -454,10 +454,16 @@ describe('EngineConfig.runtimeDir (stop-list 192)', () => {
     const config = { version: '0', consumers: CONSUMERS, runtimeDir };
     await indexWith(createEngine(config, { ...deps, memoryStore: recorded().sink }), root);
     await indexWith(engineOn(recorded().sink, deps), root);
+    // Round two (review 4): an empty folder is passed on, for the parse service to refuse.
+    const blank = { ...config, runtimeDir: '' };
+    await indexWith(createEngine(blank, { ...deps, memoryStore: recorded().sink }), root);
     expect([
-      made[0]?.runtimeDir,
+      made.map((options) => options.runtimeDir),
       made.map((options) => Object.hasOwn(options, 'runtimeDir')),
-    ]).toEqual([runtimeDir, [true, false]]);
+    ]).toEqual([
+      [runtimeDir, undefined, ''],
+      [true, false, true],
+    ]);
   });
 });
 
