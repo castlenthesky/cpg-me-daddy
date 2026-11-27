@@ -96,22 +96,33 @@ export interface ParentTable {
 }
 
 /**
- * SEAT (sprint 33 RED, BMO-100): today's two rows only (`HAS_ENTRY`, then the `DEFINES` fallback);
- * BMO-100's table lands with the implementation.
+ * Default parent table (BMO-100, controller decision 103): filesystem and code-tier containment in
+ * `hierarchy` (`SOURCE_FILE` and `IN_SCOPE` point from child to parent, so their parent end is
+ * `'target'`), then symbol-reference anchors in `fallback`. First matching row wins in this order.
+ * Every fallback edge points at a SYMBOL (`packages/model/src/schema/edges.ts`), the one node type no
+ * hierarchy row places, so each fallback's parent end is its source: the declaration, IMPORT, CALL
+ * or TYPE_DECL that the hierarchy rows already placed.
  */
 export const DEFAULT_PARENT_TABLE: ParentTable = {
-  hierarchy: [{ type: 'HAS_ENTRY', parent: 'source' }],
-  fallback: [{ type: 'DEFINES', parent: 'source' }],
+  hierarchy: [
+    { type: 'HAS_ENTRY', parent: 'source' },
+    { type: 'DECLARES', parent: 'source' },
+    { type: 'HAS_PARAM', parent: 'source' },
+    { type: 'SOURCE_FILE', parent: 'target' },
+    { type: 'IN_SCOPE', parent: 'target' },
+  ],
+  fallback: [
+    { type: 'DEFINES', parent: 'source' },
+    { type: 'IMPORTS', parent: 'source' },
+    { type: 'CALLS', parent: 'source' },
+    { type: 'INHERITS_FROM', parent: 'source' },
+  ],
 };
-
-// SEAT (sprint 33 RED): the layout still reads these two instead of a table.
-const HIERARCHY_EDGE_TYPE = 'HAS_ENTRY';
-const FALLBACK_PARENT_EDGE_TYPES: ReadonlySet<string> = new Set(['DEFINES']);
 
 export interface LayoutOptions {
   /** Required: the only source of jitter. The same payload and seed give byte-identical buffers. */
   readonly seed: number;
-  /** The rows that find each point's parent; default `DEFAULT_PARENT_TABLE`. SEAT: ignored at RED. */
+  /** The rows that find each point's parent; default `DEFAULT_PARENT_TABLE`. */
   readonly parentTable?: ParentTable;
 }
 
@@ -163,30 +174,33 @@ export function createMulberry32(seed: number): () => number {
   };
 }
 
+/** The parent and the child `rule` reads off `edge` (the caller has matched `edge.type`). */
+export function edgeEnds(
+  edge: GraphEdge,
+  rule: ParentRule,
+): readonly [parent: string, child: string] {
+  return rule.parent === 'source' ? [edge.source, edge.target] : [edge.target, edge.source];
+}
+
 /**
- * Derives a tree from the payload's hierarchy edges (edges whose `type`
- * matches `hierarchyEdgeType`, default `'HAS_ENTRY'`) for seeding the radial
- * layout below. A node's *first* incoming hierarchy edge (in `payload.edges`
- * order) determines its position in the tree; a node with no incoming
- * hierarchy edge is a root. Multiple roots are placed as children of a
- * synthetic centre node so the single-root case (a file tree) is laid out
- * without a synthetic point.
+ * Derives a tree from `table.hierarchy` (in row order, then `payload.edges`
+ * order per row) for seeding the radial layout below. Each rule names which
+ * end of a matching edge is the parent and adopts the other end when it does
+ * not yet have a parent; a node with no parent after both passes is a root.
+ * Multiple roots are placed as children of a synthetic centre node so the
+ * single-root case is laid out without a synthetic point.
  *
- * A second pass then adopts still-parentless nodes via
- * `fallbackParentEdgeTypes` (default `'DEFINES'`). That exists for `SYMBOL`
+ * A second pass then adopts still-parentless nodes via `table.fallback` (in
+ * row order, then `payload.edges` order per row). That exists for `SYMBOL`
  * nodes, which by design have no hierarchy edge — no file owns them, because a
  * file that owned one could sweep it on re-parse and take other files' edges
  * with it. Without the adoption every symbol would be a root, which would force
  * the synthetic-centre path and render a 20px grey dot with no tooltip at the
- * middle of the graph. With it, a symbol lands beside the declaration that
- * defines it, so a cross-file reference reads as a chord between two file
- * clusters — which is the entire point of drawing them.
+ * middle of the graph. With it, a symbol lands beside the first anchored node
+ * that defines or references it, so a cross-file reference reads as a chord
+ * between two file clusters — which is the entire point of drawing them.
  */
-function buildHierarchy(
-  payload: GraphPayload,
-  hierarchyEdgeType: string,
-  fallbackParentEdgeTypes: ReadonlySet<string>,
-): Hierarchy {
+function buildHierarchy(payload: GraphPayload, table: ParentTable): Hierarchy {
   const nodesById = new Map(payload.nodes.map((node) => [node.id, node]));
   const childrenOf = new Map<string, string[]>();
   const hasParent = new Set<string>();
@@ -203,22 +217,28 @@ function buildHierarchy(
     }
   };
 
-  for (const edge of payload.edges) {
-    if (edge.type !== hierarchyEdgeType) continue;
-    if (!nodesById.has(edge.source) || !nodesById.has(edge.target)) continue;
-    if (hasParent.has(edge.target)) continue; // first parent wins
-    adopt(edge.source, edge.target);
+  for (const rule of table.hierarchy) {
+    for (const edge of payload.edges) {
+      if (edge.type !== rule.type) continue;
+      const [parentId, childId] = edgeEnds(edge, rule);
+      if (!nodesById.has(parentId) || !nodesById.has(childId)) continue;
+      if (hasParent.has(childId)) continue; // first parent wins
+      adopt(parentId, childId);
+    }
   }
 
-  for (const edge of payload.edges) {
-    if (!edge.type || !fallbackParentEdgeTypes.has(edge.type)) continue;
-    if (hasParent.has(edge.target)) continue; // a real hierarchy parent always wins
-    if (!nodesById.has(edge.source) || !nodesById.has(edge.target)) continue;
-    // The anchor must itself be placed, or a chain of fallback adoptions
-    // could hang off a node that never gets a position.
-    if (!hasParent.has(edge.source)) continue;
-    if (wouldCycle(edge.source, edge.target, parentOf)) continue;
-    adopt(edge.source, edge.target);
+  for (const rule of table.fallback) {
+    for (const edge of payload.edges) {
+      if (edge.type !== rule.type) continue;
+      const [parentId, childId] = edgeEnds(edge, rule);
+      if (hasParent.has(childId)) continue; // a real hierarchy parent or earlier row always wins
+      if (!nodesById.has(parentId) || !nodesById.has(childId)) continue;
+      // The anchor must itself be placed, or a chain of fallback adoptions
+      // could hang off a node that never gets a position.
+      if (!hasParent.has(parentId)) continue;
+      if (wouldCycle(parentId, childId, parentOf)) continue;
+      adopt(parentId, childId);
+    }
   }
 
   let roots = payload.nodes.map((node) => node.id).filter((id) => !hasParent.has(id));
@@ -353,15 +373,13 @@ function placeNode(
  * Lays out a `GraphPayload` for cosmos.gl: a seeded radial position per node
  * (see the constants and passes above), a colour per node from `node-types.ts`,
  * and a link (point-index pair) for every edge in the payload — not just the
- * hierarchy edges used to seed the layout. For a payload with a single root
- * and only hierarchy edges (`hierarchyEdgeType` all `'HAS_ENTRY'`) this
- * reproduces the original single-tree layout.
+ * `parentTable.hierarchy` edges used to seed the layout. For a payload with a
+ * single root and only hierarchy-row edges this reproduces the original
+ * single-tree layout.
  */
 export function layoutPayload(payload: GraphPayload, options: LayoutOptions): LayoutResult {
-  const { seed } = options;
-  const hierarchyEdgeType = HIERARCHY_EDGE_TYPE;
-  const fallbackParentEdgeTypes = FALLBACK_PARENT_EDGE_TYPES;
-  const hierarchy = buildHierarchy(payload, hierarchyEdgeType, fallbackParentEdgeTypes);
+  const { seed, parentTable = DEFAULT_PARENT_TABLE } = options;
+  const hierarchy = buildHierarchy(payload, parentTable);
 
   const weights = new Map<string, number>();
   const countAtDepth: number[] = [];
@@ -383,7 +401,8 @@ export function layoutPayload(payload: GraphPayload, options: LayoutOptions): La
   placeNode(hierarchy.rootId, undefined, 0, 0, Math.PI * 2, undefined, state);
 
   const indexById = new Map(state.ids.map((id, index) => [id, index]));
-  unionNonHierarchyLinks(payload.edges, hierarchyEdgeType, indexById, state.links);
+  const hierarchyEdgeTypes = new Set(parentTable.hierarchy.map((rule) => rule.type));
+  unionNonHierarchyLinks(payload.edges, hierarchyEdgeTypes, indexById, state.links);
 
   const linkWidths = buildLinkWidths(state.links, state.sizes);
 
@@ -419,12 +438,13 @@ function buildLinkWidths(links: readonly number[], sizes: readonly number[]): Fl
 
 function unionNonHierarchyLinks(
   edges: readonly GraphEdge[],
-  hierarchyEdgeType: string,
+  hierarchyEdgeTypes: ReadonlySet<string>,
   indexById: ReadonlyMap<string, number>,
   links: number[],
 ): void {
   for (const edge of edges) {
-    if (edge.type === hierarchyEdgeType) continue; // already carried by the tree walk above
+    // A hierarchy-row edge is already carried by the tree walk above, or placed nothing.
+    if (edge.type !== undefined && hierarchyEdgeTypes.has(edge.type)) continue;
     const sourceIndex = indexById.get(edge.source);
     const targetIndex = indexById.get(edge.target);
     if (sourceIndex === undefined || targetIndex === undefined) continue;
