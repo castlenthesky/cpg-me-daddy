@@ -63,7 +63,7 @@ const GREET_SYM: SymbolElement = {
   fqn: GREET_FQN,
   origin: 'external',
   language: 'python',
-  properties: { kind: 'function' },
+  properties: { kind: 'function', aliases: ['hello'] },
 };
 const DECLARES: EdgeElement = {
   type: 'DECLARES',
@@ -75,7 +75,7 @@ const DEFINES: EdgeElement = {
   type: 'DEFINES',
   from: { by: 'id', label: 'METHOD', key: GREET_ID },
   to: { by: 'fqn', label: 'SYMBOL', key: GREET_FQN },
-  properties: {},
+  properties: { roles: ['definition'] },
 };
 const RESOLVED: EdgeElement = {
   type: 'IMPORTS',
@@ -146,12 +146,17 @@ describe('toWriteOp', () => {
           ...owned(OLD_REV, '4:0-4:22'),
         }),
         nodeRow('SYMBOL', MOD_FQN, { kind: 'module', fqn: MOD_FQN, language: 'python' }),
-        nodeRow('SYMBOL', GREET_FQN, { kind: 'function', fqn: GREET_FQN, language: 'python' }),
+        nodeRow('SYMBOL', GREET_FQN, {
+          kind: 'function',
+          aliases: ['hello'],
+          fqn: GREET_FQN,
+          language: 'python',
+        }),
         nodeRow('FILE', 'pkg/main.py', { interface_hash: 'c3'.repeat(32), loc: 5 }),
       ],
       edges: [
         edgeRow('DECLARES', 'MODULE', MOD_ID, 'METHOD', GREET_ID, {}),
-        edgeRow('DEFINES', 'METHOD', GREET_ID, 'SYMBOL', GREET_FQN, {}),
+        edgeRow('DEFINES', 'METHOD', GREET_ID, 'SYMBOL', GREET_FQN, { roles: ['definition'] }),
         edgeRow('IMPORTS', 'IMPORT', IMPORT_ID, 'SYMBOL', UTIL_FQN, RESOLVED_PROPS),
       ],
     });
@@ -209,6 +214,9 @@ describe('toWriteOp', () => {
     const fileRow = op.nodes.find((row) => row.label === 'FILE');
     const symbolRow = op.nodes.find((row) => row.key === GREET_FQN);
     const resolvedRow = op.edges.find((edge) => edge.type === 'IMPORTS');
+    const definesRow = op.edges.find((edge) => edge.type === 'DEFINES');
+    const inSymbol = file.symbols.find((s) => s.fqn === GREET_FQN)?.properties;
+    const inDefines = file.edges.find((e) => e.type === 'DEFINES')?.properties;
     const shared = [
       importRow?.properties === file.nodes.find((n) => n.id === IMPORT_ID)?.properties,
       importRow?.properties['imported_names'] === IMPORT.properties['imported_names'],
@@ -216,9 +224,16 @@ describe('toWriteOp', () => {
         file.nodes.find((n) => n.id === IMPORT_ID)?.properties['imported_names'],
       symbolRow?.properties === file.symbols.find((s) => s.fqn === GREET_FQN)?.properties,
       resolvedRow?.properties === resolved.find((e) => e.type === 'IMPORTS')?.properties,
+      symbolRow?.properties['aliases'] === inSymbol?.['aliases'],
+      definesRow?.properties === inDefines,
+      definesRow?.properties['roles'] === inDefines?.['roles'],
       fileRow === undefined,
     ];
-    expect(shared).toEqual([false, false, false, false, false, false]);
+    expect(shared).toEqual(Array(9).fill(false));
+    expect([symbolRow?.properties['aliases'], definesRow?.properties['roles']]).toEqual([
+      ['hello'],
+      ['definition'],
+    ]);
     expect(importRow?.properties['imported_names']).toEqual(['path', 'sep']);
   });
 

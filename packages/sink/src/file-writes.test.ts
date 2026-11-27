@@ -2,11 +2,12 @@
 // INV-20, DQ-01, C-MODEL I-15 and controller decisions 97, 98 and 104 (the readings are named in
 // file-writes.ts). Rows are written by hand the way toWriteOp writes them.
 
-import type { EdgeType, GraphNode, NodeLabel, WorkspacePath } from '@cpg/model';
+import type { EdgeType, GraphEdge, GraphNode, NodeLabel, WorkspacePath } from '@cpg/model';
 import { isWorkspacePath } from '@cpg/model';
 import type { EdgeRow, NodeRow, Properties, WriteOp } from '@cpg/store';
 import { storeErrorCode, toWriteOp } from '@cpg/store';
 import { describe, expect, it } from 'vitest';
+import { makeDelta } from './delta';
 import type { MemoryStore } from './memory-store';
 import { createMemoryStore } from './memory-store';
 
@@ -101,6 +102,7 @@ const S_G = '`a.py`/g().';
 const B_MOD = 'file:pkg/b.py:MODULE:$root';
 const B_CALL = 'file:pkg/b.py:CALL:$root:0';
 const S_B = '`pkg/b.py`/';
+const S_H = '`pkg/b.py`/h().';
 const MOD = (key: string): readonly [NodeLabel, string] => ['MODULE', key];
 const METHOD = (key: string): readonly [NodeLabel, string] => ['METHOD', key];
 const SYM = (key: string): readonly [NodeLabel, string] => ['SYMBOL', key];
@@ -149,13 +151,23 @@ const W = 'WRITE_SHAPE_VIOLATION';
 const O = 'OWNERSHIP_VIOLATION';
 const aOp = (nodes: readonly NodeRow[], edges: readonly EdgeRow[] = A_EDGES): WriteOp =>
   replace('a.py', 2, REV_A2, nodes, edges);
-const ROWS2 = aRows(REV_A2);
+// Each identity and FILE value differs from the seeded one, so a merge that touched the graph
+// before refusing would show.
+const CODE2 = [
+  code('MODULE', A_MOD, 'a.py', REV_A2, 'a'),
+  code('METHOD', A_F, 'a.py', REV_A2, 'f'),
+  sym(S_A, 'namespace'),
+  sym(S_F, 'method'),
+];
+const ROWS2 = [...CODE2, codeHalf('a.py', { interface_hash: 'i9', loc: 30 })];
+const NO_F = ROWS2.filter((row) => row.key !== A_F);
 const plus = (...more: readonly NodeRow[]): WriteOp => aOp([...ROWS2, ...more]);
 const plusEdge = (edge: EdgeRow): WriteOp => aOp(ROWS2, [...A_EDGES, edge]);
 const ODD = code('METHOD', 'file:a.py:METHOD:z', 'a.py', REV_A2, 'z');
 const oddWith = (over: Partial<NodeRow>): WriteOp => plus({ ...ODD, ...over });
-const fileHalf = (properties: Properties): WriteOp =>
-  aOp([...aCode(REV_A2), codeHalf('a.py', properties)]);
+const fileHalf = (properties: Properties): WriteOp => aOp([...CODE2, codeHalf('a.py', properties)]);
+/** An op naming a path that is not a WorkspacePath. */
+const forged = (op: WriteOp, file: string): WriteOp => Object.assign(structuredClone(op), { file });
 /** A row whose label is outside the schema; `Object.assign` keeps the NodeRow type. */
 const relabel = (row: NodeRow, label: string): NodeRow =>
   Object.assign(structuredClone(row), { label });
@@ -248,6 +260,8 @@ describe('MemoryStore replace-file', () => {
     expect(store.auditLog()).toEqual([
       { at: 7, scope: { kind: 'file', file: 'a.py' }, nodesDeleted: 0, calledBy: 'replace-file' },
     ]);
+    // The GraphSink half's seq is not the write seq (decision 98).
+    expect((await store.inspect()).highWaterSeq).toBe(-1);
   });
 
   it('needs an open store, and times the write on the clock', async () => {
@@ -304,19 +318,31 @@ describe('MemoryStore replace-file', () => {
   it('merges identity rows and the FILE code half without nulling a property (INV-11)', async () => {
     const store = await seeded();
     await store.write(
-      replace('pkg/b.py', 2, REV_A2, [
-        code('MODULE', B_MOD, 'pkg/b.py', REV_A2, 'b'),
-        { label: 'SYMBOL', key: S_F, properties: { fqn: S_F, kind: null, package: 'p1' } },
-        codeHalf('pkg/b.py', { interface_hash: null, loc: 4 }),
-      ]),
+      replace(
+        'pkg/b.py',
+        2,
+        REV_A2,
+        [
+          code('MODULE', B_MOD, 'pkg/b.py', REV_A2, 'b'),
+          {
+            label: 'SYMBOL',
+            key: S_F,
+            properties: { fqn: S_F, kind: null, language: undefined, package: 'p1' },
+          },
+          { label: 'SYMBOL', key: S_H, properties: { fqn: S_H, kind: null, language: undefined } },
+          codeHalf('pkg/b.py', { interface_hash: null, loc: 4 }),
+        ],
+        [e('DEFINES', MOD(B_MOD), SYM(S_H), { note: null, by: undefined })],
+      ),
     );
     const graph = await store.readAll();
-    expect(graph.nodes.find((n) => n.id === S_F)?.data).toEqual({
-      fqn: S_F,
-      language: 'python',
-      kind: 'function',
-      package: 'p1',
-    });
+    const data = (id: string): unknown => graph.nodes.find((n) => n.id === id)?.data;
+    expect([data(S_F), data(S_H)]).toStrictEqual([
+      { fqn: S_F, language: 'python', kind: 'function', package: 'p1' },
+      { fqn: S_H },
+    ]);
+    const defines = graph.edges.find((x) => x.target === S_H);
+    expect(defines).toStrictEqual({ source: B_MOD, target: S_H, type: 'DEFINES' });
     const b = await store.readFile(wp('pkg/b.py'));
     expect(b.nodes.find((n) => n.label === 'FILE')?.properties).toMatchObject({
       interface_hash: 'i2',
@@ -350,14 +376,21 @@ describe('MemoryStore replace-file', () => {
   it('starts version at 1 and needs no FILE row', async () => {
     const store = await opened();
     await store.write(TREE);
-    await store.write(
-      replace('pkg/b.py', 0, REV_B, [code('MODULE', B_MOD, 'pkg/b.py', REV_B, 'b')]),
+    const sourceFile = e('SOURCE_FILE', MOD(B_MOD), FILE('pkg/b.py'));
+    const op = replace(
+      'pkg/b.py',
+      0,
+      REV_B,
+      [code('MODULE', B_MOD, 'pkg/b.py', REV_B, 'b')],
+      [sourceFile],
     );
+    expect(await store.write(op)).toEqual(applied(1, 1, 0));
     const b = await store.readFile(wp('pkg/b.py'));
     expect(b.nodes.find((n) => n.label === 'FILE')?.properties).toMatchObject({
       status: 'ready',
       version: 1,
     });
+    expect(edgeLines(b.edges)).toEqual([`SOURCE_FILE ${B_MOD} -> pkg/b.py`]);
   });
 
   it('answers a write at or below the file seq with stale-seq and changes nothing (INV-13)', async () => {
@@ -396,6 +429,10 @@ describe('MemoryStore replace-file', () => {
     expect(await store.write(writeA(4, REV_A2))).toEqual(
       notApplied({ reason: 'stale-seq', current: 4 }),
     );
+    // The record still holds REV_A.
+    expect(await store.write(writeA(5))).toEqual(
+      notApplied({ reason: 'revision-unchanged', revision_id: REV_A }),
+    );
     expect((await store.write(writeA(6, REV_A2))).applied).toBe(true);
   });
 
@@ -433,7 +470,7 @@ describe('MemoryStore replace-file', () => {
   it('leaves the prior subgraph exactly as it was when a write is rejected (INV-20)', async () => {
     const store = await seeded();
     const before = await everything(store);
-    const torn = replace('a.py', 2, REV_A2, aRows(REV_A2), [
+    const torn = replace('a.py', 2, REV_A2, ROWS2, [
       ...A_EDGES,
       e('DEFINES', METHOD(A_F), SYM('`zz.py`/gone().')),
     ]);
@@ -446,11 +483,13 @@ describe('MemoryStore replace-file', () => {
   it('merges every edge on (source, type, target)', async () => {
     const store = await seeded();
     const edgesBefore = (await store.stats()).edgeCount;
-    await store.write(
-      replace('a.py', 2, REV_A2, aRows(REV_A2), [...A_EDGES, A_DECLARES, alias({ via: 'x' })]),
+    const twice = [...A_EDGES, A_DECLARES, alias({ via: 'x' })];
+    expect(await store.write(replace('a.py', 2, REV_A2, aRows(REV_A2), twice))).toEqual(
+      applied(5, 6, 2),
     );
-    await store.write(
-      replace('a.py', 3, REV_A, aRows(REV_A), [...A_EDGES, alias({ via: null, weight: 2 })]),
+    const again = [...A_EDGES, alias({ via: null, weight: 2 })];
+    expect(await store.write(replace('a.py', 3, REV_A, aRows(REV_A), again))).toEqual(
+      applied(5, 5, 2),
     );
     expect((await store.stats()).edgeCount).toBe(edgesBefore + 1);
     const aliasEdges = (await store.readAll()).edges.filter((x) => x.type === 'ALIAS_OF');
@@ -479,20 +518,86 @@ describe('MemoryStore replace-file', () => {
     expect(written?.properties['imported_names']).toEqual(['path']);
   });
 
-  it('deletes unknown-label nodes of the file but never a SYMBOL that carries a file', async () => {
+  it('deletes unknown-label nodes of the file, and no other label that carries a file', async () => {
     const store = await opened();
     await store.write(TREE);
-    const planted: GraphNode[] = [
-      { id: '`a.py`/odd().', type: 'SYMBOL', data: { fqn: '`a.py`/odd().', file: 'a.py' } },
-      { id: 'file:a.py:STMT:$root:0', type: 'STMT', data: { file: 'a.py', revision_id: REV_A } },
-    ];
-    await plant(store, planted);
-    expect(await store.write(writeA(1))).toMatchObject({ applied: true, nodesDeleted: 1 });
-    const ids = (await store.readAll()).nodes.map((n) => n.id);
-    expect([ids.includes('`a.py`/odd().'), ids.includes('file:a.py:STMT:$root:0')]).toEqual([
-      true,
-      false,
+    const kept = ['SYMBOL', 'TAG', 'COMMUNITY', 'DIRECTORY', 'FILE', 'META_DATA'];
+    const planted: GraphNode[] = kept.map((type) => ({
+      id: `x:${type}`,
+      type,
+      data: { file: 'a.py' },
+    }));
+    await plant(store, [
+      ...planted,
+      { id: 'file:a.py:STMT:$root:0', type: 'STMT', data: { file: 'a.py' } },
     ]);
+    expect(await store.write(writeA(1))).toMatchObject({ applied: true, nodesDeleted: 1 });
+    expect(await store.write(del('a.py', 2))).toMatchObject({ applied: true, nodesDeleted: 2 });
+    const ids = (await store.readAll()).nodes.map((n) => n.id);
+    expect(kept.filter((type) => !ids.includes(`x:${type}`))).toEqual([]);
+    expect(ids.includes('file:a.py:STMT:$root:0')).toBe(false);
+  });
+
+  it("removes every edge into the file's old nodes, wherever it starts (I-8)", async () => {
+    const store = await seeded();
+    const into: GraphEdge = { source: B_CALL, target: A_F, type: 'TARGETS' };
+    const targets = async (): Promise<unknown[]> =>
+      (await store.readAll()).edges.filter((x) => x.type === 'TARGETS');
+    await plant(store, [], [into]);
+    await store.write(writeA(2, REV_A2));
+    expect(await targets()).toEqual([]);
+    await plant(store, [], [into]);
+    await store.write(del('a.py', 3));
+    expect(await targets()).toEqual([]);
+  });
+
+  it('merges TAG rows on their name and keeps them past the file (identity)', async () => {
+    const store = await seeded();
+    const tag: NodeRow = { label: 'TAG', key: 'deprecated', properties: { name: 'deprecated' } };
+    const tagged = e('TAGGED_BY', SYM(S_F), ['TAG', 'deprecated']);
+    expect(
+      await store.write(replace('a.py', 2, REV_A2, [...aRows(REV_A2), tag], [...A_EDGES, tagged])),
+    ).toEqual(applied(6, 5, 2));
+    await store.write(del('a.py', 3));
+    expect(await store.nodeKeys('TAG')).toEqual(['deprecated']);
+    expect((await store.readAll()).edges).toContainEqual({
+      source: S_F,
+      target: 'deprecated',
+      type: 'TAGGED_BY',
+    });
+  });
+
+  it("escapes the file's path in its ids: a ':' path (makeNodeId)", async () => {
+    const store = await opened();
+    await store.write(mergeFiles([fsFile('a:b.py', REV_A)]));
+    const mod = 'file:a%3Ab.py:MODULE:$root';
+    const sourceFile = e('SOURCE_FILE', MOD(mod), FILE('a:b.py'));
+    const op = replace(
+      'a:b.py',
+      0,
+      REV_A,
+      [code('MODULE', mod, 'a:b.py', REV_A, 'a')],
+      [sourceFile],
+    );
+    expect(await store.write(op)).toEqual(applied(1, 1, 0));
+    expect(edgeLines((await store.readFile(wp('a:b.py'))).edges)).toEqual([
+      `SOURCE_FILE ${mod} -> a:b.py`,
+    ]);
+    const raw = replace('a:b.py', 1, REV_A2, [
+      code('MODULE', 'file:a:b.py:MODULE:$root', 'a:b.py', REV_A2, 'a'),
+    ]);
+    expect(await rejection(store.write(raw))).toBe('OWNERSHIP_VIOLATION');
+  });
+
+  it("keeps a file's seq past the removal and return of its FILE (INV-13)", async () => {
+    const store = await opened();
+    await store.write(TREE);
+    await store.write(writeA(5));
+    await store.write(mergeFiles([], ['a.py']));
+    await store.write(mergeFiles([fsFile('a.py', REV_A2)]));
+    expect(await store.write(writeA(3, REV_A2))).toEqual(
+      notApplied({ reason: 'stale-seq', current: 5 }),
+    );
   });
 
   it("refuses a row whose id another file's node holds (INV-12)", async () => {
@@ -518,12 +623,26 @@ describe('MemoryStore replace-file', () => {
     ['the root as its file', replace('.', 2, REV_A2, []), W],
     ['a delete-file at a negative seq', del('a.py', -1), W],
     ['a delete-file of the root', del('.', 2), W],
+    ['a delete-file of a path outside the workspace', forged(del('a.py', 2), '/a.py'), W],
+    ['an unsafe integer seq', replace('a.py', Number.MAX_SAFE_INTEGER + 1, REV_A2, ROWS2), W],
     ['a file with no FILE node', replace('zz.py', 0, REV_A2, []), W],
     ['an unknown label', plus(relabel(ODD, 'BOGUS')), W],
     ['two rows with one key', plus(code('METHOD', A_F, 'a.py', REV_A2, 'f2')), W],
+    ['two SYMBOL rows with one key', plus(sym(S_A, 'other')), W],
+    ['two FILE rows', plus(codeHalf('a.py', { loc: 1 })), W],
+    [
+      'a TAG whose name is not its key',
+      plus({ label: 'TAG', key: 't1', properties: { name: 't2' } }),
+      W,
+    ],
     ['a SYMBOL whose fqn is not its key', plus({ ...sym(S_F, 'x'), key: S_G }), W],
     ['an edge onto no node', plusEdge(e('DEFINES', METHOD(A_F), SYM('`zz.py`/no().'))), W],
     ['an endpoint of the wrong label', plusEdge(e('DECLARES', MOD(A_MOD), METHOD(A_MOD))), W],
+    [
+      'an edge onto a node this write deletes',
+      aOp(NO_F, [e('DECLARES', MOD(A_MOD), METHOD(A_F))]),
+      W,
+    ],
     ['an unknown edge type', plusEdge(BOGUS_EDGE), W],
     ['a row of another file', oddWith({ properties: { ...ODD.properties, file: 'pkg/b.py' } }), O],
     ["a key with another file's prefix", oddWith({ key: 'file:pkg/b.py:METHOD:z' }), O],
@@ -531,6 +650,7 @@ describe('MemoryStore replace-file', () => {
     ["another file's FILE row", plus(codeHalf('pkg/b.py', { loc: 9 })), O],
     ['a filesystem-owned FILE property', fileHalf({ revision_id: REV_A2 }), O],
     ["the FILE's name", fileHalf({ loc: 2, name: 'x.py' }), O],
+    ['a FILE property outside the schema', fileHalf({ bogus: 1 }), O],
     ['a DIRECTORY row', plus(dirRow('pkg')), O],
     ['a COMMUNITY row (INV-10)', plus({ label: 'COMMUNITY', key: 'c1', properties: {} }), O],
     ['a META_DATA row', plus({ label: 'META_DATA', key: 'meta', properties: {} }), O],
@@ -562,6 +682,7 @@ describe('MemoryStore delete-file', () => {
     );
     // b.py's 4 code edges and the 3 HAS_ENTRY remain.
     expect(await store.stats()).toMatchObject({ nodeCount: 9, edgeCount: 7 });
+    expect((await store.inspect()).highWaterSeq).toBe(-1);
     expect((await store.fileStates()).find((s) => s.file === 'a.py')).toEqual({
       file: 'a.py',
       seq: 9,
@@ -586,6 +707,12 @@ describe('MemoryStore delete-file', () => {
     expect(await store.write(del('a.py', 2))).toMatchObject({ applied: true, nodesDeleted: 2 });
     expect(await store.nodeKeys('MODULE')).toEqual([]);
     expect(await store.write(del('never.py', 0))).toMatchObject({ applied: true, nodesDeleted: 0 });
+    expect(store.auditLog().at(-1)).toEqual({
+      at: 7,
+      scope: { kind: 'file', file: 'never.py' },
+      nodesDeleted: 0,
+      calledBy: 'delete-file',
+    });
   });
 });
 
@@ -669,23 +796,24 @@ describe('toWriteOp into MemoryStore', () => {
   });
 });
 
-/** Adds nodes through the GraphSink half, the way a code delta would. */
-async function plant(store: MemoryStore, nodes: readonly GraphNode[]): Promise<void> {
-  const [first, ...rest] = nodes;
-  if (first === undefined) throw new Error('test bug: nothing to plant');
+/** Adds nodes and edges through the GraphSink half, the way a code delta would. */
+async function plant(
+  store: MemoryStore,
+  addedNodes: readonly GraphNode[],
+  addedEdges: readonly GraphEdge[] = [],
+): Promise<void> {
   const seq = (await store.inspect()).highWaterSeq + 1;
-  await store.onDelta(
-    {
-      seq,
-      file: wp('a.py'),
-      revision_id: REV_A,
-      producer: 'code',
-      addedNodes: [first, ...rest],
-      addedEdges: [],
-      removedNodeIds: [],
-    },
-    { seq, cause: 'live', files: ['a.py'] },
-  );
+  const delta = makeDelta({
+    seq,
+    file: wp('a.py'),
+    revision_id: REV_A,
+    producer: 'code',
+    addedNodes,
+    addedEdges,
+    removedNodeIds: [],
+  });
+  if (delta === undefined) throw new Error('test bug: nothing to plant');
+  await store.onDelta(delta, { seq, cause: 'live', files: ['a.py'] });
 }
 
 function deepFreeze(value: unknown): void {
