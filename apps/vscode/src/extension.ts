@@ -28,11 +28,19 @@ function toDiagnostic({ message, checkId }: VerificationDiagnostic): vscode.Diag
   return diagnostic;
 }
 
+/** The command that shows the log, and the button an error offers for it. */
+const SHOW_LOG = 'cpg.showLog';
+
 export function activate(context: vscode.ExtensionContext): void {
+  // Output > CPG. Timestamped; its level follows "Developer: Set Log Level..." (default info).
+  const log = vscode.window.createOutputChannel('CPG', { log: true });
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const uriOf = (path: WorkspacePath): vscode.Uri => vscode.Uri.file(join(root ?? '', path));
   const version = String(context.extension.packageJSON.version);
   const directory = pageDirectory();
+  log.info(
+    `activated: cpg ${version} in VS Code ${vscode.version}; workspace ${root ?? '(none)'}; page bundle ${directory}`,
+  );
 
   const statusBar = vscode.window.createStatusBarItem('cpg.verify', vscode.StatusBarAlignment.Left);
   statusBar.command = 'cpg.verify';
@@ -69,12 +77,17 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showWarningMessage(text);
     },
     showError: (text) => {
-      void vscode.window.showErrorMessage(text);
+      void vscode.window.showErrorMessage(text, 'Show Log').then((choice) => {
+        if (choice !== undefined) log.show(true);
+      });
     },
+    log,
   });
 
   // Never put the panel itself in subscriptions: VS Code restores it after a reload.
   context.subscriptions.push(
+    log,
+    vscode.commands.registerCommand(SHOW_LOG, () => log.show(true)),
     statusBar,
     diagnostics,
     session,

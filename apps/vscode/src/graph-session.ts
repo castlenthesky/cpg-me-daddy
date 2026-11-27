@@ -9,6 +9,7 @@ import type { FilesystemProbe, SourceOpener } from './contract';
 import { serializeError } from './errors';
 import { PanelGraphHost } from './graph-host';
 import { GraphPanel, type PanelSurface } from './graph-panel';
+import { asError, elapsed, silentLogger, type Logger } from './log';
 import { revealMessage } from './reveal-message';
 import { VerifyScheduler, type VerifySchedulerOptions } from './verify-scheduler';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace-config';
@@ -34,6 +35,11 @@ export interface GraphSessionOptions {
   readonly onReport: (report: VerificationReport) => void;
   readonly showWarning: (text: string) => void;
   readonly showError: (text: string) => void;
+  /**
+   * Where the session says what it is doing: the extension's "CPG" log channel. Every message shown to
+   * the human is also logged, an error with its stack. Silent when absent.
+   */
+  readonly log?: Logger;
 }
 
 interface Judge {
@@ -118,18 +124,25 @@ export class GraphSession {
   private disposed = false;
   /** From the first graph on. */
   private judge: Judge | undefined;
+  private readonly log: Logger;
 
   constructor(options: GraphSessionOptions) {
     this.options = options;
+    this.log = options.log ?? silentLogger;
     this.host = new PanelGraphHost({
       theme: options.theme,
       parse: parseWebviewMessage,
       opener: options.opener,
       onReveal: (outcome) => {
         const message = revealMessage(outcome);
-        if (message !== undefined) this.options.showWarning(message);
+        if (message === undefined) {
+          if (outcome.ok) this.log.debug(`opened ${outcome.filePath} (${outcome.target})`);
+        } else {
+          this.warn(message);
+        }
       },
       onChange: () => this.judge?.scheduler.changed(),
+      onFault: (fault) => this.log.warn(`protocol fault: ${fault.kind}`, fault),
     });
     this.panel = new GraphPanel({
       host: this.host,
@@ -143,6 +156,7 @@ export class GraphSession {
    * Resolves when the panel is shown and the watch has delivered its first graph (or ended).
    */
   async openGraph(): Promise<void> {
+    this.log.info('cpg.openGraph');
     const shown = this.options.root === undefined ? undefined : this.panel.show();
     await Promise.all([shown, this.watch()]);
   }
@@ -152,6 +166,7 @@ export class GraphSession {
    * does. Resolves when the panel has its HTML; the watch goes on.
    */
   async restorePanel(surface: PanelSurface): Promise<void> {
+    this.log.info('restoring the graph panel after a reload');
     await this.panel.restore(surface);
     void this.watch();
   }
@@ -164,12 +179,14 @@ export class GraphSession {
    * run threw, or the extension was deactivated (controller decisions 40, 72, 73).
    */
   async verify(): Promise<VerificationReport | undefined> {
+    this.log.info('cpg.verify');
     if (this.judge === undefined) await this.watch();
     return this.judge?.scheduler.now();
   }
 
   /** The editor's theme changed. */
   setTheme(theme: ThemeSnapshot): void {
+    this.log.debug(`theme: ${theme.kind}`);
     this.host.setTheme(theme);
   }
 
@@ -179,10 +196,24 @@ export class GraphSession {
    * can restore it after a reload.
    */
   dispose(): void {
+    this.log.info('deactivated: the watch stops');
     this.disposed = true;
     this.current?.stop.abort();
     this.judge?.scheduler.dispose();
     this.host.dispose();
+  }
+
+  /** A warning for the human, logged first. */
+  private warn(text: string): void {
+    this.log.warn(text);
+    this.options.showWarning(text);
+  }
+
+  /** An error for the human, logged first with the stack of what was thrown. */
+  private fail(text: string, thrown?: unknown): void {
+    if (thrown === undefined) this.log.error(text);
+    else this.log.error(text, asError(thrown));
+    this.options.showError(text);
   }
 
   private isCurrent(watch: Watch): boolean {
@@ -197,10 +228,13 @@ export class GraphSession {
     if (this.disposed) return Promise.resolve();
     const { root } = this.options;
     if (root === undefined) {
-      this.options.showError('CPG: open a folder first');
+      this.fail('CPG: open a folder first');
       return Promise.resolve();
     }
-    if (this.current?.live === true) return this.current.firstGraph;
+    if (this.current?.live === true) {
+      this.log.debug(`watch ${String(this.current.generation)} is live: nothing to start`);
+      return this.current.firstGraph;
+    }
 
     this.generation += 1;
     const watch: Watch = {
@@ -222,6 +256,7 @@ export class GraphSession {
     const previous = this.current;
     this.current = watch;
     previous?.stop.abort();
+    this.log.info(`watch ${String(watch.generation)}: starting in ${root}`);
     watch.ended = this.run(watch, root, previous);
     return watch.firstGraph;
   }
@@ -238,6 +273,11 @@ export class GraphSession {
       if (!this.isCurrent(watch)) return;
 
       const { config } = workspace;
+      this.log.info(
+        `watch ${String(watch.generation)}: store ${config.consumers.store}, debounce ${String(config.watch.trailingMs)}/${String(config.watch.ceilingMs)} ms`,
+      );
+      this.log.debug('configuration', config);
+      for (const warning of workspace.warnings) this.log.warn(`configuration: ${warning}`);
       const engine = this.options.createEngine({
         version: this.options.version,
         consumers: config.consumers,
@@ -246,6 +286,7 @@ export class GraphSession {
       failed = 'cannot open the graph store';
       const { host, port, graph } = config.store;
       session = await engine.connect({ host, port, graph }, { readOnly: false });
+      this.log.debug(`watch ${String(watch.generation)}: store connected`);
       if (!this.isCurrent(watch)) return;
 
       const resources: WatchResources = { workspace, engine, session };
@@ -265,7 +306,12 @@ export class GraphSession {
       );
     } catch (thrown) {
       if (this.isCurrent(watch)) {
-        this.options.showError(`CPG: ${failed}: ${serializeError(thrown).message}`);
+        this.fail(`CPG: ${failed}: ${serializeError(thrown).message}`, thrown);
+      } else {
+        this.log.debug(
+          `watch ${String(watch.generation)} ended after it was replaced`,
+          asError(thrown),
+        );
       }
     } finally {
       watch.live = false;
@@ -276,33 +322,45 @@ export class GraphSession {
           await session.close();
         } catch (thrown) {
           if (!this.disposed) {
-            this.options.showError(
+            this.fail(
               `CPG: cannot close the graph store: ${serializeError(thrown).message}`,
+              thrown,
             );
           }
         }
       }
       watch.settleFirst?.();
+      this.log.info(`watch ${String(watch.generation)}: ended`);
     }
   }
 
   private onEvent(watch: Watch, resources: WatchResources, event: WatchEvent): void {
     if (!this.isCurrent(watch)) return;
     switch (event.kind) {
-      case 'ready':
-        watch.readyWarnings = event.report.warnings;
+      case 'ready': {
+        const { report } = event;
+        this.log.info(
+          `indexed ${String(report.files.length)} files: ${String(report.nodesWritten)} nodes, ${String(report.edgesWritten)} edges in ${String(Math.round(report.durationMs))} ms (seq ${String(event.seq)})`,
+        );
+        watch.readyWarnings = report.warnings;
         this.refresh(watch, resources, event.seq);
         return;
+      }
       case 'batch':
+        this.log.info(
+          `changes at seq ${String(event.seq)}: ${String(event.changes.length)} file(s); ${String(event.write.nodesWritten)} nodes, ${String(event.write.edgesWritten)} edges written`,
+        );
+        this.log.debug('batch', { changes: event.changes, latencyMs: event.latencyMs });
         this.refresh(watch, resources, event.seq);
         return;
       case 'warning':
-        this.options.showWarning(`CPG: ${event.message}`);
+        this.warn(`CPG: ${event.message}`);
         return;
       case 'error':
-        this.options.showError(`CPG: the watch stopped: ${event.error.message}`);
+        this.fail(`CPG: the watch stopped: ${event.error.message}`, event.error);
         return;
       case 'closed':
+        this.log.info(`watch ${String(watch.generation)}: closed`);
         watch.live = false;
         return;
     }
@@ -331,14 +389,20 @@ export class GraphSession {
   }
 
   private async refreshOnce(watch: Watch, resources: WatchResources, seq: number): Promise<void> {
+    const start = performance.now();
     try {
       const payload = await resources.engine.inspect(resources.session, resources.workspace.config);
       if (this.isCurrent(watch)) {
         await this.deliver(watch, resources.workspace, { ...payload, seq });
+        this.log.debug(
+          `graph at seq ${String(seq)}: ${String(payload.nodes.length)} nodes, ${String(payload.edges.length)} edges, delivered in ${elapsed(start)} ms`,
+        );
+      } else {
+        this.log.trace(`graph at seq ${String(seq)} dropped: its watch was replaced`);
       }
     } catch (thrown) {
       if (this.isCurrent(watch)) {
-        this.options.showError(`CPG: the graph refresh failed: ${serializeError(thrown).message}`);
+        this.fail(`CPG: the graph refresh failed: ${serializeError(thrown).message}`, thrown);
       }
     }
   }
@@ -356,7 +420,7 @@ export class GraphSession {
       await this.host.onSnapshot(payload, { seq: payload.seq, cause: 'initial' });
       const warnings = [...workspace.warnings, ...watch.readyWarnings];
       if (warnings.length > 0 && this.isCurrent(watch)) {
-        this.options.showWarning(`CPG: ${warnings.join('; ')}`);
+        this.warn(`CPG: ${warnings.join('; ')}`);
       }
       return;
     }
@@ -368,9 +432,20 @@ export class GraphSession {
       probe,
       scheduler: new VerifyScheduler({
         verify: () => this.host.verify(judge.probe),
-        onReport: this.options.onReport,
+        onReport: (report) => {
+          const failing = report.checks.filter((check) => check.state === 'fail');
+          this.log.info(
+            `verify at seq ${String(report.seq)}: ${report.state}${failing.length > 0 ? ` (failing: ${failing.map((check) => check.id).join(', ')})` : ''}`,
+          );
+          for (const check of report.checks) {
+            this.log.debug(
+              `  ${check.id}: ${check.state} ${String(check.observed)}/${String(check.expected)}${check.detail === undefined ? '' : ` - ${check.detail}`}`,
+            );
+          }
+          this.options.onReport(report);
+        },
         onError: (thrown) =>
-          this.options.showError(`CPG: verify failed: ${serializeError(thrown).message}`),
+          this.fail(`CPG: verify failed: ${serializeError(thrown).message}`, thrown),
         after: this.options.after,
         current: (report) => report.epoch === this.host.epoch() && report.seq === this.host.seq(),
       }),
