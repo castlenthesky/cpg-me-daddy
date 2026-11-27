@@ -214,7 +214,8 @@ async function indexInspect() {
   const run = await cpg(['index', ws, '--inspect'], ws);
   const url = await urlOf(run);
   // Round two (review d3): stdout is its own pipe, so wait for it rather than assume it came first.
-  await until(() => /^written nodes=3 edges=2 dryRun=false$/m.test(run.stdout()), 'the report');
+  // U6a.3-2: the filesystem tier's 3 rows and 2 links, then b.py's replace-file, 3 rows and 2 edges
+  await until(() => /^written nodes=6 edges=4 dryRun=false$/m.test(run.stdout()), 'the report');
   return { run, url };
 }
 
@@ -226,7 +227,7 @@ describe('cpg index --inspect through the built bin: the child never outlives th
     const payload = p.of('graph')[0]?.['payload'];
     expect(
       isRecord(payload) && Array.isArray(payload['nodes']) ? payload['nodes'] : [],
-    ).toHaveLength(3);
+    ).toHaveLength(5);
     const report = p.of('verification')[0]?.['report'];
     expect(isRecord(report) ? report['seq'] : undefined).toBe(-1);
     p.socket.close();

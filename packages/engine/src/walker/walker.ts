@@ -16,6 +16,14 @@ export interface WalkOptions {
   readonly include?: readonly string[];
   readonly exclude?: readonly string[];
   readonly maxFileSizeBytes?: number;
+  /**
+   * The byte hand-off (controller decision 100): awaited once per emitted file (a `language: null`
+   * file included), in walk order, right after its bytes are hashed and before the walk moves on,
+   * with the WalkedFile as emitted and the very bytes its revision_id hashes. The walker keeps no
+   * bytes, so the hook is the only other reader. A rejection rejects the walk. SEAT (U6a.3-2 RED):
+   * accepted and unused.
+   */
+  readonly onFile?: (file: WalkedFile, bytes: Uint8Array) => Promise<void>;
 }
 
 export interface WalkedFile {

@@ -56,7 +56,10 @@ afterEach(async () => {
 });
 
 const CONFIG = 'cpg.config.yaml';
-const U6A = 'the code tier is not built yet (U6a): only the filesystem tier was indexed';
+// The scripted watch's ready carries a real index()'s report (onDisk), so its warning is index()'s:
+// since U6a.3-2 a TypeScript file has no extractor yet (decision 101). The real watch's own warning
+// differs (S32-1); the panel shows whichever it is given.
+const U6B = 'no extractor for typescript yet (U6b)';
 const THEME: ThemeSnapshot = { kind: 'dark', nodeColors: {}, defaultNodeColor: '#999999' };
 const ALL_PASS = 'pass unavailable pass pass pass unavailable';
 const NOT_DRAWN = 'pass unavailable pass unavailable pass unavailable';
@@ -647,8 +650,12 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
       'theme@0',
       'graph@1',
     ]);
-    expect([stamps(s.page()), names(s.page().graphs[0])]).toEqual([['1/0'], ['.', 'a.ts', 'b.py']]);
-    expect(s.log.slice(-2)).toEqual(['graph 1/0', `warning: CPG: ${U6A}`]);
+    // U6a.3-2: b.py's MODULE `b` and its module SYMBOL, which has no name
+    expect([stamps(s.page()), names(s.page().graphs[0])]).toEqual([
+      ['1/0'],
+      ['', '.', 'a.ts', 'b', 'b.py'],
+    ]);
+    expect(s.log.slice(-2)).toEqual(['graph 1/0', `warning: CPG: ${U6B}`]);
     // Sabotage: the page directory is the one asked for.
     expect([s.panels.length, s.page().html]).toEqual([
       1,
@@ -722,7 +729,7 @@ describe('cpg.openGraph starts one watch (decision 70)', () => {
     expect(stamps(s.page())).toEqual(['1/1', '1/5']);
     expect(s.messages).toEqual([
       'error: CPG: the graph refresh failed: disk on fire',
-      `warning: CPG: ${U6A}`,
+      `warning: CPG: ${U6B}`,
       'error: CPG: the graph refresh failed: disk on fire',
     ]);
   });
@@ -774,7 +781,7 @@ describe("each batch's deltas reach the panel (decision 83)", () => {
     ]);
     s.page().draw();
     expect(await s.verified()).toBe(ALL_PASS);
-    expect([s.reports.at(-1)?.seq, s.messages]).toEqual([6, [`warning: CPG: ${U6A}`]]);
+    expect([s.reports.at(-1)?.seq, s.messages]).toEqual([6, [`warning: CPG: ${U6B}`]]);
   });
 
   it("a gap: one catch-up snapshot at the batch's graph seq instead, the batch's later deltas dropped, the next batch on top", async () => {
@@ -793,7 +800,7 @@ describe("each batch's deltas reach the panel (decision 83)", () => {
       2,
     ]);
     expect(names(s.page().graphs[1])).toEqual(['.', 'a.ts', 'b.ts']);
-    expect(s.messages).toEqual([`warning: CPG: ${U6A}`]);
+    expect(s.messages).toEqual([`warning: CPG: ${U6B}`]);
   });
 
   // Round two (R5): the malformed delta is the batch's only one, so no later gap can stand in for it.
@@ -810,7 +817,7 @@ describe("each batch's deltas reach the panel (decision 83)", () => {
       [],
       2,
     ]);
-    expect(s.messages).toEqual([`warning: CPG: ${U6A}`]);
+    expect(s.messages).toEqual([`warning: CPG: ${U6B}`]);
   });
 
   // Round two (R13): C-MODEL I-10, a delta at or below the host's seq is already applied: no fallback.
@@ -1224,7 +1231,7 @@ describe('what the watch says (decision 74)', () => {
     const s = setUp({ root });
     await s.opened();
     expect(s.messages).toEqual([
-      `warning: CPG: ${join(root, CONFIG)}: 'languages' is parsed but not applied (ResolvedConfig has no languages key); ${U6A}; no files indexed under ${root}`,
+      `warning: CPG: ${join(root, CONFIG)}: 'languages' is parsed but not applied (ResolvedConfig has no languages key); no files indexed under ${root}`,
     ]);
   });
 
@@ -1503,7 +1510,7 @@ describe('deactivation (decision 74)', () => {
     await until(() => s.answered.length === s.inspected.length);
     await allMicrotasks();
     expect([s.messages, s.closes, stamps(s.page())]).toEqual([
-      [`warning: CPG: ${U6A}`],
+      [`warning: CPG: ${U6B}`],
       [],
       ['1/0'],
     ]);

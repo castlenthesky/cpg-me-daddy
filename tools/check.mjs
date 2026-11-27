@@ -19,6 +19,7 @@ const GATES = [
   'typecheck:tests',
   'check:cli-bin',
   'check:purity',
+  'check:sparsity',
   'test:coverage',
 ];
 

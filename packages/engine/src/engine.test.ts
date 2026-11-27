@@ -191,11 +191,13 @@ describe('index --dry-run (session null): NullGraphStore, no store', () => {
       },
       files: [
         { path: 'a.ts', revision_id: sha256(files['a.ts']), nodes: 0, edges: 0 },
-        { path: 'b.py', revision_id: sha256(files['b.py']), nodes: 0, edges: 0 },
+        // U6a.3-2 (decision 101): b.py's code tier is one MODULE; DEFINES and SOURCE_FILE
+        { path: 'b.py', revision_id: sha256(files['b.py']), nodes: 1, edges: 2 },
       ],
-      // the root DIRECTORY and two FILEs; two HAS_ENTRY, counted by the NullGraphStore
-      nodesWritten: 3,
-      edgesWritten: 2,
+      // counted by the NullGraphStore: the root DIRECTORY and two FILEs, two HAS_ENTRY; then b.py's
+      // replace-file, three rows (MODULE, its SYMBOL, the FILE's code half) and two edge rows
+      nodesWritten: 6,
+      edgesWritten: 4,
       dryRun: true,
       interrupted: false,
       target: null,
@@ -207,15 +209,22 @@ describe('index --dry-run (session null): NullGraphStore, no store', () => {
   });
 });
 
-describe('index with a session: ONE merge-filesystem op through the sinks', () => {
+describe('index with a session: ONE merge-filesystem op, then the code tier, through the sinks', () => {
   it('writes the filesystem tier as one op, no deltas, and reports the receipt counts', async () => {
     const files = { 'a.ts': 'export {};\n', 'n.txt': 'n', 'src/b.py': 'x = 1\n' };
     const root = await tree(files);
     const r = recording('memory', { nodesWritten: 41, edgesWritten: 17 });
     const { report } = await index(root, r.sink);
 
-    expect(r.calls).toEqual(['memory.open', 'memory.write:start', 'memory.write:end']);
-    expect(r.ops).toHaveLength(1);
+    // U6a.3-2 (decision 101): the filesystem op first, then src/b.py's replace-file
+    expect(r.calls).toEqual([
+      'memory.open',
+      'memory.write:start',
+      'memory.write:end',
+      'memory.write:start',
+      'memory.write:end',
+    ]);
+    expect(r.ops.map((o) => o.kind)).toEqual(['merge-filesystem', 'replace-file']);
     const op = r.ops[0];
     if (op?.kind !== 'merge-filesystem')
       throw new Error(`expected merge-filesystem, got ${op?.kind}`);
@@ -248,9 +257,10 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
       'HAS_ENTRY DIRECTORY:src -> FILE:src/b.py',
     ]);
 
+    // every receipt summed: two writes, each reporting 41 and 17
     expect(report).toMatchObject({
-      nodesWritten: 41,
-      edgesWritten: 17,
+      nodesWritten: 82,
+      edgesWritten: 34,
       dryRun: false,
       interrupted: false,
       // the memory store dials no target (decision 139: naming 127.0.0.1:6382 would mislead)
@@ -263,7 +273,8 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
     const root = await tree({ 'a.ts': '', 'b.tsx': '', 'c.mjs': '', 'd.py': '', 'e.txt': '' });
     const memory = createMemoryStore();
     const { report } = await index(root, memory);
-    expect(await memory.stats()).toMatchObject({ nodeCount: 6, edgeCount: 5 });
+    // U6a.3-2: d.py's MODULE and SYMBOL, DEFINES and SOURCE_FILE (its FILE row merges, no new node)
+    expect(await memory.stats()).toMatchObject({ nodeCount: 8, edgeCount: 7 });
     expect(await memory.nodeKeys('DIRECTORY')).toEqual(['.']);
     const language = async (p: string) =>
       (await memory.readFile(wp(p))).nodes.find((n) => n.label === 'FILE')?.properties['language'];
@@ -295,12 +306,20 @@ describe('index with a session: ONE merge-filesystem op through the sinks', () =
       'b.write:end',
       'c.write:start',
       'c.write:end',
+      // U6a.3-2: m.py's replace-file, through every sink in the same order
+      'memory.write:start',
+      'memory.write:end',
+      'b.write:start',
+      'b.write:end',
+      'c.write:start',
+      'c.write:end',
     ]);
     expect(a.ops).toEqual(b.ops);
     expect(b.ops).toEqual(c.ops);
     expect(report.consumers).toEqual(['memory', 'b', 'c']);
-    // the root DIRECTORY and m.py, one HAS_ENTRY: one write's receipt, not the sum over sinks
-    expect(report).toMatchObject({ nodesWritten: 2, edgesWritten: 1 });
+    // the built-in store's receipts, not the sum over sinks: the root DIRECTORY and m.py, one
+    // HAS_ENTRY; then m.py's MODULE, SYMBOL and FILE rows, DEFINES and SOURCE_FILE
+    expect(report).toMatchObject({ nodesWritten: 5, edgesWritten: 3 });
   });
 });
 
@@ -439,19 +458,21 @@ describe('IndexReport', () => {
     });
   });
 
-  it('warns that the code tier is a SEAT on every run, and when no file was indexed', async () => {
-    const some = await index(await tree({ 'a.py': '' }), undefined, { dryRun: true });
-    expect(some.report.warnings).toHaveLength(1);
-    expect(some.report.warnings[0]).toMatch(/code tier.*U6a/);
+  // U6a.3-2 (decision 101): the U6a warning is gone; languages with no extractor are named instead
+  it('warns of indexed languages with no extractor, sorted, of nothing for python, and when no file was indexed', async () => {
+    const python = await index(await tree({ 'a.py': '' }), undefined, { dryRun: true });
+    expect(python.report.warnings).toEqual([]);
+
+    const mixed = await tree({ 'a.ts': '', 'b.tsx': '', 'c.mjs': '', 'd.py': '', 'e.txt': '' });
+    const some = await index(mixed, undefined, { dryRun: true });
+    expect(some.report.warnings).toEqual([
+      'no extractor for javascript, tsx, typescript yet (U6b)',
+    ]);
 
     const none = await tree({ 'notes.txt': '' });
     const { report } = await index(none, undefined, { dryRun: true });
     expect(report.walk.filesIndexed).toBe(0);
-    expect(report.warnings).toHaveLength(2);
-    expect(report.warnings.some((w) => /code tier.*U6a/.test(w))).toBe(true);
-    expect(report.warnings.some((w) => w.includes('no files indexed') && w.includes(none))).toBe(
-      true,
-    );
+    expect(report.warnings).toEqual([`no files indexed under ${none}`]);
   });
 
   it('reports progress after the walk and after the write', async () => {
@@ -471,9 +492,12 @@ describe('IndexReport', () => {
       (p) => log.push(`progress:${p.phase}`),
       new AbortController().signal,
     );
+    // U6a.3-2: written comes after the code tier's write too (a.py's replace-file)
     expect(log).toEqual([
       'memory.open',
       'progress:walked',
+      'memory.write:start',
+      'memory.write:end',
       'memory.write:start',
       'memory.write:end',
       'progress:written',
@@ -546,10 +570,11 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
       new AbortController().signal,
     );
     await session.close();
-    // the root DIRECTORY and two FILEs, two HAS_ENTRY: the memory store's own receipt
+    // the memory store's own receipts: the root DIRECTORY and two FILEs, two HAS_ENTRY; then b.py's
+    // MODULE, SYMBOL and FILE rows, DEFINES and SOURCE_FILE (U6a.3-2)
     expect(report).toMatchObject({
-      nodesWritten: 3,
-      edgesWritten: 2,
+      nodesWritten: 6,
+      edgesWritten: 4,
       dryRun: false,
       target: null,
       consumers: ['memory'],
@@ -615,9 +640,10 @@ describe('createEngine builds its sinks from the consumer switches (owner decisi
     );
     await session.close();
     expect(report.consumers).toEqual(['memory', 'host']);
-    // the root DIRECTORY and m.py, one HAS_ENTRY: the built-in store's receipt, not the host's
-    expect(report).toMatchObject({ nodesWritten: 2, edgesWritten: 1 });
-    expect(host.ops).toHaveLength(1);
+    // the built-in store's receipts, not the host's: the root DIRECTORY and m.py, one HAS_ENTRY;
+    // then m.py's MODULE, SYMBOL and FILE rows, DEFINES and SOURCE_FILE (U6a.3-2)
+    expect(report).toMatchObject({ nodesWritten: 5, edgesWritten: 3 });
+    expect(host.ops.map((o) => o.kind)).toEqual(['merge-filesystem', 'replace-file']);
     const verified = await engine.verify(
       await engine.connect(TARGET, { readOnly: true }),
       { root },
@@ -709,7 +735,7 @@ const edgeKey = (e: { source: string; target: string; type?: string }): string =
   `${e.source} ${e.type ?? ''} ${e.target}`;
 
 describe('CpgEngine.inspect', () => {
-  it('after index it returns what the memory store holds: DIRECTORY and FILE nodes, HAS_ENTRY', async () => {
+  it('after index it returns what the memory store holds: both tiers, HAS_ENTRY, DEFINES, SOURCE_FILE', async () => {
     const root = await tree({ 'a.ts': '', 'src/b.py': '' });
     const engine = engineWith();
     const w = await engine.connect(TARGET, { readOnly: false });
@@ -730,6 +756,9 @@ describe('CpgEngine.inspect', () => {
         `DIRECTORY ${dirId('src')}`,
         `FILE ${fileId('a.ts')}`,
         `FILE ${fileId('src/b.py')}`,
+        // U6a.3-2: the code tier of src/b.py (the ladder's id forms; a SYMBOL's id is its fqn)
+        'MODULE file:src/b.py:MODULE:$root',
+        'SYMBOL `src/b.py`/',
       ].toSorted(byCodeUnits),
     );
     expect(payload.edges.map(edgeKey).toSorted(byCodeUnits)).toEqual(
@@ -737,6 +766,8 @@ describe('CpgEngine.inspect', () => {
         `${dirId('.')} HAS_ENTRY ${fileId('a.ts')}`,
         `${dirId('.')} HAS_ENTRY ${dirId('src')}`,
         `${dirId('src')} HAS_ENTRY ${fileId('src/b.py')}`,
+        'file:src/b.py:MODULE:$root DEFINES `src/b.py`/',
+        `file:src/b.py:MODULE:$root SOURCE_FILE ${fileId('src/b.py')}`,
       ].toSorted(byCodeUnits),
     );
   });

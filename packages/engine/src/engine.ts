@@ -10,7 +10,13 @@ import {
   type SchemaDocInput,
   type WorkspacePath,
 } from '@cpg/model';
-import { BUILTIN_LANGUAGES, createLanguageRegistry } from '@cpg/parse';
+import type { Extractor } from '@cpg/extract';
+import {
+  BUILTIN_LANGUAGES,
+  createLanguageRegistry,
+  type ParseService,
+  type ParseServiceOptions,
+} from '@cpg/parse';
 import type { ProcessHost, Resolver } from '@cpg/resolve';
 import { createMemoryStore, type GraphSink, type MemoryStore } from '@cpg/sink';
 import type { EdgeRow, GraphStore, NodeRow, WriteOp, WriteReceipt } from '@cpg/store';
@@ -42,6 +48,13 @@ export interface EngineConfig {
   readonly version: string;
   /** The resolved switches: the engine builds only the sinks they enable (owner decision 5). */
   readonly consumers: ConsumerSwitches;
+  /**
+   * The grammar directory the front door chose, absolute (controller decision 100; C-PARSE I11's
+   * `explicit` rule: the CLI passes CPG_GRAMMAR_DIR resolved against its cwd). Absent: the grammar
+   * package's own directory. A directory that does not hold the grammar is a warning, never fatal.
+   * SEAT (U6a.3-2 RED): accepted and unused.
+   */
+  readonly grammarDir?: string;
 }
 
 /** A durable store sink: MemoryStore now, FalkorStore at U5. */
@@ -72,6 +85,16 @@ export interface EngineDeps {
   readonly now?: () => number;
   /** The watch session's timers (debounce, retry backoff). Default: the global ones. */
   readonly timers?: TimerApi;
+  /**
+   * The code tier's extractor; its `grammars` are the languages the code tier runs for (decision
+   * 96). Default: `createExtractor()` from @cpg/extract. SEAT (U6a.3-2 RED): accepted and unused.
+   */
+  readonly extractor?: Extractor;
+  /**
+   * Builds the engine's one ParseService, on the first file the code tier parses (decision 100).
+   * Default: @cpg/parse's `createParseService`. SEAT (U6a.3-2 RED): accepted and unused.
+   */
+  readonly createParseService?: (options: ParseServiceOptions) => ParseService;
 }
 
 /**

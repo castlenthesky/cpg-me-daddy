@@ -443,13 +443,26 @@ describe('start: index, then ready (decision 60)', () => {
       () => undefined,
       signal,
     );
+    // S32-1 (U6a.3-2): the watch runs index()'s code with the code tier off until U6a.3-3, whose
+    // batches carry it; so its report is index()'s with the code tier's counts and warnings taken out
+    expect(report.files.find((f) => f.path === 'src/b.py')).toMatchObject({ nodes: 1, edges: 2 });
     expect(run.events).toEqual([
       {
         kind: 'ready',
         seq: 0,
         at: 5000,
         root,
-        report: { ...report, durationMs: expect.any(Number) },
+        report: {
+          ...report,
+          durationMs: expect.any(Number),
+          files: report.files.map((f) => ({ ...f, nodes: 0, edges: 0 })),
+          // the root and src, a.ts, src/b.py and README.md; four HAS_ENTRY: merge-filesystem alone
+          nodesWritten: 5,
+          edgesWritten: 4,
+          warnings: [
+            'the watch does not run the code tier yet (U6a.3-3): only the filesystem tier is watched',
+          ],
+        },
         graphSeq: 0,
       },
     ]);

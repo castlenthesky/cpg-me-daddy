@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const APP = `${ROOT}/apps/cli`;
@@ -22,15 +22,17 @@ if (build.status !== 0) {
   process.exit(1);
 }
 
-// The bin reads CPG_WORKSPACE (the workspace root's fallback before cwd) and CPG_HOST/PORT/GRAPH (the
-// config's env layer, U2c.1): a value in the caller's shell would redirect the cases below.
+// The bin reads CPG_WORKSPACE (the workspace root's fallback before cwd), CPG_HOST/PORT/GRAPH (the
+// config's env layer, U2c.1) and CPG_GRAMMAR_DIR (the grammar directory, U6a.3-2): a value in the
+// caller's shell would redirect the cases below.
 const env = { ...process.env };
-for (const name of ['CPG_WORKSPACE', 'CPG_HOST', 'CPG_PORT', 'CPG_GRAPH']) delete env[name];
+for (const name of ['CPG_WORKSPACE', 'CPG_HOST', 'CPG_PORT', 'CPG_GRAPH', 'CPG_GRAMMAR_DIR'])
+  delete env[name];
 const errors = [];
-function expectRun(args, status, stream, pattern, cwd = ROOT) {
+function expectRun(args, status, stream, pattern, cwd = ROOT, extraEnv = {}) {
   const r = spawnSync(process.execPath, [`${APP}/${binPath}`, ...args], {
     cwd,
-    env,
+    env: { ...env, ...extraEnv },
     encoding: 'utf8',
   });
   const text = r[stream];
@@ -48,6 +50,8 @@ expectRun(['mcp'], 2, 'stderr', /not built yet/);
 // main.ts is the composition root: run() calls createEngine once the config has resolved, and the
 // engine builds its own sinks from the consumer switches (owner decision 5a, U2c.2).
 const ws = mkdtempSync(join(tmpdir(), 'cpg-cli-bin-'));
+// Grammar directories for the code-tier cases, outside the workspace the cases index.
+const aside = mkdtempSync(join(tmpdir(), 'cpg-cli-bin-grammars-'));
 try {
   // .git bounds the config search (U2c.1): a stray cpg.config.yaml above tmpdir is never read.
   mkdirSync(join(ws, '.git'));
@@ -57,8 +61,80 @@ try {
   // no root given: main.ts hands run() process.cwd(), the last workspace-root fallback
   expectRun(['index', '--dry-run'], 0, 'stdout', /^files seen=2 indexed=2 /m, ws);
   // cpg index without --dry-run writes the engine-built memory store (U2c.2): the root DIRECTORY
-  // and two FILEs, two HAS_ENTRY.
-  expectRun(['index', ws], 0, 'stdout', /^written nodes=3 edges=2 dryRun=false$/m);
+  // and two FILEs, two HAS_ENTRY; then b.py's replace-file (U6a.3-2): its MODULE, module SYMBOL and
+  // FILE rows, DEFINES and SOURCE_FILE.
+  expectRun(['index', ws], 0, 'stdout', /^written nodes=6 edges=4 dryRun=false$/m);
+  // The code tier at runtime (U6a.3-2, controller decision 100): the built bin finds the python
+  // grammar through its own package, and main.ts hands the engine CPG_GRAMMAR_DIR resolved against
+  // its cwd; an empty value is unset, and a directory without the grammar is one warning, exit 0.
+  const codeTier = (label, extraEnv, cwd = ROOT) => {
+    const r = expectRun(
+      ['index', '--dry-run', '--format', 'json', ws],
+      0,
+      'stdout',
+      /^\{.*\}\n$/,
+      cwd,
+      extraEnv,
+    );
+    try {
+      const body = JSON.parse(r.stdout).body;
+      const b = body.files.find((f) => f.path === 'b.py');
+      return { nodes: b?.nodes, edges: b?.edges, warnings: body.warnings };
+    } catch (e) {
+      errors.push(
+        `cpg index (${label}): stdout is not one JSON document (${String(e)}): ${r.stdout}`,
+      );
+      return { nodes: undefined, edges: undefined, warnings: [] };
+    }
+  };
+  const expectCode = (label, got, nodes, edges, warning) => {
+    const warned = got.warnings.filter((w) => w !== 'no extractor for typescript yet (U6b)');
+    const ok =
+      got.nodes === nodes &&
+      got.edges === edges &&
+      got.warnings.includes('no extractor for typescript yet (U6b)') &&
+      (warning === undefined
+        ? warned.length === 0
+        : warned.length === 1 && warning.test(warned[0]));
+    if (!ok)
+      errors.push(
+        `cpg index (${label}): expected b.py nodes=${nodes} edges=${edges} and ${warning ?? 'no code-tier warning'}, got ${JSON.stringify(got)}`,
+      );
+  };
+  const wasmDir = join(
+    dirname(createRequire(import.meta.url).resolve('@vscode/tree-sitter-wasm/package.json')),
+    'wasm',
+  );
+  const empty = join(aside, 'no-grammars');
+  mkdirSync(empty);
+  const home = join(aside, 'cwd');
+  mkdirSync(join(home, 'grammars'), { recursive: true });
+  cpSync(
+    join(wasmDir, 'tree-sitter-python.wasm'),
+    join(home, 'grammars', 'tree-sitter-python.wasm'),
+  );
+  expectCode('the package anchor', codeTier('the package anchor', {}), 1, 2);
+  expectCode(
+    'CPG_GRAMMAR_DIR empty',
+    codeTier('CPG_GRAMMAR_DIR empty', { CPG_GRAMMAR_DIR: '' }),
+    1,
+    2,
+  );
+  expectCode(
+    'CPG_GRAMMAR_DIR relative to the cwd',
+    codeTier('CPG_GRAMMAR_DIR relative', { CPG_GRAMMAR_DIR: 'grammars' }, home),
+    1,
+    2,
+  );
+  expectCode(
+    'CPG_GRAMMAR_DIR without the grammar',
+    codeTier('CPG_GRAMMAR_DIR without the grammar', { CPG_GRAMMAR_DIR: empty }),
+    0,
+    0,
+    new RegExp(
+      `^code tier: 1 python file at the FILE tier only \\(grammar-unavailable\\): b\\.py: .*${join(empty, 'tree-sitter-python.wasm').replace(/[.]/g, '\\.')}`,
+    ),
+  );
   expectRun(['index', ws], 0, 'stderr', /consumers: memory$/m);
   // a switched-on consumer that is not built yet is exit 2 "not built yet", naming its source
   expectRun(['index', '--store', 'falkor', ws], 2, 'stderr', /not built yet.*--store/s);
@@ -127,6 +203,7 @@ try {
   }
 } finally {
   rmSync(ws, { recursive: true, force: true });
+  rmSync(aside, { recursive: true, force: true });
 }
 
 if (errors.length) {

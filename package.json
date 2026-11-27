@@ -54,6 +54,7 @@
     "check:coords": "node tools/check-archive-coords.mjs",
     "check:unit-diff": "node tools/check-unit-diff.mjs",
     "check:cli-bin": "node tools/check-cli-bin.mjs",
+    "check:sparsity": "node tools/check-sparsity.mjs",
     "check:purity": "node tools/purity-proof.mjs && node tools/purity-proof.mjs --plant",
     "schema:doc": "node tools/schema-doc.mjs",
     "check:schema": "node tools/schema-doc.mjs --check",

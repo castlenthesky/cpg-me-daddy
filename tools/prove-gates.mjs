@@ -420,6 +420,43 @@ const CASES = [
       },
     };
   })(),
+  // check:sparsity (U6a.3-2, C-EXTRACT Q6). The MODULE-only code tier can never put a real file over
+  // the bar, so the density plant is a corpus of empty modules (4 MODULEs over 1 LOC); the vacuity
+  // plant is the ladder itself with CPG_GRAMMAR_DIR naming a directory without the grammar, so no
+  // code tier runs and a gate that only divided would pass.
+  {
+    name: 'check:sparsity rejects a corpus denser than 1.5 structural nodes/LOC',
+    expectOutput: /structural density 4\.000 n\/LOC is over the bar 1\.5/,
+    run() {
+      const dir = mkdtempSync(`${tmpdir()}/cpg-sparsity-`);
+      try {
+        mkdirSync(`${dir}/.git`);
+        writeFileSync(`${dir}/one.py`, 'x = 1');
+        for (const name of ['a.py', 'b.py', 'c.py']) writeFileSync(`${dir}/${name}`, '');
+        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:sparsity', dir], { env: PLAIN_ENV });
+        const problem = verdict(r, this);
+        if (problem) throw new Error(problem);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
+  {
+    name: 'check:sparsity rejects the ladder when the code tier never ran (no grammar)',
+    expectOutput: /01-empty-module\/ws\/main\.py: no code-tier nodes/,
+    run() {
+      const empty = mkdtempSync(`${tmpdir()}/cpg-sparsity-grammars-`);
+      try {
+        const r = sh(ROOT, 'bun', ['run', '--silent', 'check:sparsity'], {
+          env: { ...PLAIN_ENV, CPG_GRAMMAR_DIR: empty },
+        });
+        const problem = verdict(r, this);
+        if (problem) throw new Error(problem);
+      } finally {
+        rmSync(empty, { recursive: true, force: true });
+      }
+    },
+  },
   (() => {
     // The real gate on the real file: `bun run schema:doc --check` (also proves the literal
     // `--check` pass-through of the package script) must reject a hand edit of the generated region.
