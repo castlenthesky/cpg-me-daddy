@@ -127,12 +127,24 @@ const edgeLines = (op: WriteOp): string[] =>
 const rowOf = (op: WriteOp, label: string): NodeRow | undefined =>
   op.kind === 'replace-file' ? op.nodes.find((n) => n.label === label) : undefined;
 
+/**
+ * The store's whole graph, read through a handle of its own: indexWith's session has closed the
+ * store, and a read on a closed store is STORE_NOT_OPEN (post-implementation fix of a RED defect).
+ */
+async function payloadOf(memory: MemoryStore) {
+  await memory.open();
+  try {
+    return await memory.readAll();
+  } finally {
+    await memory.close();
+  }
+}
 async function nodeData(memory: MemoryStore, id: string) {
-  const payload = await memory.readAll();
+  const payload = await payloadOf(memory);
   return payload.nodes.find((n) => n.id === id)?.data;
 }
 async function filesOwning(memory: MemoryStore): Promise<string[]> {
-  const payload = await memory.readAll();
+  const payload = await payloadOf(memory);
   const owned = payload.nodes.flatMap((n) => {
     const file = n.data?.['file'];
     return typeof file === 'string' ? [file] : [];
@@ -326,7 +338,7 @@ describe('removals (decisions 77, 101): delete-file for each removed path the st
     expect(new Set(order).size).toBe(order.length);
 
     expect(await filesOwning(r.memory)).toEqual(['a.py']);
-    const symbols = (await r.memory.readAll()).nodes
+    const symbols = (await payloadOf(r.memory)).nodes
       .filter((n) => n.type === 'SYMBOL')
       .map((n) => n.id);
     expect(symbols.toSorted()).toEqual(['`a.py`/', '`b.py`/', '`pkg/c.py`/']);
