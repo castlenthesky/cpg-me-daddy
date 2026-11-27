@@ -920,6 +920,44 @@ describe('stop (decision 63)', () => {
     expect(run.closesAtClosed()).toBe(1);
   });
 
+  // After the implementation (sabotage #36 of the watch group): once a stop has begun, a batch the
+  // session still delivers is not written.
+  it('an abort during start writes nothing more, though the disk changed', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    const controller = new AbortController();
+    const backend = backendFor(async () => {
+      await writeFile(join(root, 'b.ts'), 'b');
+      controller.abort();
+    });
+    const run = await start(root, { controller, backend });
+    await run.done;
+    expect(kinds(run.events)).toEqual(['closed']);
+    expect(run.memory.ops).toHaveLength(1);
+  });
+
+  // After the implementation (sabotage #28 of the watch group): a write that lands after the stop
+  // began, but before closed, is not reported.
+  it('a write that lands between the abort and closed has no batch event', async () => {
+    const root = await tree({ 'a.ts': 'a' });
+    let gate: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    const host = recorder({ id: 'host', during: () => gate });
+    const run = await start(root, { host });
+    await ready(run);
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    await writeFile(join(root, 'slow.ts'), 's');
+    run.backend.fire(raw(root, 'created', 'slow.ts', 5001));
+    run.clock.advance(100);
+    await until(() => host.ops.length === 2, 'the write to start');
+    run.abort();
+    release?.();
+    await run.done;
+    expect(host.landed).toBe(2);
+    expect(kinds(run.events)).toEqual(['ready', 'closed']);
+  });
+
   it('a write in flight is not awaited, and its batch never follows closed', async () => {
     const root = await tree({ 'a.ts': 'a' });
     let gate: Promise<void> | undefined;

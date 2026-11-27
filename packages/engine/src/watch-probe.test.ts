@@ -96,6 +96,30 @@ describe('stat: lstat semantics', () => {
     expect(await probe.stat(wp('pipe'))).toBeUndefined();
     expect(shape(await probe.list(WORKSPACE_ROOT))).toEqual(['file a.ts 1']);
   });
+
+  // After the implementation (sabotage #11 of the probe group): an entry the probe does not report
+  // must not hide its siblings. Files and FIFOs alternate in name and in creation order, so the
+  // pipes cannot all sort last under creation, reverse-creation (tmpfs) or name order.
+  it.skipIf(process.platform === 'win32')(
+    'a FIFO does not hide the entries beside it',
+    async () => {
+      const root = await tree({});
+      await mkdir(join(root, 'mix'));
+      for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+        const abs = join(root, 'mix', n % 2 === 1 ? `${n}.ts` : `${n}.pipe`);
+        if (n % 2 === 1) await writeFile(abs, 'x');
+        else execFileSync('mkfifo', [abs]);
+      }
+      expect(shape(await createWatchProbe(root).list(WORKSPACE_ROOT))).toEqual([
+        'directory mix',
+        'file mix/1.ts 1',
+        'file mix/3.ts 1',
+        'file mix/5.ts 1',
+        'file mix/7.ts 1',
+        'file mix/9.ts 1',
+      ]);
+    },
+  );
 });
 
 describe('list: every entry strictly under dir, recursively', () => {
