@@ -97,6 +97,10 @@
       "dependencies": {
         "@cpg/model": "*",
       },
+      "devDependencies": {
+        "@cpg/parse": "*",
+        "@vscode/tree-sitter-wasm": "0.3.1",
+      },
     },
     "packages/model": {
       "name": "@cpg/model",
