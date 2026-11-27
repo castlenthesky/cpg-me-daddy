@@ -327,6 +327,74 @@ describe('dispose', () => {
   );
 });
 
+// Controller decision 73 (U4.2.2, BMO-85): a run whose graph moved while it ran. In each case the change
+// that moved it is a `changed`, as the host's onChange makes one. The runs here report seq 1, 2, ...
+/** Runs 1 and 3 are stale; the others are current. */
+const staleRuns = (report: VerificationReport) => report.seq !== 1 && report.seq !== 3;
+describe('a run that is no longer current', () => {
+  it('reports nothing, and its now() waits for the next run, which the change asked for', async () => {
+    const asked: number[] = [];
+    const { clock, scheduler, end, reports, starts } = setUp({
+      current: (report) => {
+        asked.push(report.seq);
+        return staleRuns(report);
+      },
+    });
+    const answer = watch(scheduler.now());
+    scheduler.changed();
+    await end();
+    expect([answer.at, reports, asked]).toEqual(['waiting', [], [1]]);
+    clock.advance(499);
+    expect(starts).toHaveLength(1);
+    clock.advance(1);
+    await end();
+    expect([answer.at, reports, asked, starts]).toEqual([2, [2], [1, 2], [0, 500]]);
+  });
+
+  it('shares the run owed to a now() asked during it, at once, and waits again if that one is stale too', async () => {
+    const { clock, scheduler, end, reports, starts, errors } = setUp({ current: staleRuns });
+    const first = watch(scheduler.now());
+    scheduler.changed();
+    const during = watch(scheduler.now());
+    await end();
+    expect([first.at, during.at, starts]).toEqual(['waiting', 'waiting', [0, 0]]);
+    const late = watch(scheduler.now());
+    await end();
+    expect([first.at, during.at, late.at, reports]).toEqual([2, 2, 'waiting', [2]]);
+    scheduler.changed();
+    await end();
+    expect([late.at, reports]).toEqual(['waiting', [2]]);
+    // The next run throws: what waited gets undefined, as from any run that throws.
+    clock.advance(500);
+    await end(new Error('no probe'));
+    expect([late.at, errors.length, starts]).toEqual([undefined, 1, [0, 0, 0, 500]]);
+  });
+
+  // Round two (R11): a debounced run, with no now() waiting.
+  it('a run a change started that turns stale reports nothing; the change during it starts the next', async () => {
+    const { clock, scheduler, end, reports, starts } = setUp({ current: staleRuns });
+    scheduler.changed();
+    clock.advance(500);
+    scheduler.changed();
+    await end();
+    expect([reports, starts]).toEqual([[], [500]]);
+    clock.advance(500);
+    await end();
+    expect([reports, starts]).toEqual([[2], [500, 1000]]);
+  });
+
+  it('dispose answers what waits on a stale run with undefined', async () => {
+    const { scheduler, end, reports } = setUp({ current: staleRuns });
+    const answer = watch(scheduler.now());
+    scheduler.changed();
+    await end();
+    expect(answer.at).toBe('waiting');
+    scheduler.dispose();
+    await allMicrotasks();
+    expect([answer.at, reports]).toEqual([undefined, []]);
+  });
+});
+
 // The page here answers as apps/inspector/src/graph-app.ts does: a render-report per graph it draws and
 // nothing for a verification (pinned there by "writes the latest verify report into the banner and
 // posts nothing").

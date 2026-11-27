@@ -254,7 +254,10 @@ beforeEach(() => {
   writeFileSync(join(root, 'sub', 'c.ts'), '');
   symlinkSync(join(root, 'a.ts'), join(root, 'link.ts'));
 });
+/** Each extension a test activated: deactivated after it, so no watch outlives its test (U4.2.2). */
+const active = [];
 afterEach(() => {
+  for (const deactivate of active.splice(0)) deactivate();
   vi.useRealTimers();
   rmSync(temp, { recursive: true, force: true });
 });
@@ -279,8 +282,9 @@ function activate(folder = root) {
   const run = (id) => seen.commands.get(id)();
   const deactivate = () => {
     extension.deactivate?.();
-    for (const subscription of subscriptions) subscription.dispose();
+    for (const subscription of subscriptions.splice(0)) subscription.dispose();
   };
+  active.push(deactivate);
   return { seen, vscode, run, deactivate };
 }
 
@@ -404,7 +408,8 @@ describe('verify in the editor', () => {
     await until(() => status.shown);
     expect([status.text, status.tooltip.split('\n')[0]]).toEqual([
       '$(question) CPG',
-      'CPG verify at seq -1: unavailable',
+      // Round two (R1): the first graph is ready's, at seq 0 (decision 70).
+      'CPG verify at seq 0: unavailable',
     ]);
     await until(() => ofType(panel, 'verification').length === 1);
     writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
@@ -427,10 +432,18 @@ describe('verify in the editor', () => {
     // Round two (review b1): closing the panel leaves the verdict where it is.
     panel.dispose();
     expect([status.text, seen.diagnostics.size]).toEqual(['$(error) CPG 2', 1]);
-    // A re-index and its run clear what it fixed.
+    // U4.2.2: the watch is live, so cpg.openGraph only shows a new panel, sent the graph held. The watch
+    // sees the write once its debounce (the faked timers) fires, and a catch-up graph follows.
     await run('cpg.openGraph');
     const [, again] = seen.panels;
     again.send(READY);
+    expect(ofType(again, 'graph').map(({ epoch, seq }) => [epoch, seq])).toEqual([[1, 0]]);
+    await until(() => {
+      vi.advanceTimersByTime(100);
+      return ofType(again, 'graph').length === 2;
+    });
+    const [, caughtUp] = ofType(again, 'graph');
+    expect([caughtUp.epoch, caughtUp.seq > 0]).toEqual([1, true]);
     draw(again);
     vi.advanceTimersByTime(500);
     await until(() => !status.text.startsWith('$(error)'));
@@ -568,7 +581,9 @@ describe('the theme', () => {
 describe('deactivation', () => {
   it('unregisters everything and leaves the panel for VS Code to restore', async () => {
     const { seen, run, panel, deactivate } = await opened();
-    writeFileSync(join(root, 'a.ts'), 'export const a = 2;\n');
+    // Round two (m3): a diagnostic from the page, not the disk: a write would start the watch's own
+    // debounce timers, and the count below is the verify scheduler's.
+    draw(panel, { renderedNodeCount: 4, droppedNodeIds: ['file:a.ts'] });
     await run('cpg.verify');
     await until(() => seen.diagnostics.size === 1);
     // Round two (review a9): a run is pending, and the editor's own items are released.

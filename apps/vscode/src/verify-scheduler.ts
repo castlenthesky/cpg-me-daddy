@@ -1,5 +1,5 @@
-// REAL (U3.1.1 part 2, BMO-52; U3.1.2, BMO-56): when verify runs (C-EXT OQ-5; controller decisions 36
-// and 40). No clock of its own: the extension passes setTimeout, the tests a fake.
+// REAL (U3.1.1 part 2, BMO-52; U3.1.2, BMO-56; U4.2.2, BMO-132): when verify runs (C-EXT OQ-5; controller
+// decisions 36, 40 and 73). No clock of its own: the extension passes setTimeout, the tests a fake.
 
 import type { VerificationReport } from '@cpg/model';
 
@@ -15,6 +15,11 @@ export interface VerifySchedulerOptions {
   readonly onError: (thrown: unknown) => void;
   /** Calls `callback` once after `ms`; the function it returns cancels that. */
   readonly after: (ms: number, callback: () => void) => () => void;
+  /**
+   * Whether a finished run's report still describes the graph held (controller decision 73): false when
+   * the graph moved while it ran. Absent: every report is current.
+   */
+  readonly current?: (report: VerificationReport) => boolean;
 }
 
 /**
@@ -24,6 +29,9 @@ export interface VerifySchedulerOptions {
  * - requests during a run lead to exactly one more: at the end of the run when `now` was called
  *   during it; otherwise VERIFY_DEBOUNCE_MS after the last `changed`, or at the end of the run when
  *   that is later;
+ * - a run whose report is not `current` reports nothing (no onReport), and the `now` requests it would
+ *   have answered wait for the next run instead (decision 73). The change that moved the graph has
+ *   already asked for that run;
  * - `dispose` cancels the timer. After it nothing starts, a run still going reports nothing, and every
  *   `now` still open resolves with undefined. The host's own dispose is what keeps that run from posting
  *   to the page.
@@ -61,11 +69,12 @@ export class VerifyScheduler {
   now(): Promise<VerificationReport | undefined> {
     if (this.disposed) return Promise.resolve(undefined);
     this.cancelTimer();
-    if (!this.running) return this.run();
-    this.owedTo = 'now';
-    return new Promise<VerificationReport | undefined>((resolve) => {
+    const answer = new Promise<VerificationReport | undefined>((resolve) => {
       this.waiting.push(resolve);
     });
+    if (!this.running) void this.run();
+    else this.owedTo = 'now';
+    return answer;
   }
 
   dispose(): void {
@@ -74,24 +83,29 @@ export class VerifyScheduler {
     for (const resolve of this.waiting.splice(0)) resolve(undefined);
   }
 
-  private async run(): Promise<VerificationReport | undefined> {
+  private async run(): Promise<void> {
     this.running = true;
     this.owedTo = undefined;
     const waiters = this.waiting.splice(0);
     let report: VerificationReport | undefined;
+    let stale = false;
     try {
       const finished = await this.options.verify();
       if (!this.disposed) {
-        report = finished;
-        this.options.onReport(finished);
+        if (this.options.current?.(finished) === false) {
+          stale = true;
+        } else {
+          report = finished;
+          this.options.onReport(finished);
+        }
       }
     } catch (thrown) {
       if (!this.disposed) this.options.onError(thrown);
     } finally {
       this.running = false;
-      for (const resolve of waiters) resolve(report);
+      if (stale && !this.disposed) this.waiting.unshift(...waiters);
+      else for (const resolve of waiters) resolve(report);
       if (this.owedTo !== undefined && !this.disposed) void this.run();
     }
-    return report;
   }
 }
