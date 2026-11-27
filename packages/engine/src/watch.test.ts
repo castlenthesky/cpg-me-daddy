@@ -2861,3 +2861,55 @@ describe('the code tier on save (decision 102; BMO-43)', () => {
     },
   );
 });
+
+// After the implementation (sabotage #25 and #32 of the engine group): a stop between two
+// delete-files, and a failed read followed by a file that reads.
+describe('the code tier on save: sabotage gaps (decision 102)', () => {
+  it('a stop that begins at the first of two delete-files writes the second one no more', async () => {
+    const root = await tree({ 'a.py': 'a = 1\n', 'b.py': 'b = 1\n' });
+    const controller = new AbortController();
+    let armed = false;
+    const host = recorder({
+      id: 'host',
+      during: (op) => {
+        if (armed && op.kind === 'delete-file') controller.abort();
+      },
+    });
+    const run = await start(root, { host, controller });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await rm(join(root, 'a.py'));
+    await rm(join(root, 'b.py'));
+    armed = true;
+    run.backend.fire(raw(root, 'deleted', 'a.py', 5001), raw(root, 'deleted', 'b.py', 5002));
+    run.clock.advance(100);
+    await run.done;
+    expect(opKinds(after(run.memory, skip))).toEqual(['delete-file a.py']);
+    expect(kinds(run.events)).toEqual(['ready', 'closed']);
+  });
+
+  it('a read that fails is that file alone: a later file in the batch is still written', async () => {
+    const root = await tree({ 'z.ts': 'z' });
+    const host = recorder({
+      id: 'host',
+      during: async (op) => {
+        if (op.kind === 'merge-filesystem') await rm(join(root, 'a.py'), { force: true });
+      },
+    });
+    const run = await start(root, { host });
+    await ready(run);
+    const skip = run.memory.ops.length;
+    await writeFile(join(root, 'a.py'), 'a = 1\n');
+    await writeFile(join(root, 'c.py'), 'c = 1\n');
+    const batch = await batchAfter(
+      run,
+      1,
+      raw(root, 'created', 'a.py', 5001),
+      raw(root, 'created', 'c.py', 5002),
+    );
+    // the precondition: the file that fails is planned first
+    expect(batch.changes.map((c) => c.path)).toEqual(['a.py', 'c.py']);
+    expect(opKinds(after(run.memory, skip))).toEqual(['merge-filesystem', 'replace-file c.py']);
+    expect(codeRemovals(batch)).toEqual([['c.py', []]]);
+  });
+});
