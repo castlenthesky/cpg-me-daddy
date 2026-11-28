@@ -18,7 +18,7 @@ Code Property Graph for TypeScript/JavaScript/Python: a bun-workspaces TypeScrip
 
 - pre-commit: formats staged files with oxfmt and restages them, then runs oxlint and `check:deps`.
 - pre-push: runs the full `bun run check`; it never skips.
-- Emergency bypass only: `LEFTHOOK=0 git commit ...` (CI still runs every gate).
+- Emergency bypass only: `LEFTHOOK=0 git commit ...` (CI still runs `bun run check`).
 
 ## Hard rules
 
@@ -26,7 +26,7 @@ Code Property Graph for TypeScript/JavaScript/Python: a bun-workspaces TypeScrip
 - `@cpg/model` has ZERO runtime dependencies. Never add one (zod included).
 - zod only at boundaries where outside data enters (config loader, MCP inputs). It arrives with its first consumer (U1 schema generator or U2 config loader).
 - Unused variables/parameters are oxlint's job (tsc's noUnused* flags are off); prefix intentional ones with `_`.
-- Every new gate needs a case in `tools/prove-gates.mjs` that plants a violation, with `expectOutput`. Slow cases get `slow: true` (skipped when `PROVE_GATES_SKIP_SLOW=1`, as in PR CI; the weekly mutation workflow runs them).
+- Every new gate needs a case in `tools/prove-gates.mjs` that plants a violation, with `expectOutput`. Slow cases get `slow: true` (skipped when `PROVE_GATES_SKIP_SLOW=1`). A pull request's CI runs only `check`, so run `PROVE_GATES_SKIP_SLOW=1 bun run check:gates` yourself when you add or change a gate; CI's `gates` job runs it when dispatched with `full`, and the weekly Mutation workflow runs every case.
 - Build state lives inside the output dirs (`dist/.tsbuildinfo`, `apps/vscode/dist/.tsbuildinfo`); when anything build-related looks stale, run `bun run clean`.
 - One PR = one unit of work, about 200-500 lines of production code. Tests, fixtures and package scaffolding don't count toward that. Report both numbers in the PR body.
 - Stubs are labelled REAL / PASSTHROUGH / SEAT: say which one when you add a stub, and never present a PASSTHROUGH or SEAT as working.

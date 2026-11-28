@@ -2,6 +2,9 @@ name: Mutation
 
 # Mutation testing is too slow for every push, so it runs weekly and on demand.
 # The break threshold in stryker.config.mjs fails the job when the score drops.
+# Since loop 7 a pull request no longer runs ci.yml's `gates` job, so the `gates` job here runs
+# every prove-gates case, fast and slow, each week. It is its own job, so a red Stryker run cannot
+# skip it.
 
 on:
   workflow_dispatch:
@@ -32,8 +35,6 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run test:mutation
-      # The slow prove-gates cases (skipped on every PR) run here: proves the mutation gate fails.
-      - run: bun run check:gates -- --only-slow
       # Upload even when the score is under the threshold: the report shows the survivors.
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
@@ -41,3 +42,22 @@ jobs:
           name: mutation-report
           path: reports/mutation/
           if-no-files-found: warn
+
+  # Every prove-gates case (no PROVE_GATES_SKIP_SLOW): the fast ones a pull request no longer
+  # runs, and the slow ones (the Stryker break threshold, test:vscode-host on `current`, headless).
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Full history: check:coords resolves archive coordinates on other branches' commits.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run check:gates

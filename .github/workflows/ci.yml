@@ -2,12 +2,24 @@ name: CI
 
 # CI runs the same commands as a laptop, a git hook and an agent: `bun run check` is THE gate.
 # Nothing here re-implements a check; jobs only choose where each command runs.
+#
+# Since loop 7 (owner, 2026-11-28) a pull request and a push run `check` alone. The `gates` and
+# `vscode-host` jobs below are kept, unchanged, behind `if:`: they run when this workflow is
+# dispatched by hand with `full` (`gh workflow run ci.yml --ref <branch> -f full=true`). The sprint
+# loop's gate (`bin/gate.sh`, outside this repo) runs `check:gates` (fast cases) and
+# `test:vscode-host` locally before each merge, and the weekly Mutation workflow runs every
+# `check:gates` case.
 
 on:
   push:
     branches: [develop, master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      full:
+        description: 'Also run the gates and vscode-host jobs (pull requests skip them)'
+        type: boolean
+        default: false
 
 # A newer push to the same PR supersedes the old run; pushes to develop/master always finish.
 concurrency:
@@ -77,7 +89,9 @@ jobs:
   # Proves the gates can actually fail. A rule nobody has seen fail is not a gate: this job
   # plants real violations (tools/prove-gates.mjs) and asserts each gate exits non-zero, so a
   # silently neutered gate turns CI red instead of staying quietly green.
+  # By hand only since loop 7: see the header.
   gates:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
     runs-on: ubuntu-latest
     steps:
       # Full history: check:coords resolves archive coordinates on other branches' commits.
@@ -98,8 +112,11 @@ jobs:
 
   # The graph inside VS Code (U3.1.2, BMO-56; controller decisions 33 and 42): @vscode/test-cli on two
   # pinned versions, the oldest that engines.vscode promises and a current one. Not in `bun run check`,
-  # because it downloads VS Code and wants a display.
+  # because it downloads VS Code and wants a display. By hand only since loop 7: see the header.
+  # Headless, tools/vscode-host.mjs runs `current` alone (1.90.0 crashes), so `oldest` runs only
+  # here, under xvfb.
   vscode-host:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:

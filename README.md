@@ -9,7 +9,7 @@ Code Property Graph for TypeScript/JavaScript/Python. The plan is
 - `apps/*` — front doors: each owns one composition root and may import only its own host SDK.
   `apps/vscode` is the VS Code extension (the manifest stays in the root `package.json`).
 
-`tools/check-deps.mjs` enforces the split; CI proves it fails on planted violations.
+`tools/check-deps.mjs` enforces the split; `bun run check:gates` proves it fails on planted violations.
 
 ## Running
 
@@ -51,3 +51,7 @@ Then press F5 in VS Code to launch the Extension Development Host, and run **CPG
 | `bun run compile` / `watch` | `tsc -b`, then the page bundle, the grammars and the parser runtime (F5's build task) / `tsc -b -w`              |
 | `bun run changeset`         | record a semver change for a package                                                                             |
 | `bun run version-packages`  | apply changesets (`changeset version`)                                                                           |
+
+## CI
+
+A pull request, and a push to `master`, runs `bun run check` on ubuntu and macOS (`.github/workflows/ci.yml`). The `gates` job (`check:gates`, fast cases) and the `vscode-host` job (both pins, under `xvfb-run`) run only when CI is dispatched by hand: `gh workflow run ci.yml --ref <branch> -f full=true`. The weekly Mutation workflow runs Stryker and every `check:gates` case.
