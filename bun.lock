@@ -123,6 +123,7 @@
       "name": "@cpg/resolve",
       "version": "0.0.1",
       "dependencies": {
+        "@cpg/extract": "*",
         "@cpg/model": "*",
       },
     },

@@ -1,6 +1,12 @@
-// @cpg/resolve. REAL: the LSP stdio transport (framing + JSON-RPC connection over ProcessHost), the
-// first piece of the U8 driver. SEAT: every Resolver (types only in contract.ts) until U6c/U8.
+// @cpg/resolve. REAL (U6c.1a): ChainResolver, NullResolver (a PASSTHROUGH control by design),
+// createDefinitionLookup, applyResolutions, unresolved, and the LSP stdio transport (framing +
+// JSON-RPC connection over ProcessHost, the first piece of the U8 driver).
 export type * from './contract';
+export { applyResolutions } from './apply';
+export { ChainResolver } from './chain';
+export { createDefinitionLookup } from './lookup';
+export { NullResolver } from './null';
+export { unresolved } from './resolution';
 export { createLspConnection } from './lsp/connection';
 export type { LspConnection, LspConnectionOptions, RpcOutcome } from './lsp/connection';
 export { createFrameDecoder, encodeMessage } from './lsp/framing';

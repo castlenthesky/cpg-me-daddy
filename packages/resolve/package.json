@@ -2,7 +2,7 @@
   "name": "@cpg/resolve",
   "version": "0.0.1",
   "private": true,
-  "description": "The C-RESOLVE seam and the LSP stdio transport; resolvers land in U6c/U8.",
+  "description": "The C-RESOLVE seam: ChainResolver, NullResolver, applyResolutions, and the LSP stdio transport.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -13,6 +13,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@cpg/extract": "*",
     "@cpg/model": "*"
   }
 }

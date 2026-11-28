@@ -1,6 +1,6 @@
-// C-RESOLVE: the resolver seam. SEAT (types only): implementations land in U3 (the VS Code host
-// accelerator), U6c (chain, null, python-path, applyResolutions), U8 (LSP driver) and U9. The LSP
-// transport (src/lsp/) is REAL and lives outside this file.
+// C-RESOLVE: the resolver seam, types only. What runs lives beside it: U6c.1a's chain, null,
+// definition lookup and applyResolutions, and the LSP transport (src/lsp/); python-path is U6c.1b,
+// the LSP driver U8, the VS Code host accelerator an optional link.
 //
 // Types only, enforced by check-deps rule `contract-types-only`: the only imports are statement-level
 // `import type` from @cpg/model, and the emitted JS is empty. The precise resolver calls the host's
@@ -13,7 +13,7 @@
 // and readonly on every field.
 //
 // The extract-shaped types this seam consumes (EdgeElement, ExtractedFileSet and its SEALED brand) live in
-// @cpg/extract (controller decision 88); applyResolutions (U6c) imports them from there.
+// @cpg/extract (controller decision 88); apply.ts and lookup.ts import them from there.
 
 import type { RESOLUTION_STATUS, WorkspacePath } from '@cpg/model';
 
@@ -190,6 +190,26 @@ export interface ResolveDiagnostics {
 export interface ResolveBatch {
   readonly resolutions: readonly Resolution[];
   readonly diagnostics: ResolveDiagnostics;
+}
+
+/**
+ * The resolve stage's staleness assertion for one `applyResolutions` call, over the ref sites of
+ * every file a batch answers for. Feeds verify's `resolution-health` (CS-5).
+ */
+export interface ResolveReport {
+  readonly siteCount: Readonly<Record<RefKind, number>>;
+  readonly statusCount: Readonly<Record<RefKind, Partial<Record<ResolutionStatus, number>>>>;
+  readonly reasonCount: Partial<Record<ResolutionReason, number>>;
+  /** Sites per `Resolution.resolvedBy`. */
+  readonly byResolver: Readonly<Record<string, number>>;
+  /** Unresolved sites over that kind's own sites (INV-21: no two kinds share a denominator). */
+  readonly unresolvedRate: Partial<Record<RefKind, number>>;
+  /** Batches whose diagnostics say degraded (INV-25). */
+  readonly degradedBatches: number;
+  readonly backendRestarts: number;
+  readonly edgeCount: number;
+  /** Answered (rank >= 2) sites that yield no edge (INV-26): never counted as unresolved. */
+  readonly droppedNoSymbol: number;
 }
 
 /**
