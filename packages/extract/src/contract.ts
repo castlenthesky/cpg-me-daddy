@@ -255,6 +255,12 @@ export type ContainerKind = 'MODULE' | 'TYPE_DECL';
 export interface ParamInfo {
   readonly name: string;
   readonly node: SyntaxNode;
+  /**
+   * Its 0-based position among its def's params, written as the PARAM's `ordinal`. A param the adapter
+   * dropped for a MISSING or empty name still holds its position (decision 114), so the ordinals of
+   * a def's params can skip a number.
+   */
+  readonly ordinal: number;
   readonly typeText?: string;
   readonly defaultText?: string;
 }

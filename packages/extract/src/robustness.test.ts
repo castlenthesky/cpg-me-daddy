@@ -522,23 +522,22 @@ describe('syntax errors through the real grammar (decision 95, C-PARSE I22)', ()
   ] as const;
 
   for (const c of MISSING_IDENT) {
-    // Passes today and after a fix: I4 (no throw), and never an ok file with an empty or MISSING name.
+    // Passes before and after the fix: I4 (no throw), and never an ok file with an empty or MISSING name.
     it(`a MISSING identifier param (${JSON.stringify(c.text.split('\n')[0])}): never a throw, never an empty name`, async () => {
       const r = await run('m.py', c.text);
       expect(r.tree).toBe(c.tree);
       expect(r.missing).toEqual(c.missing);
-      // Today: the MISSING identifier becomes a PARAM named '' and makeNodeId refuses its scope
-      // (ids.ts: a scope segment is a non-empty string), which extractFile reports as `internal`.
+      // Before sprint 40: the MISSING identifier became a PARAM named '' and makeNodeId refused its scope
+      // (ids.ts: a scope segment is a non-empty string), which extractFile reported as `internal`.
       expect(violations(r, 'm.py', '')).toEqual([]);
     });
 
-    // BMO-137 bug: a stray comma fails the whole file `internal`. Decision 95 (ladder README Q5): "for a
-    // region with a syntax error the extractor emits the declarations tree-sitter recovered"; the
-    // builder's contract: `internal` is "a walker or adapter bug, never bad input". python.ts takes an
-    // `identifier` param's text, '' for the MISSING one, and the PARAM's id cannot be minted. The
-    // brief: no declaration is named by a zero-width or MISSING token, so the MISSING identifier is no
-    // PARAM. The surviving params' ordinals and the signature are an open question, not asserted.
-    it.fails(`a MISSING identifier param keeps the def and its real params (BMO-137): ${JSON.stringify(c.text.split('\n')[0])}`, async () => {
+    // BMO-137 bug, fixed in sprint 40: a stray comma failed the whole file `internal`. Decision 95
+    // (ladder README Q5): "for a region with a syntax error the extractor emits the declarations
+    // tree-sitter recovered"; the builder's contract: `internal` is "a walker or adapter bug, never bad
+    // input". Decision 114: the MISSING identifier is no PARAM; the surviving params' ordinals and the
+    // signature are asserted in the decisions 114 and 115 describe below.
+    it(`a MISSING identifier param keeps the def and its real params (BMO-137): ${JSON.stringify(c.text.split('\n')[0])}`, async () => {
       const r = await run('m.py', c.text);
       const file = okFile(r);
       expect(problems(r, file)).toEqual([]);
@@ -612,8 +611,8 @@ describe('NUL bytes and lone surrogates (I19, I23)', () => {
   // `internal` ("C-EXTRACT I19: nodes contains U+0000"), but the ERROR holding the NUL sits inside a
   // default value, and decision 95 (ladder README Q5) says a region with a syntax error emits the
   // declarations tree-sitter recovered: here `f` and its param `a`. The builder's own contract says
-  // `internal` is "a walker or adapter bug, never bad input". python.ts copies the `value` node's
-  // text, NUL included, into PARAM.default. What `default` should hold instead is an open question.
+  // `internal` is "a walker or adapter bug, never bad input". python.ts copied the `value` node's
+  // text, NUL included, into PARAM.default. Decision 115 (sprint 40): that default is omitted.
   const NUL_IN_DEFAULT = 'def f(a=[1, \u0000]):\n    pass\n';
   const NUL_IN_ANNOTATION = 'class C:\n    def m(self, a: Dict[str, \u0000] = {}):\n        pass\n';
   // PRECONDITIONS (input to extract): where the grammar puts each NUL's ERROR.
@@ -628,9 +627,9 @@ describe('NUL bytes and lone surrogates (I19, I23)', () => {
     ],
   ] as const;
 
-  // Passes today and after a fix: I4 (no throw) and I19 (no ok or truncated file holds U+0000). Today
-  // the builder's I19 assert fails the file `internal`, its message starting `C-EXTRACT I19: ` (the
-  // builder's doc); the it.fails below name that as the bug.
+  // Passes before and after the fix: I4 (no throw) and I19 (no ok or truncated file holds U+0000).
+  // Before sprint 40 the builder's I19 assert failed the file `internal`, its message starting
+  // `C-EXTRACT I19: ` (the builder's doc); the two cases below named that as the bug.
   for (const [text, tree] of NUL_TREES) {
     it(`a NUL inside a param (${JSON.stringify(text.split('\n').find((l) => l.includes('\u0000')))}): never a throw, never an emitted NUL`, async () => {
       const r = await run('n.py', text);
@@ -639,7 +638,7 @@ describe('NUL bytes and lone surrogates (I19, I23)', () => {
     });
   }
 
-  it.fails('a NUL inside a default value keeps the def and its param (BMO-137)', async () => {
+  it('a NUL inside a default value keeps the def and its param (BMO-137)', async () => {
     const r = await run('n.py', NUL_IN_DEFAULT);
     const file = okFile(r);
     expect(problems(r, file)).toEqual([]);
@@ -651,9 +650,9 @@ describe('NUL bytes and lone surrogates (I19, I23)', () => {
   });
 
   // BMO-137 bug, the same cause through type_text and the signature: the NUL's ERROR is inside the
-  // annotation `Dict[str, \0]`, so typed_default_parameter's `type` text carries it and the file fails
-  // `internal` instead of keeping C, C.m and its params (decision 95).
-  it.fails('a NUL inside an annotation keeps the class, the method and its params (BMO-137)', async () => {
+  // annotation `Dict[str, \0]`, so typed_default_parameter's `type` text carried it and the file failed
+  // `internal` instead of keeping C, C.m and its params (decision 95). Fixed by decision 115.
+  it('a NUL inside an annotation keeps the class, the method and its params (BMO-137)', async () => {
     const r = await run('n.py', NUL_IN_ANNOTATION);
     const file = okFile(r);
     expect(problems(r, file)).toEqual([]);
@@ -1201,4 +1200,179 @@ describe('large and deep files through parse and extract (I17)', () => {
     },
     SLOW,
   );
+});
+
+// ── What survives a MISSING param name or a NUL (sprint 40, decisions 114 and 115) ──
+//
+// Decision 114: a MISSING or empty param name yields no PARAM, and the surviving params keep their
+// source ordinals: the position each has among the def's params, the MISSING one counted (python.ts's
+// six param shapes; `/`, `*` and an ERROR are no param and take no position, as before). params_count
+// is walk.ts's `params.length`, so it counts the PARAMs emitted; the signature lists them (python.ts).
+// Decision 115: a default or annotation whose text holds U+0000 is omitted (no `default`, no
+// `type_text`, on a PARAM or a MEMBER); the signature keeps each annotation as written with every
+// U+0000 dropped. Trees are PRECONDITIONS (the pinned grammar's input to extract).
+
+const param = (name: string, ordinal: number, more: Record<string, PropertyValue> = {}) => ({
+  name,
+  ordinal,
+  ...more,
+});
+const survivor = (
+  text: string,
+  tree: string,
+  method: string,
+  signature: string,
+  ...params: readonly Record<string, PropertyValue>[]
+) => ({ text, tree, method: `file:m.py:METHOD:${method}`, signature, params });
+
+/** The properties of each PARAM the METHOD has a HAS_PARAM edge to, in node order. */
+function paramProps(file: ExtractedFile, methodId: string): Record<string, PropertyValue>[] {
+  const linked = new Set(
+    file.edges
+      .filter((e) => e.type === 'HAS_PARAM' && e.from.key === methodId)
+      .map((e) => e.to.key),
+  );
+  return file.nodes.filter((n) => linked.has(n.id)).map((n) => ({ ...n.properties }));
+}
+
+describe('a MISSING param name and a NUL in a default or annotation (decisions 114, 115)', () => {
+  const SURVIVORS = [
+    survivor(
+      'def f(,*args):\n    pass\n',
+      '(module (function_definition name: (identifier) parameters: (parameters (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
+      'f',
+      'f(args)',
+      param('args', 1),
+    ),
+    survivor(
+      'def greet(name: str, times=1,, *args, **kwargs) -> str:\n    pass\n',
+      '(module (function_definition name: (identifier) parameters: (parameters (typed_parameter (identifier) type: (type (identifier))) (default_parameter name: (identifier) value: (integer)) (MISSING identifier) (list_splat_pattern (identifier)) (dictionary_splat_pattern (identifier))) return_type: (type (identifier)) body: (block (pass_statement))))',
+      'greet',
+      'greet(name: str, times, args, kwargs) -> str',
+      param('name', 0, { type_text: 'str' }),
+      param('times', 1, { default: '1' }),
+      param('args', 3),
+      param('kwargs', 4),
+    ),
+    // The keyword separator `*` is no param, so it takes no position; the MISSING identifier does.
+    survivor(
+      'def f(a, *, ,*args):\n    pass\n',
+      '(module (function_definition name: (identifier) parameters: (parameters (identifier) (keyword_separator) (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
+      'f',
+      'f(a, args)',
+      param('a', 0),
+      param('args', 2),
+    ),
+    survivor(
+      'def f(a=[1, \u0000]):\n    pass\n',
+      "(module (function_definition name: (identifier) parameters: (parameters (default_parameter name: (identifier) value: (list (integer) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
+      'f',
+      'f(a)',
+      param('a', 0),
+    ),
+    survivor(
+      'class C:\n    def m(self, a: Dict[str, \u0000] = {}):\n        pass\n',
+      "(module (class_definition name: (identifier) body: (block (function_definition name: (identifier) parameters: (parameters (identifier) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (dictionary))) body: (block (pass_statement))))))",
+      'C.m',
+      'm(self, a: Dict[str, ])',
+      param('self', 0),
+      param('a', 1, { default: '{}' }),
+    ),
+    // Each param on its own: a NUL drops only the text that holds it.
+    survivor(
+      'def f(a=[\u0000], b: int = 2, c: Dict[str, \u0000] = 3, d=4):\n    pass\n',
+      "(module (function_definition name: (identifier) parameters: (parameters (default_parameter name: (identifier) value: (list (ERROR (UNEXPECTED '\\0')))) (typed_default_parameter name: (identifier) type: (type (identifier)) value: (integer)) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (integer)) (default_parameter name: (identifier) value: (integer))) body: (block (pass_statement))))",
+      'f',
+      'f(a, b: int, c: Dict[str, ], d)',
+      param('a', 0),
+      param('b', 1, { type_text: 'int', default: '2' }),
+      param('c', 2, { default: '3' }),
+      param('d', 3, { default: '4' }),
+    ),
+    // The return type reaches the signature only: its NUL is dropped there. r2 (review 1): two NULs in
+    // each, so every U+0000 goes, not only the first.
+    survivor(
+      'def f(self, b: Dict[str, \u0000\u0000]) -> List[int, \u0000\u0000]:\n    pass\n',
+      "(module (function_definition name: (identifier) parameters: (parameters (identifier) (typed_parameter (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))))) return_type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
+      'f',
+      'f(self, b: Dict[str, ]) -> List[int, ]',
+      param('self', 0),
+      param('b', 1),
+    ),
+    // r2 (review 2): a NUL in a typed default's value drops its default only; in both, both go.
+    survivor(
+      'def f(e: int = [1, \u0000], g: Dict[str, \u0000] = [1, \u0000]):\n    pass\n',
+      "(module (function_definition name: (identifier) parameters: (parameters (typed_default_parameter name: (identifier) type: (type (identifier)) value: (list (integer) (ERROR (UNEXPECTED '\\0')))) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (list (integer) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
+      'f',
+      'f(e: int, g: Dict[str, ])',
+      param('e', 0, { type_text: 'int' }),
+      param('g', 1),
+    ),
+    // r2 (review 3): `/`, a tuple pattern, an ERROR and `*` take no position; the MISSING one does.
+    survivor(
+      'def f(a, /, b, (c, d), e, , g, *, ,*args):\n    pass\n',
+      '(module (function_definition name: (identifier) parameters: (parameters (identifier) (positional_separator) (identifier) (tuple_pattern (identifier) (identifier)) (identifier) (ERROR) (identifier) (keyword_separator) (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
+      'f',
+      'f(a, b, e, g, args)',
+      param('a', 0),
+      param('b', 1),
+      param('e', 2),
+      param('g', 3),
+      param('args', 5),
+    ),
+    survivor(
+      'def f(a: Dict[str, \u0000], *args: Tuple[int, \u0000], **kw: Dict[str, \u0000]):\n    pass\n',
+      "(module (function_definition name: (identifier) parameters: (parameters (typed_parameter (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0')))))) (typed_parameter (list_splat_pattern (identifier)) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0')))))) (typed_parameter (dictionary_splat_pattern (identifier)) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))))) body: (block (pass_statement))))",
+      'f',
+      'f(a: Dict[str, ], args: Tuple[int, ], kw: Dict[str, ])',
+      param('a', 0),
+      param('args', 1),
+      param('kw', 2),
+    ),
+  ];
+
+  for (const c of SURVIVORS) {
+    it(`${JSON.stringify(c.text.split('\n').find((l) => l.includes('(')))}: ${c.signature}`, async () => {
+      const r = await run('m.py', c.text);
+      expect(r.tree).toBe(c.tree);
+      const file = okFile(r);
+      expect(problems(r, file)).toEqual([]);
+      expect(propsOf(file, c.method)).toMatchObject({
+        signature: c.signature,
+        params_count: c.params.length,
+      });
+      expect(paramProps(file, c.method)).toStrictEqual(c.params);
+    });
+  }
+
+  // r2 (review 4): `z` holds its NUL in the value, which is no property, so it keeps its type_text.
+  const MEMBERS = [
+    [
+      'x: Dict[str, \u0000] = 1\ny: int = 2\nz: int = [1, \u0000]\n',
+      "(module (expression_statement (assignment left: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) right: (integer))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (integer))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (list (integer) (ERROR (UNEXPECTED '\\0'))))))",
+      ['x', 'y', 'z'],
+    ],
+    [
+      'class C:\n    x: Dict[str, \u0000]\n    y: int = 2\n',
+      "(module (class_definition name: (identifier) body: (block (expression_statement (assignment left: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (integer))))))",
+      ['C.x', 'C.y'],
+    ],
+  ] as const;
+  const MEMBER_PROPS = [
+    { name: 'x' },
+    { name: 'y', type_text: 'int' },
+    { name: 'z', type_text: 'int' },
+  ];
+
+  for (const [text, tree, ids] of MEMBERS) {
+    it(`a NUL in a MEMBER's annotation drops its type_text only (${ids.join(', ')})`, async () => {
+      const r = await run('m.py', text);
+      expect(r.tree).toBe(tree);
+      const file = okFile(r);
+      expect(problems(r, file)).toEqual([]);
+      expect(ids.map((x) => propsOf(file, `file:m.py:MEMBER:${x}`))).toStrictEqual(
+        MEMBER_PROPS.slice(0, ids.length),
+      );
+    });
+  }
 });

@@ -85,6 +85,7 @@ function ok(outcome: ExtractOutcome) {
 const param = (name: string, node: SyntaxNode, more: Partial<ParamInfo> = {}): ParamInfo => ({
   name,
   node,
+  ordinal: 0,
   ...more,
 });
 const method = (name: string, more: Partial<MethodInfo> = {}): MethodInfo => ({
@@ -127,7 +128,7 @@ const F = n('function_definition', [0, 0], [1, 8], [F_NAME]);
 const F_INFO = method('f', {
   nameNode: F_NAME,
   signature: 'f(a, b)',
-  params: [param('a', A), param('b', B, { defaultText: '1', typeText: 'int' })],
+  params: [param('a', A), param('b', B, { ordinal: 1, defaultText: '1', typeText: 'int' })],
 });
 
 describe('a METHOD and its PARAMs (decisions 91, 92, 113)', () => {
@@ -184,6 +185,20 @@ describe('a METHOD and its PARAMs (decisions 91, 92, 113)', () => {
         properties: { name: 'b', ordinal: 1, type_text: 'int', default: '1' },
       },
     ]);
+  });
+
+  // Sprint 40 (decision 114): the ordinal is the adapter's, never the param's index in the list, so a
+  // position the adapter left empty (a MISSING name) stays empty; params_count counts the PARAMs.
+  it("writes each param's own ordinal, gaps included (decision 114)", () => {
+    const info = method('f', {
+      params: [param('a', A, { ordinal: 1 }), param('b', B, { ordinal: 3 })],
+    });
+    const gaps = ok(extractFile(req(root), scripted(new Map([[F, info]])).adapter));
+    expect(gaps.nodes.filter((x) => x.label === 'PARAM').map((x) => x.properties)).toStrictEqual([
+      { name: 'a', ordinal: 1 },
+      { name: 'b', ordinal: 3 },
+    ]);
+    expect(gaps.nodes[1]?.properties).toMatchObject({ params_count: 2 });
   });
 
   it('DECLARES it from the MODULE, DEFINES its SYMBOL, HAS_PARAM each PARAM; no PARAM SYMBOL', () => {

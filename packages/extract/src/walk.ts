@@ -87,9 +87,10 @@ function unknownScope(containerScope: readonly string[]): readonly [string, ...s
  *    - METHOD: properties `{ name, kind, signature, params_count: params.length, exported, async,
  *      status: 'ready', docstring_head? }`, and nameRange = `info.nameNode`'s range when given (decision
  *      113); SYMBOL kind `method` in a TYPE_DECL, `function` in the MODULE. Then one PARAM per param in
- *      order: id `PARAM:<method scope>.<name>`, range the param node's, properties `{ name, ordinal,
- *      type_text?, default? }`, a HAS_PARAM edge from the METHOD, no SYMBOL (decision 91). Its body is
- *      not walked (Pass B; nested named declarations are never descended, decision 92).
+ *      order: id `PARAM:<method scope>.<name>`, range the param node's, properties `{ name, ordinal:
+ *      param.ordinal, type_text?, default? }` (the ordinal is the param's own and can skip a number,
+ *      decision 114), a HAS_PARAM edge from the METHOD, no SYMBOL (decision 91). Its body is not walked
+ *      (Pass B; nested named declarations are never descended, decision 92).
  *    - MEMBER: properties `{ name, type_text?, visibility? }`; SYMBOL kind `variable`. Its value is
  *      not walked (Pass B).
  *    A property marked `?` is present only when its info field is.
@@ -292,7 +293,7 @@ export function walkFile(
     );
 
     const params: Binding[] = [];
-    for (const [ordinal, param] of info.params.entries()) {
+    for (const param of info.params) {
       const paramScope = appendScope(scope, param.name);
       const paramId = mintId('PARAM', paramScope);
       params.push({ name: param.name, id: paramId });
@@ -305,7 +306,7 @@ export function walkFile(
         range: nodeRange(param.node),
         properties: {
           name: param.name,
-          ordinal,
+          ordinal: param.ordinal,
           ...(param.typeText !== undefined ? { type_text: param.typeText } : {}),
           ...(param.defaultText !== undefined ? { default: param.defaultText } : {}),
         },
