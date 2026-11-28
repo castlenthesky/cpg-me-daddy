@@ -108,8 +108,13 @@ function missingRanges(root: TreeNode): SourceRange[] {
 }
 
 /**
- * Decision 95's rule over the real tree: one UNKNOWN per ERROR node directly under a container, the
- * MODULE's children and the body of every class a container holds (bare or decorated, with a name).
+ * Decision 95's rule over the real tree, in walk.ts's reading: one UNKNOWN per ERROR node among a
+ * container's children, which are the MODULE's named children and the body's named children of every
+ * class a container holds (bare or decorated, with a name). This is the same reading the hand counts
+ * use, so it guards the hand count, not the reading: README Q5's "directly under a container" can also
+ * be read to cover an ERROR that is a direct child of a class_definition outside its body (its header).
+ * That reading is an open question on the BMO-137 PR; under it, the two class-header cases below count
+ * one more UNKNOWN each.
  */
 function unknownsByRule(root: TreeNode): number {
   let count = 0;
@@ -284,6 +289,20 @@ function problems(r: Run, file: ExtractedFile): string[] {
   return out;
 }
 
+/**
+ * For a known bug that holds I4 either way: an ok or truncated file must pass problems(); a failure
+ * must be `internal` on `path` with a message starting `prefix`. Returns what is wrong (empty if
+ * nothing), so an outcome that changes shows in the diff.
+ */
+function violations(r: Run, path: string, prefix: string): string[] {
+  const o = r.outcome;
+  if (o.kind !== 'failed') return problems(r, o.file);
+  const { code, message } = o.error;
+  return code === 'internal' && o.error.path === path && message.startsWith(prefix)
+    ? []
+    : [`failed ${JSON.stringify(o.error)}`];
+}
+
 /** `r:c-r:c`, 0-based rows (I23). */
 const fmt0 = (r: SourceRange) => `${r.startRow}:${r.startColumn}-${r.endRow}:${r.endColumn}`;
 /** `l:c-l:c`, 1-based lines: the ladder's range format. */
@@ -316,8 +335,10 @@ interface Recovery {
 
 const RECOVERIES: readonly Recovery[] = [
   {
-    // The brief's MISSING example: this grammar recovers it as an ERROR inside the class HEADER (not
-    // under a container), so the class is kept and its body is the `pass`; m is not recovered at all.
+    // The brief's MISSING example: this grammar recovers it as an ERROR inside the class HEADER, a child
+    // of the class_definition but not of its body, so it is none of a container's children (walk.ts),
+    // the class is kept with the `pass` as its body, and m is not recovered at all. See unknownsByRule
+    // for the other reading of README Q5 (one UNKNOWN here), left open.
     name: 'an unclosed parameter list inside a class',
     text: 'class C:\n def m(self:\n  pass',
     tree: '(module (class_definition name: (identifier) (ERROR (identifier) (identifier)) body: (block (pass_statement))))',
@@ -412,7 +433,8 @@ const RECOVERIES: readonly Recovery[] = [
   },
   {
     // Counted per scope. The `)` that opens the class body joins the class HEADER's ERROR in this
-    // grammar (no container child, so no UNKNOWN); the one after `x = 1` is under the body.
+    // grammar (no container's child in walk.ts's reading, so no UNKNOWN; 4 under the other reading of
+    // README Q5, left open); the one after `x = 1` is under the body.
     name: 'ERRORs under the MODULE and in a class body, one scope at a time',
     text: ')\nclass C:\n    )\n    x = 1\n    )\n)\n',
     tree: '(module (ERROR) (class_definition name: (identifier) (ERROR) body: (block (expression_statement (assignment left: (identifier) right: (integer))) (ERROR))) (ERROR))',
@@ -453,6 +475,83 @@ describe('syntax errors through the real grammar (decision 95, C-PARSE I22)', ()
       params_count: 0,
     });
   });
+
+  // A stray comma in a parameter list: the grammar inserts a zero-width MISSING identifier (the only
+  // MISSING-identifier inputs found; every MISSING name attempt became an ERROR). PRECONDITIONS, input.
+  const MISSING_IDENT = [
+    {
+      text: 'def f(,*args):\n    pass\n',
+      tree: '(module (function_definition name: (identifier) parameters: (parameters (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
+      missing: [at(0, 6, 0, 6)],
+      // python.ts: a list_splat_pattern is a PARAM named by the identifier inside, range the pattern's.
+      nodes: [
+        'MODULE file:m.py:MODULE:$root 0:0-2:0',
+        'METHOD file:m.py:METHOD:f 0:0-1:8 name 0:4-0:5',
+        'PARAM file:m.py:PARAM:f.args 0:7-0:12',
+      ],
+    },
+    {
+      // The Pass A fixture's `greet` (test/fixtures/pass-a) with one comma doubled.
+      text: 'def greet(name: str, times=1,, *args, **kwargs) -> str:\n    pass\n',
+      tree: '(module (function_definition name: (identifier) parameters: (parameters (typed_parameter (identifier) type: (type (identifier))) (default_parameter name: (identifier) value: (integer)) (MISSING identifier) (list_splat_pattern (identifier)) (dictionary_splat_pattern (identifier))) return_type: (type (identifier)) body: (block (pass_statement))))',
+      missing: [at(0, 29, 0, 29)],
+      nodes: [
+        'MODULE file:m.py:MODULE:$root 0:0-2:0',
+        'METHOD file:m.py:METHOD:greet 0:0-1:8 name 0:4-0:9',
+        'PARAM file:m.py:PARAM:greet.name 0:10-0:19',
+        'PARAM file:m.py:PARAM:greet.times 0:21-0:28',
+        'PARAM file:m.py:PARAM:greet.args 0:31-0:36',
+        'PARAM file:m.py:PARAM:greet.kwargs 0:38-0:46',
+      ],
+    },
+  ] as const;
+
+  for (const c of MISSING_IDENT) {
+    // Passes today and after a fix: I4 (no throw), and never an ok file with an empty or MISSING name.
+    it(`a MISSING identifier param (${JSON.stringify(c.text.split('\n')[0])}): never a throw, never an empty name`, async () => {
+      const r = await run('m.py', c.text);
+      expect(r.tree).toBe(c.tree);
+      expect(r.missing).toEqual(c.missing);
+      // Today: the MISSING identifier becomes a PARAM named '' and makeNodeId refuses its scope
+      // (ids.ts: a scope segment is a non-empty string), which extractFile reports as `internal`.
+      expect(violations(r, 'm.py', '')).toEqual([]);
+    });
+
+    // BMO-137 bug: a stray comma fails the whole file `internal`. Decision 95 (ladder README Q5): "for a
+    // region with a syntax error the extractor emits the declarations tree-sitter recovered"; the
+    // builder's contract: `internal` is "a walker or adapter bug, never bad input". python.ts takes an
+    // `identifier` param's text, '' for the MISSING one, and the PARAM's id cannot be minted. The
+    // brief: no declaration is named by a zero-width or MISSING token, so the MISSING identifier is no
+    // PARAM. The surviving params' ordinals and the signature are an open question, not asserted.
+    it.fails(`a MISSING identifier param keeps the def and its real params (BMO-137): ${JSON.stringify(c.text.split('\n')[0])}`, async () => {
+      const r = await run('m.py', c.text);
+      const file = okFile(r);
+      expect(problems(r, file)).toEqual([]);
+      expect(lines(file)).toEqual(c.nodes);
+    });
+  }
+
+  // A file cut off inside a parameter list with no newline: the ROOT is the ERROR (no module node).
+  // extractor.ts check 4 and C-EXTRACT's ExtractOutcome name this failure: `root-type-mismatch` (the
+  // adapter's moduleRootType is `module`). Whether an ERROR root should instead be a MODULE with one
+  // UNKNOWN (C-PARSE I22, decision 95) is an open question on the BMO-137 PR.
+  const ERROR_ROOTS = [
+    { text: 'class C:\n    def f(self', tree: '(ERROR (identifier) (identifier) (identifier))' },
+    {
+      text: 'x = 1\n\n\nclass C:\n    y = 2\n\n    def m(s',
+      tree: '(ERROR (expression_statement (assignment left: (identifier) right: (integer))) (identifier) (expression_statement (assignment left: (identifier) right: (integer))) (identifier) (identifier))',
+    },
+  ] as const;
+
+  for (const c of ERROR_ROOTS) {
+    it(`an ERROR root (${JSON.stringify(c.text.split('\n').at(-1))}) is the named failure root-type-mismatch`, async () => {
+      const r = await run('m.py', c.text);
+      expect(r.tree).toBe(c.tree);
+      if (r.outcome.kind !== 'failed') throw new Error(`expected failed, got ${r.outcome.kind}`);
+      expect(r.outcome.error.code).toBe('root-type-mismatch');
+      expect(r.outcome.error.path).toBe('m.py');
+    });
+  }
 });
 
 // ── Bytes no Python file should hold ──
@@ -500,11 +599,33 @@ describe('NUL bytes and lone surrogates (I19, I23)', () => {
   // declarations tree-sitter recovered: here `f` and its param `a`. The builder's own contract says
   // `internal` is "a walker or adapter bug, never bad input". python.ts copies the `value` node's
   // text, NUL included, into PARAM.default. What `default` should hold instead is an open question.
-  it.fails('a NUL inside a default value keeps the def and its param (BMO-137)', async () => {
-    const r = await run('n.py', 'def f(a=[1, \u0000]):\n    pass\n');
-    expect(r.tree).toBe(
+  const NUL_IN_DEFAULT = 'def f(a=[1, \u0000]):\n    pass\n';
+  const NUL_IN_ANNOTATION = 'class C:\n    def m(self, a: Dict[str, \u0000] = {}):\n        pass\n';
+  // PRECONDITIONS (input to extract): where the grammar puts each NUL's ERROR.
+  const NUL_TREES = [
+    [
+      NUL_IN_DEFAULT,
       "(module (function_definition name: (identifier) parameters: (parameters (default_parameter name: (identifier) value: (list (integer) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
-    );
+    ],
+    [
+      NUL_IN_ANNOTATION,
+      "(module (class_definition name: (identifier) body: (block (function_definition name: (identifier) parameters: (parameters (identifier) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (dictionary))) body: (block (pass_statement))))))",
+    ],
+  ] as const;
+
+  // Passes today and after a fix: I4 (no throw) and I19 (no ok or truncated file holds U+0000). Today
+  // the builder's I19 assert fails the file `internal`, its message starting `C-EXTRACT I19: ` (the
+  // builder's doc); the it.fails below name that as the bug.
+  for (const [text, tree] of NUL_TREES) {
+    it(`a NUL inside a param (${JSON.stringify(text.split('\n').find((l) => l.includes('\u0000')))}): never a throw, never an emitted NUL`, async () => {
+      const r = await run('n.py', text);
+      expect(r.tree).toBe(tree);
+      expect(violations(r, 'n.py', 'C-EXTRACT I19: ')).toEqual([]);
+    });
+  }
+
+  it.fails('a NUL inside a default value keeps the def and its param (BMO-137)', async () => {
+    const r = await run('n.py', NUL_IN_DEFAULT);
     const file = okFile(r);
     expect(problems(r, file)).toEqual([]);
     expect(lines(file)).toEqual([
@@ -518,10 +639,7 @@ describe('NUL bytes and lone surrogates (I19, I23)', () => {
   // annotation `Dict[str, \0]`, so typed_default_parameter's `type` text carries it and the file fails
   // `internal` instead of keeping C, C.m and its params (decision 95).
   it.fails('a NUL inside an annotation keeps the class, the method and its params (BMO-137)', async () => {
-    const r = await run(
-      'n.py',
-      'class C:\n    def m(self, a: Dict[str, \u0000] = {}):\n        pass\n',
-    );
+    const r = await run('n.py', NUL_IN_ANNOTATION);
     const file = okFile(r);
     expect(problems(r, file)).toEqual([]);
     expect(lines(file)).toEqual([
