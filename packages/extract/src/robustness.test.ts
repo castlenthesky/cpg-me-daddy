@@ -507,6 +507,20 @@ const RECOVERIES: readonly Recovery[] = [
     ],
   },
   {
+    // r2 (review a6): a nested class's header ERROR is scoped by the whole class chain.
+    name: 'a header ERROR in a nested class',
+    text: 'class C:\n    class D(:\n        x = 1\n',
+    tree: '(module (class_definition name: (identifier) body: (block (class_definition name: (identifier) (ERROR) body: (block (expression_statement (assignment left: (identifier) right: (integer))))))))',
+    unknowns: 1,
+    nodes: [
+      'MODULE file:m.py:MODULE:$root 0:0-3:0',
+      'TYPE_DECL file:m.py:TYPE_DECL:C 0:0-2:13',
+      'TYPE_DECL file:m.py:TYPE_DECL:C.D 1:4-2:13',
+      'UNKNOWN file:m.py:UNKNOWN:C.D:0 1:11-1:12',
+      'MEMBER file:m.py:MEMBER:C.D.x 2:8-2:13',
+    ],
+  },
+  {
     // A class-level compound statement's ERROR is the class's.
     name: 'an ERROR in a compound statement in a class body',
     text: 'class K:\n    if x:\n        )\n        y = 1\n',
@@ -636,10 +650,16 @@ describe('syntax errors through the real grammar (decision 95, C-PARSE I22)', ()
       tree: '(ERROR (identifier) (parameters (MISSING ")")))',
       span: '0:0-2:0',
     },
+    {
+      // r2 (review a7): a call the root holds is not Pass B's either
+      text: 'foo()\ndef f(:\n  return [\n',
+      tree: '(ERROR (expression_statement (call function: (identifier) arguments: (argument_list))) (identifier) (parameters (MISSING ")")))',
+      span: '0:0-3:0',
+    },
   ] as const;
 
   for (const c of ERROR_ROOTS) {
-    it(`an ERROR root (${JSON.stringify(c.text.split('\n').at(-1))}) is a MODULE and one UNKNOWN`, async () => {
+    it(`an ERROR root (${JSON.stringify(c.text.split('\n')[0])}...) is a MODULE and one UNKNOWN`, async () => {
       const r = await run('m.py', c.text);
       expect(r.tree).toBe(c.tree);
       const file = okFile(r);

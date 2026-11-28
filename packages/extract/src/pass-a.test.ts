@@ -891,6 +891,37 @@ describe("a compound statement's children are its container's, one level deeper 
   });
 });
 
+// r2 (review a5): Pass B's input, seen through a recording classifyExpression: a compound statement is
+// never handed over, even one that stands for nothing (an empty list is still an answer)
+it("hands Pass B each visited child but a compound statement's own node, an empty one included", () => {
+  const s2 = n('expression_statement', [0, 0], [0, 3]);
+  const empty = n('cmp', [1, 0], [1, 5]);
+  const t1 = n('expression_statement', [2, 4], [2, 7]);
+  const t2 = n('expression_statement', [3, 4], [3, 7]);
+  const full = n('cmp', [2, 0], [3, 7]);
+  const seen: SyntaxNode[] = [];
+  const { adapter } = compounding(
+    new Map(),
+    new Map([
+      [empty, []],
+      [full, [t1, t2]],
+    ]),
+  );
+  const recording: LanguageAdapter = {
+    ...adapter,
+    classifyExpression: (node) => {
+      seen.push(node);
+      return undefined;
+    },
+  };
+  const file = ok(extractFile(req(n('module', [0, 0], [4, 0], [s2, empty, full])), recording));
+  expect([seen, file.nodes.map((x) => x.id), file.stats.astNodesVisited]).toEqual([
+    [s2, t1, t2],
+    [MOD],
+    6,
+  ]);
+});
+
 describe('a class header ERROR is an UNKNOWN in the class (decision 117)', () => {
   // class C ( H1 H2 ): { x, CE }. H1, H2 and the body children are depth 2.
   const H1 = n('ERROR', [0, 7], [0, 8]);

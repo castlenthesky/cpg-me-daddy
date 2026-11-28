@@ -101,7 +101,8 @@ const FORMS = lines(
     ['match s:', '    # note', '    case 1 if g:', '        pass', '    case _:', '        pass'], // 31-36
     ['if a:', '    while b:', '        pass'], // 37-39: a nested compound statement stays whole
     ['if a: x = 1', 'else: y = 2'], // 40-41: one-line bodies
-    ['if x:', '    )', '    def f(): pass'], // 42-44: an ERROR in the header stays
+    ['while v:', '    a = 1', '    pass', '    b()'], // 42-45: r2 (review a1), a block of three, in order
+    ['if x:', '    )', '    def f(): pass'], // 46-48: an ERROR in the header stays
   ].flat(),
 );
 const FORM_CHILDREN = [
@@ -115,7 +116,8 @@ const FORM_CHILDREN = [
   'identifier@31:6 comment@32:4 case_pattern@33:9 if_clause@33:11 pass_statement@34:8 case_pattern@35:9 pass_statement@36:8',
   'identifier@37:3 while_statement@38:4',
   'identifier@40:3 expression_statement@40:6 expression_statement@41:6',
-  'identifier@42:3 ERROR@43:4 function_definition@44:4',
+  'identifier@42:6 expression_statement@43:4 pass_statement@44:4 expression_statement@45:4',
+  'identifier@46:3 ERROR@47:4 function_definition@48:4',
 ];
 const NOT_COMPOUND = lines(
   ...[
@@ -161,6 +163,27 @@ describe('python.ts compoundChildren (stop-list 196) and headerErrors (decision 
     );
   });
 
+  // r2 (review a2): every clause kind on its own, and the match's own block, is no compound statement
+  it('answers undefined for each clause of FORMS and for the match block, each on its own', async () => {
+    const got = await withRoot(FORMS, (root) => {
+      const [ifs, , , , trys, withs, , match] = root.namedChildren;
+      const block = match?.childForFieldName('body');
+      return [ifs, trys, withs, block]
+        .flatMap((s) => (s === block ? [s, ...(s?.namedChildren ?? [])] : (s?.namedChildren ?? [])))
+        .filter((c) => c !== undefined && (c.type.endsWith('_clause') || c === block))
+        .map(
+          (c) =>
+            `${at(c)} ${pythonAdapter.compoundChildren?.(c) === undefined ? 'undefined' : 'defined'}`,
+        );
+    });
+    expect(got).toEqual(
+      ['elif_clause@2:0', 'else_clause@4:0', 'except_clause@19:0', 'except_clause@21:0']
+        .concat(['else_clause@23:0', 'finally_clause@25:0', 'with_clause@27:5', 'block@31:8'])
+        .concat(['case_clause@33:4', 'case_clause@35:4'])
+        .map((c) => `${c} undefined`),
+    );
+  });
+
   it("gives a class its header's ERRORs, decorated or not, and no field when there is none", async () => {
     expect(
       await Promise.all(
@@ -169,9 +192,18 @@ describe('python.ts compoundChildren (stop-list 196) and headerErrors (decision 
           '@d\nclass C(:\n    def m(self): pass\n',
           'class C:\n def m(self:\n  pass',
           'class C(B):\n    pass\n',
+          'class C ) (B) ) :\n    pass\n', // r2 (review a3): two, both kept
+          'class C(A + ):\n    pass\n', // r2 (review a4): inside the base list, not the class's own
         ].map(headerErrorsOf),
       ),
-    ).toEqual([['ERROR@0:7'], ['ERROR@1:7'], ['ERROR@1:1'], 'absent']);
+    ).toEqual([
+      ['ERROR@0:7'],
+      ['ERROR@1:7'],
+      ['ERROR@1:1'],
+      'absent',
+      ['ERROR@0:8', 'ERROR@0:14'],
+      'absent',
+    ]);
   });
 });
 
@@ -308,6 +340,17 @@ describe('Pass B through every compound form (decision 92: no call counted twice
       ['CALL:f1:0 -> METHOD:f1'],
       ['CALL:$root:10 -> `m.py`/f1(). resolved'],
       ['MEMBER:V1 -> CALL:$root:10 V1'],
+    ]);
+  });
+
+  // r2 (review b1): a MEMBER in a compound block joins the module members in source order
+  it('a call reaches the last module MEMBER before its statement, through compound blocks', async () => {
+    const file = await extractOk(
+      lines('V = 1', 'if c:', '    use(V)', '    V = 2', 'else:', '    V = 3', 'use(V)'),
+    );
+    expect([declIds(file), edgesOf(file, 'REACHING_DEF')]).toEqual([
+      ['MEMBER:V', 'MEMBER:V:1', 'MEMBER:V:2'],
+      ['MEMBER:V -> CALL:$root:0 V', 'MEMBER:V:2 -> CALL:$root:1 V'],
     ]);
   });
 });
