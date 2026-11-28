@@ -29,11 +29,14 @@ export interface Declared {
   readonly params: readonly Binding[];
 }
 
-/** One child of the MODULE or of a TYPE_DECL body that Pass A visited (never an ERROR), in pre-order. */
+/**
+ * One child of the MODULE or of a TYPE_DECL body (or of a compound statement there, stop-list 196)
+ * that Pass A visited, never an ERROR nor a compound statement, in pre-order.
+ */
 export interface ContainerChild {
   readonly node: SyntaxNode;
   readonly container: ContainerKind;
-  /** Absent when Pass A declared nothing for it: a statement, walked whole in `$root`. */
+  /** Absent when Pass A declared nothing for it: a statement or a compound statement's part, in `$root`. */
   readonly declared?: Declared;
 }
 
@@ -82,10 +85,12 @@ const position = (node: SyntaxNode) => ({
  * a property's getter and setter) continues its scope's count in source order, so I7 holds. So:
  * - a METHOD's body is its region; a nested `def`/`class` in it (and its decorators) is never descended
  *   (decision 92); a `lambda` is transparent (its calls are its METHOD's);
- * - `$root` holds, in source order: the module and class-body statements Pass A did not declare (walked
- *   whole), MEMBER initializers (module- or class-level), and the decorators of every declaration at
- *   module or class level. An ERROR node is not descended anywhere (decision 95). Parameters' defaults,
- *   annotations and class bases are not walked in v1.
+ * - `$root` holds, in source order: the module and class-level statements Pass A did not declare,
+ *   each walked whole once, a compound statement's own parts among them (a condition, a with clause, a
+ *   for target and iterable, an except value, a match subject, a case pattern or guard; stop-list 196);
+ *   MEMBER initializers (module- or class-level); and the decorators of every declaration at module or
+ *   class level. An ERROR node is not descended anywhere (decision 95). Parameters'
+ *   defaults, annotations and class bases are not walked in v1.
  * - a decorator CALL's walk continues into its arguments only (python.ts); any other CALL's into all
  *   its named children.
  *

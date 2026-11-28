@@ -4,7 +4,9 @@
 // Where the expected values come from:
 // - C-EXTRACT (docs/outline/05-contracts.yaml): I3, I4, I17 (budget), I19 (no U+0000), I23 (0-based rows,
 //   UTF-16 columns), the ExtractOutcome shape; the walker's rules in src/walk.ts's doc comment (the MODULE
-//   range, Pass A, UNKNOWN per ERROR under a container (decision 95), the budget); python.ts's doc comments
+//   range, Pass A, UNKNOWN per ERROR under a container (decision 95) or in a class header (decision 117), an
+//   ERROR root's one UNKNOWN (decision 116), a compound statement's children as its container's (stop-list
+//   196), the budget); python.ts's doc comments
 //   (names, signature, async, docstring_head, type_text, default); makeNodeId / makeSymbolFqn's grammar
 //   (04-schema id_rule and SYMBOL.fqn, as written in packages/model/src/schema/{ids,symbols}.ts).
 // - fixtures/ladder/README.md: a MODULE spans the whole file including its last newline, an empty file is
@@ -107,16 +109,39 @@ function missingRanges(root: TreeNode): SourceRange[] {
   return found;
 }
 
+const COMPOUND = new Set([
+  'if_statement',
+  'for_statement',
+  'while_statement',
+  'try_statement',
+  'with_statement',
+  'match_statement',
+]);
+const CLAUSES = new Set([
+  'elif_clause',
+  'else_clause',
+  'except_clause',
+  'finally_clause',
+  'case_clause',
+]);
+
+/** A compound statement's stand-ins (python.ts): blocks, clauses and a match's block opened in place. */
+function compoundKids(node: TreeNode): TreeNode[] {
+  return node.namedChildren.flatMap((child) => {
+    if (child.type === 'block' && node.type !== 'match_statement') return [...child.namedChildren];
+    return child.type === 'block' || CLAUSES.has(child.type) ? compoundKids(child) : [child];
+  });
+}
+
 /**
  * Decision 95's rule over the real tree, in walk.ts's reading: one UNKNOWN per ERROR node among a
- * container's children, which are the MODULE's named children and the body's named children of every
- * class a container holds (bare or decorated, with a name). This is the same reading the hand counts
- * use, so it guards the hand count, not the reading: README Q5's "directly under a container" can also
- * be read to cover an ERROR that is a direct child of a class_definition outside its body (its header).
- * That reading is an open question on the BMO-137 PR; under it, the two class-header cases below count
- * one more UNKNOWN each.
+ * container's children, which are the MODULE's named children, the header ERRORs (decision 117) and
+ * the body's named children of every class a container holds (bare or decorated, with a name), and in
+ * place of a compound statement its stand-ins (stop-list 196); an ERROR root is one UNKNOWN (decision
+ * 116). This is the same reading the hand counts use, so it guards the hand count, not the reading.
  */
 function unknownsByRule(root: TreeNode): number {
+  if (root.type === 'ERROR') return 1;
   let count = 0;
   const visit = (children: readonly TreeNode[]): void => {
     for (const child of children) {
@@ -124,9 +149,14 @@ function unknownsByRule(root: TreeNode): number {
         count += 1;
         continue;
       }
+      if (COMPOUND.has(child.type)) {
+        visit(compoundKids(child));
+        continue;
+      }
       const cls =
         child.type === 'decorated_definition' ? child.childForFieldName('definition') : child;
       if (cls?.type !== 'class_definition' || cls.childForFieldName('name') === null) continue;
+      visit(cls.namedChildren.filter((c) => c.type === 'ERROR'));
       visit(cls.childForFieldName('body')?.namedChildren ?? []);
     }
   };
@@ -327,7 +357,7 @@ interface Recovery {
   readonly text: string;
   /** PRECONDITION: the pinned grammar's tree for `text` (input to extract, not its output). */
   readonly tree: string;
-  /** Decision 95 on that tree: ERROR nodes directly under the MODULE or a recovered class body. */
+  /** Decisions 95-117 on that tree: ERRORs directly under the MODULE, a recovered class or its body. */
   readonly unknowns: number;
   /** The Pass A nodes, in pre-order (I3): what tree-sitter recovered, by Pass A's rules. */
   readonly nodes: readonly string[];
@@ -336,14 +366,17 @@ interface Recovery {
 const RECOVERIES: readonly Recovery[] = [
   {
     // The brief's MISSING example: this grammar recovers it as an ERROR inside the class HEADER, a child
-    // of the class_definition but not of its body, so it is none of a container's children (walk.ts),
-    // the class is kept with the `pass` as its body, and m is not recovered at all. See unknownsByRule
-    // for the other reading of README Q5 (one UNKNOWN here), left open.
+    // of the class_definition but not of its body. Decision 117: one UNKNOWN in the class's scope, so m,
+    // which is not recovered at all, leaves a trace; the class is kept with the `pass` as its body.
     name: 'an unclosed parameter list inside a class',
     text: 'class C:\n def m(self:\n  pass',
     tree: '(module (class_definition name: (identifier) (ERROR (identifier) (identifier)) body: (block (pass_statement))))',
-    unknowns: 0,
-    nodes: ['MODULE file:m.py:MODULE:$root 0:0-2:6', 'TYPE_DECL file:m.py:TYPE_DECL:C 0:0-2:6'],
+    unknowns: 1,
+    nodes: [
+      'MODULE file:m.py:MODULE:$root 0:0-2:6',
+      'TYPE_DECL file:m.py:TYPE_DECL:C 0:0-2:6',
+      'UNKNOWN file:m.py:UNKNOWN:C:0 1:1-1:12',
+    ],
   },
   {
     // 06-measurements: `def broken(:` is one zero-width MISSING ')' and no ERROR.
@@ -433,19 +466,71 @@ const RECOVERIES: readonly Recovery[] = [
   },
   {
     // Counted per scope. The `)` that opens the class body joins the class HEADER's ERROR in this
-    // grammar (no container's child in walk.ts's reading, so no UNKNOWN; 4 under the other reading of
-    // README Q5, left open); the one after `x = 1` is under the body.
+    // grammar: decision 117 makes it the class's first UNKNOWN, before the one after `x = 1` in the body.
     name: 'ERRORs under the MODULE and in a class body, one scope at a time',
     text: ')\nclass C:\n    )\n    x = 1\n    )\n)\n',
     tree: '(module (ERROR) (class_definition name: (identifier) (ERROR) body: (block (expression_statement (assignment left: (identifier) right: (integer))) (ERROR))) (ERROR))',
-    unknowns: 3,
+    unknowns: 4,
     nodes: [
       'MODULE file:m.py:MODULE:$root 0:0-6:0',
       'UNKNOWN file:m.py:UNKNOWN:$root:0 0:0-0:1',
       'TYPE_DECL file:m.py:TYPE_DECL:C 1:0-4:5',
+      'UNKNOWN file:m.py:UNKNOWN:C:0 2:4-2:5',
       'MEMBER file:m.py:MEMBER:C.x 3:4-3:9',
-      'UNKNOWN file:m.py:UNKNOWN:C:0 4:4-4:5',
+      'UNKNOWN file:m.py:UNKNOWN:C:1 4:4-4:5',
       'UNKNOWN file:m.py:UNKNOWN:$root:1 5:0-5:1',
+    ],
+  },
+  {
+    // Stop-list 196: an if_statement at module level is not a scope; its header ERROR is the MODULE's.
+    name: 'an ERROR in an if header, the def in its block kept',
+    text: 'if x:\n    )\n    def f(): pass\n',
+    tree: '(module (if_statement condition: (identifier) (ERROR) consequence: (block (function_definition name: (identifier) parameters: (parameters) body: (block (pass_statement))))))',
+    unknowns: 1,
+    nodes: [
+      'MODULE file:m.py:MODULE:$root 0:0-3:0',
+      'UNKNOWN file:m.py:UNKNOWN:$root:0 1:4-1:5',
+      'METHOD file:m.py:METHOD:f 2:4-2:17 name 2:8-2:9',
+    ],
+  },
+  {
+    // The grammar wraps the try body in the ERROR and gives the except block as the body: f is inside
+    // the UNKNOWN (never descended, decision 95), g is the try_statement's block statement.
+    name: 'a try whose except header broke',
+    text: 'try:\n    def f(): pass\nexcept )\n    def g(): pass\n',
+    tree: '(module (try_statement (ERROR (block (function_definition name: (identifier) parameters: (parameters) body: (block (pass_statement))))) body: (block (function_definition name: (identifier) parameters: (parameters) body: (block (pass_statement))))))',
+    unknowns: 1,
+    nodes: [
+      'MODULE file:m.py:MODULE:$root 0:0-4:0',
+      'UNKNOWN file:m.py:UNKNOWN:$root:0 0:4-2:8',
+      'METHOD file:m.py:METHOD:g 3:4-3:17 name 3:8-3:9',
+    ],
+  },
+  {
+    // r2 (review a6): a nested class's header ERROR is scoped by the whole class chain.
+    name: 'a header ERROR in a nested class',
+    text: 'class C:\n    class D(:\n        x = 1\n',
+    tree: '(module (class_definition name: (identifier) body: (block (class_definition name: (identifier) (ERROR) body: (block (expression_statement (assignment left: (identifier) right: (integer))))))))',
+    unknowns: 1,
+    nodes: [
+      'MODULE file:m.py:MODULE:$root 0:0-3:0',
+      'TYPE_DECL file:m.py:TYPE_DECL:C 0:0-2:13',
+      'TYPE_DECL file:m.py:TYPE_DECL:C.D 1:4-2:13',
+      'UNKNOWN file:m.py:UNKNOWN:C.D:0 1:11-1:12',
+      'MEMBER file:m.py:MEMBER:C.D.x 2:8-2:13',
+    ],
+  },
+  {
+    // A class-level compound statement's ERROR is the class's.
+    name: 'an ERROR in a compound statement in a class body',
+    text: 'class K:\n    if x:\n        )\n        y = 1\n',
+    tree: '(module (class_definition name: (identifier) body: (block (if_statement condition: (identifier) (ERROR) consequence: (block (expression_statement (assignment left: (identifier) right: (integer))))))))',
+    unknowns: 1,
+    nodes: [
+      'MODULE file:m.py:MODULE:$root 0:0-4:0',
+      'TYPE_DECL file:m.py:TYPE_DECL:K 0:0-3:13',
+      'UNKNOWN file:m.py:UNKNOWN:K:0 2:8-2:9',
+      'MEMBER file:m.py:MEMBER:K.y 3:8-3:13',
     ],
   },
 ];
@@ -545,25 +630,50 @@ describe('syntax errors through the real grammar (decision 95, C-PARSE I22)', ()
     });
   }
 
-  // A file cut off inside a parameter list with no newline: the ROOT is the ERROR (no module node).
-  // extractor.ts check 4 and C-EXTRACT's ExtractOutcome name this failure: `root-type-mismatch` (the
-  // adapter's moduleRootType is `module`). Whether an ERROR root should instead be a MODULE with one
-  // UNKNOWN (C-PARSE I22, decision 95) is an open question on the BMO-137 PR.
+  // A file cut off inside a parameter list (being typed): the ROOT is the ERROR (no module node).
+  // Decision 116: a MODULE spanning the file plus one UNKNOWN for the root, never root-type-mismatch;
+  // the root is not descended (decision 95), so what tree-sitter recovered inside it (x, y) is not
+  // declared. Pass B finds nothing either: the ERROR is all there is.
   const ERROR_ROOTS = [
-    { text: 'class C:\n    def f(self', tree: '(ERROR (identifier) (identifier) (identifier))' },
+    {
+      text: 'class C:\n    def f(self',
+      tree: '(ERROR (identifier) (identifier) (identifier))',
+      span: '0:0-1:14',
+    },
     {
       text: 'x = 1\n\n\nclass C:\n    y = 2\n\n    def m(s',
       tree: '(ERROR (expression_statement (assignment left: (identifier) right: (integer))) (identifier) (expression_statement (assignment left: (identifier) right: (integer))) (identifier) (identifier))',
+      span: '0:0-6:11',
+    },
+    {
+      text: 'def f(:\n  return [\n',
+      tree: '(ERROR (identifier) (parameters (MISSING ")")))',
+      span: '0:0-2:0',
+    },
+    {
+      // r2 (review a7): a call the root holds is not Pass B's either
+      text: 'foo()\ndef f(:\n  return [\n',
+      tree: '(ERROR (expression_statement (call function: (identifier) arguments: (argument_list))) (identifier) (parameters (MISSING ")")))',
+      span: '0:0-3:0',
     },
   ] as const;
 
   for (const c of ERROR_ROOTS) {
-    it(`an ERROR root (${JSON.stringify(c.text.split('\n').at(-1))}) is the named failure root-type-mismatch`, async () => {
+    it(`an ERROR root (${JSON.stringify(c.text.split('\n')[0])}...) is a MODULE and one UNKNOWN`, async () => {
       const r = await run('m.py', c.text);
       expect(r.tree).toBe(c.tree);
-      if (r.outcome.kind !== 'failed') throw new Error(`expected failed, got ${r.outcome.kind}`);
-      expect(r.outcome.error.code).toBe('root-type-mismatch');
-      expect(r.outcome.error.path).toBe('m.py');
+      const file = okFile(r);
+      expect(problems(r, file)).toEqual([]);
+      expect(lines(file)).toEqual([
+        `MODULE file:m.py:MODULE:$root ${c.span}`,
+        `UNKNOWN file:m.py:UNKNOWN:$root:0 ${c.span}`,
+      ]);
+      expect([file.nodes.length, file.edges.map((e) => e.type), file.refSites.length]).toEqual([
+        2,
+        ['DEFINES'],
+        0,
+      ]);
+      expect(file.stats.astNodesVisited).toBe(1);
     });
   }
 });

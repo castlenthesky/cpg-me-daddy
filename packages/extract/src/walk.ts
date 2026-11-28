@@ -62,8 +62,9 @@ function unknownScope(containerScope: readonly string[]): readonly [string, ...s
 }
 
 /**
- * Walks `request.root` (already checked: its type is `adapter.moduleRootType`, the budget is valid)
- * into `builder`. Every node is `file` the path, the request's revision_id, tier `structural`.
+ * Walks `request.root` (already checked: its type is `adapter.moduleRootType` or `'ERROR'`, the
+ * budget is valid) into `builder`. Every node is `file` the path, the request's revision_id, tier
+ * `structural`.
  *
  * 1. The MODULE: id `makeNodeId({ form: 'scoped', path, kind: 'MODULE', scope: ['$root'] })`, no
  *    nameRange, properties `{ name: adapter.moduleName(path), status: 'ready' }`. Its range is the whole
@@ -71,19 +72,28 @@ function unknownScope(containerScope: readonly string[]): readonly [string, ...s
  *    endPosition (ladder README: a two-line file ends at `3:0`, an empty file is `1:0-1:0`). Then its
  *    SYMBOL `` `path`/ `` (origin `local`, language `adapter.language`, properties `{ kind: 'module' }`)
  *    and the DEFINES edge from the MODULE (by id) to it (by fqn). Every edge has properties `{}`.
- * 2. Pass A over containers: the MODULE's children are `root.namedChildren`, a TYPE_DECL's are
- *    `info.body.namedChildren` (none without a body). In order, each child is visited, then:
+ *    When `root.type === 'ERROR'` (decision 116): emit one UNKNOWN for the root (id `UNKNOWN:$root:0`,
+ *    range the root's own, properties `{ reason: 'syntax-error', status: 'ready' }`, no edge, no
+ *    SYMBOL), do not walk any container or call Pass B, and return `{ astNodesVisited: 1 }` (never
+ *    truncated).
+ * 2. Pass A over containers: the MODULE's children are `root.namedChildren`, a TYPE_DECL's start with
+ *    `info.headerErrors` (decision 117) followed by `info.body.namedChildren` (header ERRORs still walk
+ *    when a class has no body). In order, each child is visited, then:
  *    - type `ERROR` (tree-sitter's, any grammar): one UNKNOWN, never classified or descended (decision
  *      95). Id `UNKNOWN:<s>:<n>` with s = `$root` in the MODULE or the TYPE_DECL's scope, and n = the
  *      count of earlier UNKNOWNs with that same scope in this file. Range: the ERROR's. Properties
  *      `{ reason: 'syntax-error', status: 'ready' }`. No edge, no SYMBOL.
- *    - else `adapter.classify(child, 'MODULE' | 'TYPE_DECL')`; `undefined` emits nothing.
+ *    - else `adapter.classify(child, 'MODULE' | 'TYPE_DECL')`; when `undefined`,
+ *      `adapter.compoundChildren?.(child)` is checked: if it returns an array (stop-list 196), emit
+ *      nothing, do not pass the compound statement to Pass B, and walk those children as children of
+ *      the same container (same kind, parent, scope, descriptors), one level deeper; otherwise emit
+ *      nothing and pass the child to Pass B.
  *    A declaration's scope is its container's scope (`[]` in the MODULE) plus its name, and its range
  *    is the classified child's (a whole `decorated_definition`, decision 107). It gets a DECLARES edge
  *    from its container, a SYMBOL whose descriptors are its container's plus its own (TYPE_DECL `type`,
  *    METHOD `method`, MEMBER `term`), and a DEFINES edge to it:
  *    - TYPE_DECL: properties `{ name, kind, exported, status: 'ready', structural, docstring_head? }`;
- *      SYMBOL kind `class`. Then its body is walked as a container.
+ *      SYMBOL kind `class`. Then its header ERRORs and body are walked as a container.
  *    - METHOD: properties `{ name, kind, signature, params_count: params.length, exported, async,
  *      status: 'ready', docstring_head? }`, and nameRange = `info.nameNode`'s range when given (decision
  *      113); SYMBOL kind `method` in a TYPE_DECL, `function` in the MODULE. Then one PARAM per param in
@@ -103,14 +113,18 @@ function unknownScope(containerScope: readonly string[]): readonly [string, ...s
  *    PARAM node and its HAS_PARAM edge, all before anything of the next one.
  *
  * Budget (no hidden default, I17): the root is depth 0 and always visited; a container's child is one
- * deeper than the container (a top-level child 1, a top-level class's member 2). Before visiting a
- * child, the walk stops if its depth exceeds `maxDepth` (limit `maxDepth`) or if visiting it would make
- * `astNodesVisited` exceed `maxNodes` (limit `maxNodes`), checked in that order. Only container
- * children count as visited (never a parameter or a body). The truncation names the limit, its value,
- * and the child's type and 0-based range; the whole walk stops there and what was built stays.
+ * deeper than the container (a top-level child 1, a top-level class's member 2), and a compound
+ * statement's children are one deeper than the compound statement itself and each counted as visited
+ * (stop-list 196). Before visiting a child, the walk stops if its depth exceeds `maxDepth` (limit
+ * `maxDepth`) or if visiting it would make `astNodesVisited` exceed `maxNodes` (limit `maxNodes`),
+ * checked in that order. Only container children (including a TYPE_DECL's header ERRORs and a compound
+ * statement's children) count as visited (never a parameter or a body). The truncation names the limit,
+ * its value, and the child's type and 0-based range; the whole walk stops there and what was built
+ * stays.
  *
  * 4. Pass B (pass-b.ts walkCalls) runs only when Pass A completed the file (I21), over every container
- *    child Pass A visited except an ERROR, in pre-order, each with what Pass A declared for it.
+ *    child Pass A visited except an ERROR and a compound statement, in pre-order, each with what Pass A
+ *    declared for it.
  */
 export function walkFile(
   request: ExtractRequest,
@@ -158,7 +172,7 @@ export function walkFile(
   const maxNodes = budget?.maxNodes;
   const idCounts = new Map<string, number>();
   const unknownCounts = new Map<string, number>();
-  /** Pass B's input: every container child Pass A visited but an ERROR, in pre-order. */
+  /** Pass B's input: every container child Pass A visited but an ERROR or a compound statement. */
   const visited: ContainerChild[] = [];
 
   function mintId(
@@ -177,6 +191,21 @@ export function walkFile(
     const count = unknownCounts.get(scopeKey) ?? 0;
     unknownCounts.set(scopeKey, count + 1);
     return makeNodeId({ form: 'scoped', path, kind: 'UNKNOWN', scope, ordinal: count });
+  }
+
+  function emitUnknown(node: SyntaxNode, containerScope: readonly string[]): void {
+    builder.addNode({
+      label: 'UNKNOWN',
+      id: mintUnknownId(containerScope),
+      file: path,
+      revision_id,
+      tier: 'structural',
+      range: nodeRange(node),
+      properties: {
+        reason: 'syntax-error',
+        status: 'ready',
+      },
+    });
   }
 
   function defineSymbol(
@@ -242,8 +271,7 @@ export function walkFile(
     });
     defineSymbol('TYPE_DECL', id, descriptors, 'class');
 
-    if (info.body === undefined) return undefined;
-    return walkContainer(info.body.namedChildren, {
+    return walkContainer([...(info.headerErrors ?? []), ...(info.body?.namedChildren ?? [])], {
       containerKind: 'TYPE_DECL',
       parentId: id,
       scope,
@@ -377,23 +405,18 @@ export function walkFile(
       astNodesVisited += 1;
 
       if (child.type === 'ERROR') {
-        builder.addNode({
-          label: 'UNKNOWN',
-          id: mintUnknownId(ctx.scope),
-          file: path,
-          revision_id,
-          tier: 'structural',
-          range: nodeRange(child),
-          properties: {
-            reason: 'syntax-error',
-            status: 'ready',
-          },
-        });
+        emitUnknown(child, ctx.scope);
         continue;
       }
 
       const info = adapter.classify(child, ctx.containerKind);
       if (info === undefined) {
+        const compound = adapter.compoundChildren?.(child);
+        if (compound !== undefined) {
+          const truncated = walkContainer(compound, { ...ctx, depth: childDepth });
+          if (truncated !== undefined) return truncated;
+          continue;
+        }
         visited.push({ node: child, container: ctx.containerKind });
         continue;
       }
@@ -421,6 +444,11 @@ export function walkFile(
       }
     }
     return undefined;
+  }
+
+  if (root.type === 'ERROR') {
+    emitUnknown(root, []);
+    return { astNodesVisited };
   }
 
   const truncation = walkContainer(root.namedChildren, {

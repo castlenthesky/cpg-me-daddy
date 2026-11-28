@@ -164,6 +164,19 @@ describe('request checks', () => {
     expect(errorOf(extract({ root }))).toEqual({ code: 'root-type-mismatch', path: 'main.py' });
   });
 
+  it("takes a root of type ERROR (tree-sitter's, any grammar) as a file, never root-type-mismatch (decision 116)", () => {
+    const root = fake('ERROR', [0, 0], [1, 0]);
+    const other: LanguageAdapter = {
+      ...pythonAdapter,
+      grammarId: 'other',
+      moduleRootType: 'source_file',
+    };
+    expect([
+      extract({ root }).kind,
+      extractFile(request({ grammarId: 'other', root }), other).kind,
+    ]).toEqual(['ok', 'ok']);
+  });
+
   it.each([
     [
       'the path before the tier',

@@ -789,3 +789,240 @@ describe('the budget across containers (I17)', () => {
     ]);
   });
 });
+
+// ── Sprint 41: compound statements (stop-list 196), a class header (decision 117), an ERROR root (116) ──
+
+/** `scripted`, plus what the adapter says stands in for each compound node (walk.ts, contract.ts). */
+function compounding(
+  table: ReadonlyMap<SyntaxNode, DeclarationInfo>,
+  compounds: ReadonlyMap<SyntaxNode, readonly SyntaxNode[]>,
+) {
+  const { adapter, calls } = scripted(table);
+  const withCompounds: LanguageAdapter = {
+    ...adapter,
+    compoundChildren: (node) => compounds.get(node),
+  };
+  return { adapter: withCompounds, calls };
+}
+
+describe("a compound statement's children are its container's, one level deeper (stop-list 196)", () => {
+  // module: E0, S, CMP { COND, f(p), E, INNER { XS } }, g. Depths: E0 S CMP g 1; COND f E INNER 2; XS 3.
+  const E0 = n('ERROR', [0, 0], [0, 1]);
+  const S = n('expression_statement', [0, 2], [0, 5]);
+  const COND = n('identifier', [1, 3], [1, 4]);
+  const P = n('identifier', [2, 10], [2, 11]);
+  const F2 = n('function_definition', [2, 4], [2, 13]);
+  const E = n('ERROR', [3, 4], [3, 5]);
+  const XS = n('expression_statement', [5, 8], [5, 13]);
+  const INNER = n('cmp', [4, 4], [5, 13]);
+  const CMP = n('cmp', [1, 0], [5, 13]);
+  const G = n('function_definition', [6, 0], [6, 9]);
+  const table = new Map<SyntaxNode, DeclarationInfo>([
+    [F2, method('f', { params: [param('p', P)] })],
+    [XS, member('X')],
+    [G, method('g')],
+  ]);
+  const compounds = new Map<SyntaxNode, readonly SyntaxNode[]>([
+    [CMP, [COND, F2, E, INNER]],
+    [INNER, [XS]],
+  ]);
+  const root = n('module', [0, 0], [7, 0], [E0, S, CMP, G]);
+  const run = (budget?: ExtractRequest['budget']) => {
+    const { adapter, calls } = compounding(table, compounds);
+    return { outcome: extractFile(req(root, budget ? { budget } : {}), adapter), calls };
+  };
+
+  it('declares what it holds with no scope frame, an ERROR in it an UNKNOWN of the container', () => {
+    const { outcome, calls } = run();
+    const file = ok(outcome);
+    expect(file.nodes.map((x) => x.id)).toEqual([
+      MOD,
+      id('UNKNOWN', '$root:0'),
+      id('METHOD', 'f'),
+      id('PARAM', 'f.p'),
+      id('UNKNOWN', '$root:1'),
+      id('MEMBER', 'X'),
+      id('METHOD', 'g'),
+    ]);
+    expect(calls).toEqual([S, CMP, COND, F2, INNER, XS, G].map((x) => [x, 'MODULE']));
+    expect(edgeLines(file).filter((l) => l.startsWith('DECLARES'))).toEqual(
+      [id('METHOD', 'f'), id('MEMBER', 'X'), id('METHOD', 'g')]
+        .map((to) => `DECLARES ${MOD} -> ${to}`)
+        .toSorted(),
+    );
+    // the root, four module children, four in CMP, one in INNER
+    expect(file.stats.astNodesVisited).toBe(10);
+  });
+
+  it('stops at a child one level deeper than its compound statement, under maxDepth', () => {
+    const { outcome } = run({ maxDepth: 2 });
+    if (outcome.kind !== 'truncated') throw new Error(`expected truncated, got ${outcome.kind}`);
+    expect(outcome.truncation).toEqual({
+      limit: 'maxDepth',
+      limitValue: 2,
+      droppedAtNodeType: 'expression_statement',
+      droppedRange: range([5, 8], [5, 13]),
+    });
+    expect([outcome.file.nodes.map((x) => x.id), outcome.file.stats.astNodesVisited]).toEqual([
+      [
+        MOD,
+        id('UNKNOWN', '$root:0'),
+        id('METHOD', 'f'),
+        id('PARAM', 'f.p'),
+        id('UNKNOWN', '$root:1'),
+      ],
+      8,
+    ]);
+  });
+
+  it('counts each of its children against maxNodes, the compound statement too', () => {
+    const { outcome } = run({ maxNodes: 5 });
+    if (outcome.kind !== 'truncated') throw new Error(`expected truncated, got ${outcome.kind}`);
+    expect(outcome.truncation).toEqual({
+      limit: 'maxNodes',
+      limitValue: 5,
+      droppedAtNodeType: 'function_definition',
+      droppedRange: range([2, 4], [2, 13]),
+    });
+    expect([outcome.file.nodes.map((x) => x.id), outcome.file.stats.astNodesVisited]).toEqual([
+      [MOD, id('UNKNOWN', '$root:0')],
+      5,
+    ]);
+  });
+});
+
+// r2 (review a5): Pass B's input, seen through a recording classifyExpression: a compound statement is
+// never handed over, even one that stands for nothing (an empty list is still an answer)
+it("hands Pass B each visited child but a compound statement's own node, an empty one included", () => {
+  const s2 = n('expression_statement', [0, 0], [0, 3]);
+  const empty = n('cmp', [1, 0], [1, 5]);
+  const t1 = n('expression_statement', [2, 4], [2, 7]);
+  const t2 = n('expression_statement', [3, 4], [3, 7]);
+  const full = n('cmp', [2, 0], [3, 7]);
+  const seen: SyntaxNode[] = [];
+  const { adapter } = compounding(
+    new Map(),
+    new Map([
+      [empty, []],
+      [full, [t1, t2]],
+    ]),
+  );
+  const recording: LanguageAdapter = {
+    ...adapter,
+    classifyExpression: (node) => {
+      seen.push(node);
+      return undefined;
+    },
+  };
+  const file = ok(extractFile(req(n('module', [0, 0], [4, 0], [s2, empty, full])), recording));
+  expect([seen, file.nodes.map((x) => x.id), file.stats.astNodesVisited]).toEqual([
+    [s2, t1, t2],
+    [MOD],
+    6,
+  ]);
+});
+
+describe('a class header ERROR is an UNKNOWN in the class (decision 117)', () => {
+  // class C ( H1 H2 ): { x, CE }. H1, H2 and the body children are depth 2.
+  const H1 = n('ERROR', [0, 7], [0, 8]);
+  const H2 = n('ERROR', [0, 9], [0, 10]);
+  const CX = n('expression_statement', [1, 4], [1, 9]);
+  const CE = n('ERROR', [2, 4], [2, 5]);
+  const CB = n('block', [1, 4], [2, 5], [CX, CE]);
+  const CC = n('class_definition', [0, 0], [2, 5], [H1, H2, CB]);
+  const run = (budget?: ExtractRequest['budget']) => {
+    const { adapter, calls } = scripted(
+      new Map<SyntaxNode, DeclarationInfo>([
+        [CC, typeDecl('C', CB, { headerErrors: [H1, H2] })],
+        [CX, member('x')],
+      ]),
+    );
+    const root = n('module', [0, 0], [3, 0], [CC]);
+    return { outcome: extractFile(req(root, budget ? { budget } : {}), adapter), calls };
+  };
+
+  it("numbers the header's UNKNOWNs before the body's, in the class scope, each with its range", () => {
+    const { outcome, calls } = run();
+    const file = ok(outcome);
+    expect(file.nodes.map((x) => [x.id, x.range])).toEqual([
+      [MOD, range([0, 0], [3, 0])],
+      [id('TYPE_DECL', 'C'), range([0, 0], [2, 5])],
+      [id('UNKNOWN', 'C:0'), range([0, 7], [0, 8])],
+      [id('UNKNOWN', 'C:1'), range([0, 9], [0, 10])],
+      [id('MEMBER', 'C.x'), range([1, 4], [1, 9])],
+      [id('UNKNOWN', 'C:2'), range([2, 4], [2, 5])],
+    ]);
+    expect(calls.map(([node]) => node)).toEqual([CC, CX]);
+    expect(file.stats.astNodesVisited).toBe(6);
+  });
+
+  it('visits a header ERROR as a body child: under maxDepth and against maxNodes', () => {
+    const deep = run({ maxDepth: 1 }).outcome;
+    const many = run({ maxNodes: 3 }).outcome;
+    if (deep.kind !== 'truncated' || many.kind !== 'truncated')
+      throw new Error('expected truncated');
+    expect([deep.truncation.droppedAtNodeType, deep.truncation.droppedRange]).toEqual([
+      'ERROR',
+      range([0, 7], [0, 8]),
+    ]);
+    expect([many.truncation.droppedRange, many.file.nodes.map((x) => x.id)]).toEqual([
+      range([0, 9], [0, 10]),
+      [MOD, id('TYPE_DECL', 'C'), id('UNKNOWN', 'C:0')],
+    ]);
+  });
+
+  it('a class with header ERRORs and no body still has their UNKNOWNs', () => {
+    const h = n('ERROR', [0, 7], [0, 8]);
+    const d = n('class_definition', [0, 0], [0, 8], [h]);
+    const { adapter } = scripted(new Map([[d, typeDecl('D', undefined, { headerErrors: [h] })]]));
+    const file = ok(extractFile(req(n('module', [0, 0], [1, 0], [d])), adapter));
+    expect(file.nodes.map((x) => x.id)).toEqual([MOD, id('TYPE_DECL', 'D'), id('UNKNOWN', 'D:0')]);
+  });
+});
+
+describe('an ERROR root is a MODULE and one UNKNOWN (decision 116)', () => {
+  // The root itself is the ERROR (tree-sitter's, any grammar), starting after a blank prefix; it holds a
+  // def and a compound node the scripted adapter would declare or expand, which must stay unread.
+  const HIDDEN = n('function_definition', [1, 0], [1, 9]);
+  const HIDDEN_CMP = n('cmp', [2, 0], [3, 1]);
+  const ROOT = n('ERROR', [0, 2], [3, 1], [HIDDEN, HIDDEN_CMP]);
+  const run = (budget?: ExtractRequest['budget']) => {
+    const { adapter, calls } = compounding(
+      new Map([[HIDDEN, method('hidden')]]),
+      new Map([[HIDDEN_CMP, [HIDDEN]]]),
+    );
+    return { outcome: extractFile(req(ROOT, budget ? { budget } : {}), adapter), calls };
+  };
+
+  it('spans the file with the MODULE, and gives the root its one UNKNOWN, undescended', () => {
+    const { outcome, calls } = run();
+    const file = ok(outcome);
+    expect(file.nodes.map((x) => [x.label, x.id, x.range, x.properties])).toStrictEqual([
+      ['MODULE', MOD, range([0, 0], [3, 1]), { name: 'm', status: 'ready' }],
+      [
+        'UNKNOWN',
+        id('UNKNOWN', '$root:0'),
+        range([0, 2], [3, 1]),
+        { reason: 'syntax-error', status: 'ready' },
+      ],
+    ]);
+    expect(file.nodes.map((x) => [x.file, x.revision_id, x.tier, x.nameRange])).toEqual(
+      Array.from({ length: 2 }, () => ['m.py', REV, 'structural', undefined]),
+    );
+    expect(calls).toEqual([]);
+    expect([edgeLines(file), file.symbols.map((s) => s.fqn), file.refSites]).toEqual([
+      [`DEFINES ${MOD} -> ${sym('')}`],
+      [sym('')],
+      [],
+    ]);
+    expect(file.stats.astNodesVisited).toBe(1);
+  });
+
+  it('is never truncated: the root is always visited and nothing else is', () => {
+    const file = ok(run({ maxNodes: 1, maxDepth: 0 }).outcome);
+    expect([file.nodes.map((x) => x.id), file.stats.astNodesVisited]).toEqual([
+      [MOD, id('UNKNOWN', '$root:0')],
+      1,
+    ]);
+  });
+});

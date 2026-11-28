@@ -43,7 +43,8 @@ function errorMessage(error: unknown): string {
  *    and doing nothing);
  * 3. `budget-invalid`: a present `maxNodes` that is not a positive safe integer, or a present
  *    `maxDepth` that is not a non-negative safe integer;
- * 4. `root-type-mismatch`: `root.type` is not `adapter.moduleRootType`;
+ * 4. `root-type-mismatch`: `root.type` is neither `adapter.moduleRootType` nor `'ERROR'` (tree-sitter's
+ *    ERROR, any grammar; decision 116);
  * 5. `walkFile` into an `ElementBuilder`, then `build()`. Anything thrown, an `ExtractInvariantError`
  *    included, is `internal` with the thrown message.
  * The file: the request's path, grammarId and revision_id; the four built arrays; stats
@@ -84,10 +85,10 @@ export function extractFile(request: ExtractRequest, adapter: LanguageAdapter): 
       );
     }
 
-    if (request.root.type !== adapter.moduleRootType) {
+    if (request.root.type !== adapter.moduleRootType && request.root.type !== 'ERROR') {
       return fail(
         'root-type-mismatch',
-        `expected root node type "${adapter.moduleRootType}", got "${request.root.type}"`,
+        `expected root node type "${adapter.moduleRootType}" or "ERROR", got "${request.root.type}"`,
         rawPath,
       );
     }
