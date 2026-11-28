@@ -8,5 +8,5 @@
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts", "src/**/*.spec.ts"],
-  "references": [{ "path": "../model" }]
+  "references": [{ "path": "../model" }, { "path": "../extract" }]
 }
