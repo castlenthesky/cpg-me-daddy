@@ -1289,14 +1289,36 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       param('c', 2, { default: '3' }),
       param('d', 3, { default: '4' }),
     ),
-    // The return type reaches the signature only: its NUL is dropped there.
+    // The return type reaches the signature only: its NUL is dropped there. r2 (review 1): two NULs in
+    // each, so every U+0000 goes, not only the first.
     survivor(
-      'def f(self, b: Dict[str, \u0000]) -> List[int, \u0000]:\n    pass\n',
+      'def f(self, b: Dict[str, \u0000\u0000]) -> List[int, \u0000\u0000]:\n    pass\n',
       "(module (function_definition name: (identifier) parameters: (parameters (identifier) (typed_parameter (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))))) return_type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
       'f',
       'f(self, b: Dict[str, ]) -> List[int, ]',
       param('self', 0),
       param('b', 1),
+    ),
+    // r2 (review 2): a NUL in a typed default's value drops its default only; in both, both go.
+    survivor(
+      'def f(e: int = [1, \u0000], g: Dict[str, \u0000] = [1, \u0000]):\n    pass\n',
+      "(module (function_definition name: (identifier) parameters: (parameters (typed_default_parameter name: (identifier) type: (type (identifier)) value: (list (integer) (ERROR (UNEXPECTED '\\0')))) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (list (integer) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
+      'f',
+      'f(e: int, g: Dict[str, ])',
+      param('e', 0, { type_text: 'int' }),
+      param('g', 1),
+    ),
+    // r2 (review 3): `/`, a tuple pattern, an ERROR and `*` take no position; the MISSING one does.
+    survivor(
+      'def f(a, /, b, (c, d), e, , g, *, ,*args):\n    pass\n',
+      '(module (function_definition name: (identifier) parameters: (parameters (identifier) (positional_separator) (identifier) (tuple_pattern (identifier) (identifier)) (identifier) (ERROR) (identifier) (keyword_separator) (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
+      'f',
+      'f(a, b, e, g, args)',
+      param('a', 0),
+      param('b', 1),
+      param('e', 2),
+      param('g', 3),
+      param('args', 5),
     ),
     survivor(
       'def f(a: Dict[str, \u0000], *args: Tuple[int, \u0000], **kw: Dict[str, \u0000]):\n    pass\n',
@@ -1323,29 +1345,34 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
     });
   }
 
+  // r2 (review 4): `z` holds its NUL in the value, which is no property, so it keeps its type_text.
   const MEMBERS = [
     [
-      'x: Dict[str, \u0000] = 1\ny: int = 2\n',
-      "(module (expression_statement (assignment left: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) right: (integer))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (integer))))",
-      'x',
-      'y',
+      'x: Dict[str, \u0000] = 1\ny: int = 2\nz: int = [1, \u0000]\n',
+      "(module (expression_statement (assignment left: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) right: (integer))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (integer))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (list (integer) (ERROR (UNEXPECTED '\\0'))))))",
+      ['x', 'y', 'z'],
     ],
     [
       'class C:\n    x: Dict[str, \u0000]\n    y: int = 2\n',
       "(module (class_definition name: (identifier) body: (block (expression_statement (assignment left: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))))) (expression_statement (assignment left: (identifier) type: (type (identifier)) right: (integer))))))",
-      'C.x',
-      'C.y',
+      ['C.x', 'C.y'],
     ],
   ] as const;
+  const MEMBER_PROPS = [
+    { name: 'x' },
+    { name: 'y', type_text: 'int' },
+    { name: 'z', type_text: 'int' },
+  ];
 
-  for (const [text, tree, x, y] of MEMBERS) {
-    it(`a NUL in a MEMBER's annotation drops its type_text only (${x})`, async () => {
+  for (const [text, tree, ids] of MEMBERS) {
+    it(`a NUL in a MEMBER's annotation drops its type_text only (${ids.join(', ')})`, async () => {
       const r = await run('m.py', text);
       expect(r.tree).toBe(tree);
       const file = okFile(r);
       expect(problems(r, file)).toEqual([]);
-      expect(propsOf(file, `file:m.py:MEMBER:${x}`)).toStrictEqual({ name: 'x' });
-      expect(propsOf(file, `file:m.py:MEMBER:${y}`)).toStrictEqual({ name: 'y', type_text: 'int' });
+      expect(ids.map((x) => propsOf(file, `file:m.py:MEMBER:${x}`))).toStrictEqual(
+        MEMBER_PROPS.slice(0, ids.length),
+      );
     });
   }
 });
