@@ -48,6 +48,14 @@ describe('ChainResolver: the chain suite (INV-1, INV-4, INV-9, INV-10)', () => {
         ]),
     ).toThrow(/^capability-parity:/);
   });
+
+  it('INV-4: every kind of a host link is checked, not only its first', () => {
+    const links = [
+      link('py', [], caps('headless', ['call'])),
+      link('host', [], caps('host-accelerator', ['call', 'import'])),
+    ];
+    expect(() => new ChainResolver(links)).toThrow(/^capability-parity:/);
+  });
 });
 
 describe('ChainResolver: identity', () => {

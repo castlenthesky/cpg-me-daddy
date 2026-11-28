@@ -479,6 +479,20 @@ describe('applyResolutions: report', () => {
     expect(applied().report.degradedBatches).toBe(2);
   });
 
+  it('INV-25: the degraded flag counts, not the backend state', () => {
+    const flagged = {
+      ...batchOf('b.py', [], true),
+      diagnostics: { ...batchOf('b.py', [], true).diagnostics, backend: 'warming' as const },
+    };
+    const unflagged = {
+      ...batchOf('a.py', [], false),
+      diagnostics: { ...batchOf('a.py', [], false).diagnostics, backend: 'degraded' as const },
+    };
+    // Two flagged on a warming backend, one unflagged on a degraded one: 2, where the state gives 1.
+    const batches = [flagged, unflagged, flagged];
+    expect(applyResolutions(SET, batches).report.degradedBatches).toBe(2);
+  });
+
   it('INV-26: answered-but-edgeless is droppedNoSymbol, keeps its status, never counts as unresolved', () => {
     const { report } = applied();
     expect(report.droppedNoSymbol).toBe(6);
