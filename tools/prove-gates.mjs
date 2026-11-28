@@ -731,9 +731,9 @@ const CASES = [
     },
   },
   {
-    // The gate is the CI job `vscode-host` (U3.1.2, controller decision 33): it downloads VS Code, so it
-    // is slow. The probe must be the one failure, so a VS Code that will not start, or a run that finds no
-    // tests, can't pass for a rejection.
+    // The gate is test:vscode-host, CI's `vscode-host` job (U3.1.2, controller decision 33; by
+    // hand since loop 7): it downloads VS Code, so it is slow. The probe must be the one failure,
+    // so a VS Code that will not start, or a run that finds no tests, can't pass for a rejection.
     slow: true,
     name: 'test:vscode-host fails on a failing host test',
     expectOutput: /\b1 failing\b[\s\S]*gate probe/,
