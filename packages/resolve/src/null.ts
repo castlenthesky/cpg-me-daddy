@@ -1,15 +1,16 @@
-// SEAT (U6c.1a). Once implemented this is a PASSTHROUGH by design: the control a harness measures
-// against and the honest last link of a chain. It resolves nothing.
+// PASSTHROUGH (U6c.1a) by design: the control a harness measures against and the honest last link
+// of a chain. It resolves nothing.
+import type { WorkspacePath } from '@cpg/model';
 import type {
+  RefSite,
   ResolveBatch,
   ResolveContext,
-  RefSite,
   Resolver,
   ResolverCapabilities,
   ResolverStatus,
   ResolverWorkspace,
 } from './contract';
-import type { WorkspacePath } from '@cpg/model';
+import { unresolved } from './resolution';
 
 /**
  * Answers every site `unresolved` with reason `no-resolver` ("I never looked", INV-14) and
@@ -30,28 +31,40 @@ export class NullResolver implements Resolver {
     host: 'headless',
     maxConcurrentFiles: Number.POSITIVE_INFINITY,
   };
+  private opened = false;
 
-  open(_workspace: ResolverWorkspace): Promise<void> {
-    throw new Error('SEAT: NullResolver lands in U6c.1a');
+  async open(_workspace: ResolverWorkspace): Promise<void> {
+    this.opened = true;
   }
 
-  fileChanged(_filePath: WorkspacePath, _text: string | null): Promise<void> {
-    throw new Error('SEAT: NullResolver lands in U6c.1a');
-  }
+  async fileChanged(_filePath: WorkspacePath, _text: string | null): Promise<void> {}
 
-  resolve(
-    _filePath: WorkspacePath,
-    _refs: readonly RefSite[],
-    _ctx?: ResolveContext,
+  async resolve(
+    filePath: WorkspacePath,
+    refs: readonly RefSite[],
+    ctx?: ResolveContext,
   ): Promise<ResolveBatch> {
-    throw new Error('SEAT: NullResolver lands in U6c.1a');
+    if (!this.opened) throw new Error('workspace-not-open');
+    const reason = ctx?.token?.isCancellationRequested ? 'cancelled' : 'no-resolver';
+    return {
+      resolutions: refs.map((ref) => unresolved(ref, this.id, reason)),
+      diagnostics: {
+        resolverId: this.id,
+        filePath,
+        siteCount: refs.length,
+        backend: 'ready',
+        degraded: false,
+        elapsedMs: 0,
+        timedOutSites: 0,
+      },
+    };
   }
 
   status(): ResolverStatus {
-    throw new Error('SEAT: NullResolver lands in U6c.1a');
+    return { resolverId: this.id, state: this.opened ? 'ready' : 'stopped', restarts: 0 };
   }
 
-  close(): Promise<void> {
-    throw new Error('SEAT: NullResolver lands in U6c.1a');
+  async close(): Promise<void> {
+    this.opened = false;
   }
 }

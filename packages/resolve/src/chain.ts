@@ -1,15 +1,21 @@
-// SEAT (U6c.1a): ChainResolver, ported from archive 21754b4:packages/cpg-generator/src/chain.ts with
+// REAL (U6c.1a): ChainResolver, ported from archive 21754b4:packages/cpg-generator/src/chain.ts with
 // C-RESOLVE's capability parity (INV-4) and no-downgrade (INV-10) added.
 import type { WorkspacePath } from '@cpg/model';
 import type {
+  BackendState,
+  RefSite,
+  Resolution,
   ResolveBatch,
   ResolveContext,
-  RefSite,
   Resolver,
   ResolverCapabilities,
   ResolverStatus,
   ResolverWorkspace,
 } from './contract';
+import { statusRank, unresolved } from './resolution';
+
+const STATE_RANK = { ready: 0, warming: 1, starting: 2, stopped: 3, degraded: 4 } as const;
+const worse = (a: BackendState, b: BackendState) => (STATE_RANK[b] > STATE_RANK[a] ? b : a);
 
 /**
  * Tries each link in order, so a precise link can sit in front of a cheap one without the cheap one
@@ -55,32 +61,101 @@ export class ChainResolver implements Resolver {
   readonly id: string;
   readonly precision: Resolver['precision'];
   readonly capabilities: ResolverCapabilities;
+  private readonly links: readonly Resolver[];
+  private opened = false;
 
-  constructor(_links: readonly Resolver[]) {
-    throw new Error('SEAT: ChainResolver lands in U6c.1a');
+  constructor(links: readonly Resolver[]) {
+    this.links = [...links];
+    const caps = this.links.map((l) => l.capabilities);
+    const headless = new Set(caps.filter((c) => c.host === 'headless').flatMap((c) => c.kinds));
+    for (const l of this.links) {
+      if (l.capabilities.host !== 'host-accelerator') continue;
+      const gap = l.capabilities.kinds.find((k) => !headless.has(k));
+      if (gap) throw new Error(`capability-parity: ${l.id} has ${gap} without a headless link`);
+    }
+    this.id = `chain(${this.links.map((l) => l.id).join('>')})`;
+    this.precision = this.links.some((l) => l.precision === 'checker')
+      ? 'checker'
+      : (this.links[0]?.precision ?? 'syntactic');
+    this.capabilities = {
+      extensions: [...new Set(caps.flatMap((c) => c.extensions))],
+      kinds: [...new Set(caps.flatMap((c) => c.kinds))],
+      host: caps.some((c) => c.host === 'host-accelerator') ? 'host-accelerator' : 'headless',
+      maxConcurrentFiles: Math.min(...caps.map((c) => c.maxConcurrentFiles)),
+    };
   }
 
-  open(_workspace: ResolverWorkspace): Promise<void> {
-    throw new Error('SEAT: ChainResolver lands in U6c.1a');
+  async open(workspace: ResolverWorkspace): Promise<void> {
+    for (const link of this.links) await link.open(workspace);
+    this.opened = true;
   }
 
-  fileChanged(_filePath: WorkspacePath, _text: string | null): Promise<void> {
-    throw new Error('SEAT: ChainResolver lands in U6c.1a');
+  async fileChanged(filePath: WorkspacePath, text: string | null): Promise<void> {
+    for (const link of this.links) await link.fileChanged(filePath, text);
   }
 
-  resolve(
-    _filePath: WorkspacePath,
-    _refs: readonly RefSite[],
-    _ctx?: ResolveContext,
+  async resolve(
+    filePath: WorkspacePath,
+    refs: readonly RefSite[],
+    ctx?: ResolveContext,
   ): Promise<ResolveBatch> {
-    throw new Error('SEAT: ChainResolver lands in U6c.1a');
+    if (!this.opened) throw new Error('workspace-not-open');
+    const kept = new Map<string, Resolution>();
+    const diagnostics = {
+      resolverId: this.id,
+      filePath,
+      siteCount: refs.length,
+      backend: 'ready' as BackendState,
+      degraded: false,
+      elapsedMs: 0,
+      timedOutSites: 0,
+    };
+    let pending: readonly RefSite[] = refs;
+    let cancelled = ctx?.token?.isCancellationRequested === true;
+
+    for (const link of this.links) {
+      if (pending.length === 0) break;
+      if (ctx?.token?.isCancellationRequested) {
+        cancelled = true;
+        break;
+      }
+      const { resolutions, diagnostics: d } = await link.resolve(filePath, pending, ctx);
+      diagnostics.backend = worse(diagnostics.backend, d.backend);
+      diagnostics.degraded ||= d.degraded;
+      diagnostics.elapsedMs += d.elapsedMs;
+      diagnostics.timedOutSites += d.timedOutSites;
+      const byId = new Map(resolutions.map((r) => [r.refId, r]));
+      pending = pending.filter((site) => {
+        const answer = byId.get(site.id);
+        let best = kept.get(site.id);
+        if (answer && (!best || statusRank(answer.status) >= statusRank(best.status))) {
+          best = answer;
+          kept.set(site.id, answer);
+        }
+        return !best || statusRank(best.status) <= 1;
+      });
+    }
+
+    const reason = cancelled ? 'cancelled' : 'no-resolver';
+    return {
+      resolutions: refs.map((ref) => kept.get(ref.id) ?? unresolved(ref, this.id, reason)),
+      diagnostics,
+    };
   }
 
   status(): ResolverStatus {
-    throw new Error('SEAT: ChainResolver lands in U6c.1a');
+    const states = this.links.map((l) => l.status());
+    const lastError = states.find((s) => s.lastError !== undefined)?.lastError;
+    return {
+      resolverId: this.id,
+      state: states.reduce<BackendState>((w, s) => worse(w, s.state), 'ready'),
+      restarts: states.reduce((n, s) => n + s.restarts, 0),
+      ...(lastError !== undefined ? { lastError } : {}),
+    };
   }
 
-  close(): Promise<void> {
-    throw new Error('SEAT: ChainResolver lands in U6c.1a');
+  async close(): Promise<void> {
+    this.opened = false;
+    for (const link of this.links) await link.close();
   }
 }

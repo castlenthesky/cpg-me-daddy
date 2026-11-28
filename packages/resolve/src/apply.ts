@@ -1,8 +1,14 @@
-// SEAT (U6c.1a): applyResolutions, the DQ-03 fold. Adapted from archive
+// REAL (U6c.1a): applyResolutions, the DQ-03 fold. Adapted from archive
 // 21754b4:packages/file-watcher/src/resolvePass.ts: edges only, never a symbol; its counters become
 // ResolveReport.
 import type { EdgeElement, ExtractedFileSet } from '@cpg/extract';
-import type { ResolveBatch, ResolveReport } from './contract';
+import type { WorkspacePath } from '@cpg/model';
+import type { RefKind, Resolution, ResolveBatch, ResolveReport } from './contract';
+import { createDefinitionLookup } from './lookup';
+import { statusRank } from './resolution';
+
+const REF_KINDS: readonly RefKind[] = ['call', 'import', 'receiver', 'receiver-type'];
+type StatusCounts = ResolveReport['statusCount'];
 
 /**
  * Turns answers into edges. Symbols come from the set (`createDefinitionLookup(set)`); this mints,
@@ -33,13 +39,91 @@ import type { ResolveBatch, ResolveReport } from './contract';
  *   is not dropped.
  *
  * Report: `siteCount` and `statusCount` carry all four kinds (0 / `{}` when none); `statusCount`'s
- * inner records, `reasonCount` and `byResolver` hold only values seen. `unresolvedRate[kind]` = `statusCount[kind].unresolved` / `siteCount[kind]` for each kind
- * with sites (absent otherwise, INV-21); `degradedBatches` the batches with `diagnostics.degraded`
- * (INV-25); `edgeCount` edges.length; `backendRestarts` 0, since no batch carries a restart count.
+ * inner records, `reasonCount` and `byResolver` hold only values seen. `unresolvedRate[kind]` =
+ * `statusCount[kind].unresolved` / `siteCount[kind]` for each kind with sites (absent otherwise,
+ * INV-21); `degradedBatches` the batches with `diagnostics.degraded` (INV-25); `edgeCount`
+ * edges.length; `backendRestarts` 0, since no batch carries a restart count.
  */
 export function applyResolutions(
-  _set: ExtractedFileSet,
-  _batches: readonly ResolveBatch[],
+  set: ExtractedFileSet,
+  batches: readonly ResolveBatch[],
 ): { readonly edges: readonly EdgeElement[]; readonly report: ResolveReport } {
-  throw new Error('SEAT: applyResolutions lands in U6c.1a');
+  const definitions = createDefinitionLookup(set);
+  const answersByFile = new Map<WorkspacePath, Map<string, Resolution>>();
+  let degradedBatches = 0;
+  for (const { diagnostics, resolutions } of batches) {
+    if (diagnostics.degraded) degradedBatches += 1;
+    const byRef = answersByFile.get(diagnostics.filePath) ?? new Map<string, Resolution>();
+    answersByFile.set(diagnostics.filePath, byRef);
+    for (const r of resolutions) byRef.set(r.refId, r);
+  }
+
+  const siteCount = { call: 0, import: 0, receiver: 0, 'receiver-type': 0 };
+  const statusCount: StatusCounts = { call: {}, import: {}, receiver: {}, 'receiver-type': {} };
+  const reasonCount: ResolveReport['reasonCount'] = {};
+  const byResolver = new Map<string, number>();
+  const edges: EdgeElement[] = [];
+  const seen = new Set<string>();
+  let droppedNoSymbol = 0;
+
+  for (const site of set.refSites) {
+    const byRef = answersByFile.get(site.filePath);
+    if (!byRef) continue;
+    const answer = byRef.get(site.id);
+    const status = answer?.status ?? 'unresolved';
+    const reason = answer ? answer.reason : (site.declined ?? 'no-resolver');
+    siteCount[site.kind] += 1;
+    statusCount[site.kind][status] = (statusCount[site.kind][status] ?? 0) + 1;
+    if (reason !== undefined) reasonCount[reason] = (reasonCount[reason] ?? 0) + 1;
+    if (answer) byResolver.set(answer.resolvedBy, (byResolver.get(answer.resolvedBy) ?? 0) + 1);
+    if (!answer || statusRank(answer.status) < 2) continue;
+
+    const def = answer.definition;
+    const fqn =
+      answer.target !== undefined
+        ? answer.target.fqn
+        : def && definitions.symbolAt(def.filePath, def.position.row, def.position.column);
+    const isCall = site.kind === 'call';
+    if ((!isCall && site.kind !== 'import') || fqn === undefined || !definitions.hasSymbol(fqn)) {
+      droppedNoSymbol += 1;
+      continue;
+    }
+
+    const type = isCall ? 'CALLS' : 'IMPORTS';
+    const key = `${type}\0${site.nodeId}\0${fqn}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push({
+      type,
+      from: { by: 'id', label: isCall ? 'CALL' : 'IMPORT', key: site.nodeId },
+      to: { by: 'fqn', label: 'SYMBOL', key: fqn },
+      properties: isCall
+        ? {
+            status: answer.status,
+            ...(answer.reason !== undefined ? { reason: answer.reason } : {}),
+            confidence: answer.confidence,
+            resolvedBy: answer.resolvedBy,
+          }
+        : { status: answer.status },
+    });
+  }
+
+  const unresolvedRate: ResolveReport['unresolvedRate'] = {};
+  for (const k of REF_KINDS) {
+    if (siteCount[k] > 0) unresolvedRate[k] = (statusCount[k].unresolved ?? 0) / siteCount[k];
+  }
+  return {
+    edges,
+    report: {
+      siteCount,
+      statusCount,
+      reasonCount,
+      byResolver: Object.fromEntries(byResolver),
+      unresolvedRate,
+      degradedBatches,
+      backendRestarts: 0,
+      edgeCount: edges.length,
+      droppedNoSymbol,
+    },
+  };
 }
