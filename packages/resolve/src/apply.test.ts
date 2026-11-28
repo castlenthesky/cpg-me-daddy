@@ -161,11 +161,14 @@ const C_PY = wsPath('c.py');
 const F = '`a.py`/f().';
 const PRINT = 'site:python-stdlib`print().';
 const GHOST = '`a.py`/ghost().';
+/** g DEFINES this fqn, but no symbols channel holds it. */
+const UNLISTED = '`a.py`/g().';
 
 const a = extracted(A_PY, {
   nodes: [
     node('MODULE', 'file:a.py:MODULE:$root', A_PY, [0, 0, 6, 0], { name: 'a' }),
     node('METHOD', 'file:a.py:METHOD:f', A_PY, [0, 0, 2, 8], { name: 'f' }, [0, 4, 0, 5]),
+    node('METHOD', 'file:a.py:METHOD:g', A_PY, [3, 0, 4, 8], { name: 'g' }, [3, 4, 3, 5]),
   ],
   symbols: ['`a.py`/', F],
   builtins: [PRINT],
@@ -173,6 +176,8 @@ const a = extracted(A_PY, {
     defines('MODULE', 'file:a.py:MODULE:$root', '`a.py`/'),
     declares('MODULE', 'file:a.py:MODULE:$root', 'METHOD', 'file:a.py:METHOD:f'),
     defines('METHOD', 'file:a.py:METHOD:f', F),
+    declares('MODULE', 'file:a.py:MODULE:$root', 'METHOD', 'file:a.py:METHOD:g'),
+    defines('METHOD', 'file:a.py:METHOD:g', UNLISTED),
   ],
 });
 
@@ -232,9 +237,11 @@ const b = extracted(B_PY, {
     receiver(1, 'receiver-type'),
     receiver(10, 'receiver', 'receiver-unknown'),
     call(11),
+    call(12),
     ...[2, 3, 4, 5, 6, 7, 8, 9].map(call),
     binding(0, 0),
     binding(0, 1),
+    binding(0, 2),
     binding(1, 0),
   ],
 });
@@ -300,9 +307,16 @@ const BATCHES: readonly ResolveBatch[] = [
       r(callId(6), 'r2', { status: 'external', reason: 'builtin', confidence: 1 }),
       r(callId(7), 'r1', { status: 'resolved', definition: outside, confidence: 1 }),
       r(callId(8), 'r1', { status: 'resolved', definition: at(0, 4), confidence: 1 }),
-      r(callId(9), 'r2', { status: 'dynamic', confidence: 0 }),
-      r(`${importId(0)}#0`, 'r1', { status: 'resolved', definition: at(0, 4), confidence: 1 }),
-      r(`${importId(0)}#1`, 'r3', { status: 'ambiguous', definition: at(1, 2), confidence: 0.5 }),
+      r(callId(9), 'r2', { status: 'dynamic', target: { fqn: F }, confidence: 0 }),
+      r(callId(12), 'r1', { status: 'resolved', definition: at(3, 4), confidence: 1 }),
+      r(`${importId(0)}#0`, 'r1', { status: 'ambiguous', definition: at(1, 2), confidence: 0.5 }),
+      r(`${importId(0)}#1`, 'r3', { status: 'resolved', definition: at(0, 4), confidence: 1 }),
+      r(`${importId(0)}#2`, 'r2', {
+        status: 'external',
+        target: { fqn: PRINT },
+        reason: 'builtin',
+        confidence: 1,
+      }),
       r(`${importId(1)}#0`, 'r2', {
         status: 'external',
         target: { fqn: PRINT },
@@ -340,25 +354,26 @@ const EXPECTED_EDGES: readonly EdgeElement[] = [
   callsEdge(2, F, { status: 'ambiguous', confidence: 0.5, resolvedBy: 'r1' }),
   callsEdge(3, F, { status: 'resolved', confidence: 0.8, resolvedBy: 'r1' }),
   callsEdge(5, PRINT, { status: 'external', reason: 'builtin', confidence: 1, resolvedBy: 'r2' }),
-  importsEdge(0, F, 'resolved'),
+  importsEdge(0, F, 'ambiguous'),
+  importsEdge(0, PRINT, 'external'),
   importsEdge(1, PRINT, 'external'),
 ];
 
 const EXPECTED_REPORT: ResolveReport = {
-  siteCount: { call: 10, import: 3, receiver: 2, 'receiver-type': 1 },
+  siteCount: { call: 11, import: 4, receiver: 2, 'receiver-type': 1 },
   statusCount: {
-    call: { resolved: 4, ambiguous: 1, external: 2, unresolved: 2, dynamic: 1 },
-    import: { resolved: 1, ambiguous: 1, external: 1 },
+    call: { resolved: 5, ambiguous: 1, external: 2, unresolved: 2, dynamic: 1 },
+    import: { ambiguous: 1, resolved: 1, external: 2 },
     receiver: { resolved: 1, unresolved: 1 },
     'receiver-type': { resolved: 1 },
   },
-  reasonCount: { builtin: 3, 'no-definition': 1, 'receiver-unknown': 1, 'no-resolver': 1 },
-  byResolver: { r1: 6, r2: 7, r3: 1 },
-  unresolvedRate: { call: 0.2, import: 0, receiver: 0.5, 'receiver-type': 0 },
+  reasonCount: { builtin: 4, 'no-definition': 1, 'receiver-unknown': 1, 'no-resolver': 1 },
+  byResolver: { r1: 7, r2: 8, r3: 1 },
+  unresolvedRate: { call: 2 / 11, import: 0, receiver: 0.5, 'receiver-type': 0 },
   degradedBatches: 2,
   backendRestarts: 0,
-  edgeCount: 6,
-  droppedNoSymbol: 5,
+  edgeCount: 7,
+  droppedNoSymbol: 6,
 };
 
 const applied = () => applyResolutions(SET, BATCHES);
@@ -386,6 +401,54 @@ describe('applyResolutions: edges', () => {
     expect(edges.some((e) => e.to.key === GHOST)).toBe(false);
   });
 
+  it('INV-13: a definition whose definer fqn no symbols channel holds yields no edge', () => {
+    const { edges } = applied();
+    expect(edges.some((e) => e.from.key === callId(12) || e.to.key === UNLISTED)).toBe(false);
+  });
+
+  it('an open answer (rank <= 1) yields no edge even when it names a symbol', () => {
+    expect(applied().edges.some((e) => e.from.key === callId(9))).toBe(false);
+  });
+
+  it('IMPORTS: one IMPORT reaches two targets; of two sites on one edge the first keeps it', () => {
+    const fromImport0 = applied().edges.filter((e) => e.from.key === importId(0));
+    expect(fromImport0).toStrictEqual([
+      importsEdge(0, F, 'ambiguous'),
+      importsEdge(0, PRINT, 'external'),
+    ]);
+  });
+
+  it('edges follow the set order across files, not the batch order', () => {
+    const { edges } = applyResolutions(SET, [
+      batchOf(
+        'c.py',
+        [r(C_SITE.id, 'r1', { status: 'resolved', target: { fqn: F }, confidence: 1 })],
+        false,
+      ),
+      batchOf(
+        'b.py',
+        [r(callId(1), 'r2', { status: 'resolved', target: { fqn: F }, confidence: 1 })],
+        false,
+      ),
+    ]);
+    expect(edges.map((e) => e.from.key)).toEqual([callId(1), C_SITE.nodeId]);
+  });
+
+  it('a batch answers only its own file: a stray answer for another file site is dropped there too', () => {
+    const { edges, report } = applyResolutions(SET, [
+      batchOf(
+        'b.py',
+        [r(C_SITE.id, 'r1', { status: 'resolved', target: { fqn: F }, confidence: 1 })],
+        false,
+      ),
+      batchOf('c.py', [], false),
+    ]);
+    expect(edges).toEqual([]);
+    expect(report.byResolver).toStrictEqual({});
+    expect(report.statusCount.call).toStrictEqual({ unresolved: 12 });
+    expect(report.reasonCount).toStrictEqual({ 'no-resolver': 18, 'receiver-unknown': 1 });
+  });
+
   it('a receiver answer yields no edge and leaves its call edge as the call answer said', () => {
     const { edges } = applied();
     expect(edges.filter((e) => e.from.key === callId(1))).toStrictEqual([EXPECTED_EDGES[0]]);
@@ -405,7 +468,7 @@ describe('applyResolutions: report', () => {
 
   it('INV-21: unresolvedRate per kind over that kind own sites', () => {
     expect(applied().report.unresolvedRate).toStrictEqual({
-      call: 0.2,
+      call: 2 / 11,
       import: 0,
       receiver: 0.5,
       'receiver-type': 0,
@@ -418,9 +481,9 @@ describe('applyResolutions: report', () => {
 
   it('INV-26: answered-but-edgeless is droppedNoSymbol, keeps its status, never counts as unresolved', () => {
     const { report } = applied();
-    expect(report.droppedNoSymbol).toBe(5);
+    expect(report.droppedNoSymbol).toBe(6);
     expect(report.statusCount.call).toStrictEqual(EXPECTED_REPORT.statusCount.call);
-    expect(report.unresolvedRate.call).toBe(0.2);
+    expect(report.unresolvedRate.call).toBe(2 / 11);
   });
 
   it('a file with no batch is not counted, and a kind with no sites has no rate', () => {

@@ -98,22 +98,34 @@ const util = extracted(UTIL, {
 });
 
 // odd.py: shapes the extractor does not produce, legal by type, for the rules' edges. f's name token
-// sits inside m's tighter range; g and h tie; k has a name token and a name but defines nothing.
+// sits inside m's tighter range; p and q overlap on one row; g and h tie; k has a name token and a
+// name but defines nothing.
 const ODD = wsPath('odd.py');
 const odd = extracted(ODD, {
   nodes: [
     node('MODULE', 'file:odd.py:MODULE:$root', ODD, [0, 0, 10, 0], { name: 'odd' }),
-    node('METHOD', 'file:odd.py:METHOD:f', ODD, [0, 0, 3, 0], { name: 'f' }, [1, 2, 1, 3]),
+    node('METHOD', 'file:odd.py:METHOD:f', ODD, [0, 0, 3, 0], { name: 'f' }, [1, 2, 1, 6]),
     node('MEMBER', 'file:odd.py:MEMBER:m', ODD, [1, 0, 1, 8], { name: 'm' }),
+    node('MEMBER', 'file:odd.py:MEMBER:p', ODD, [3, 0, 3, 10], { name: 'p' }),
+    node('MEMBER', 'file:odd.py:MEMBER:q', ODD, [3, 4, 3, 12], { name: 'q' }),
     node('METHOD', 'file:odd.py:METHOD:g', ODD, [5, 0, 6, 0], { name: 'g' }, [5, 4, 5, 5]),
     node('METHOD', 'file:odd.py:METHOD:h', ODD, [5, 0, 6, 0], { name: 'h' }, [5, 4, 5, 5]),
     node('METHOD', 'file:odd.py:METHOD:k', ODD, [8, 0, 9, 0], { name: 'k' }, [8, 4, 8, 5]),
   ],
-  symbols: ['`odd.py`/', '`odd.py`/f().', '`odd.py`/m.', '`odd.py`/g().'],
+  symbols: [
+    '`odd.py`/',
+    '`odd.py`/f().',
+    '`odd.py`/m.',
+    '`odd.py`/p.',
+    '`odd.py`/q.',
+    '`odd.py`/g().',
+  ],
   edges: [
     defines('MODULE', 'file:odd.py:MODULE:$root', '`odd.py`/'),
     defines('METHOD', 'file:odd.py:METHOD:f', '`odd.py`/f().'),
     defines('MEMBER', 'file:odd.py:MEMBER:m', '`odd.py`/m.'),
+    defines('MEMBER', 'file:odd.py:MEMBER:p', '`odd.py`/p.'),
+    defines('MEMBER', 'file:odd.py:MEMBER:q', '`odd.py`/q.'),
     defines('METHOD', 'file:odd.py:METHOD:g', '`odd.py`/g().'),
     defines('METHOD', 'file:odd.py:METHOD:h', '`odd.py`/h().'),
     declares('MODULE', 'file:odd.py:MODULE:$root', 'METHOD', 'file:odd.py:METHOD:k'),
@@ -140,6 +152,7 @@ describe('createDefinitionLookup: symbolAt', () => {
     ['a range end is outside (exclusive)', 6, 12, fqn('')],
     ['the end row past the end column is outside: rows, then columns', 4, 30, fqn('')],
     ['the start row before the start column is outside', 3, 2, fqn('Square#')],
+    ['a later row before the start column is inside', 4, 2, fqn('Square#area().')],
     ['a def inside a module-level if', 9, 8, fqn('late().')],
   ] as const)('pkg/shapes.py: %s', (_name, row, column, expected) => {
     expect(lookup().symbolAt(SHAPES, row, column)).toBe(expected);
@@ -155,9 +168,18 @@ describe('createDefinitionLookup: symbolAt', () => {
     expect(lookup().symbolAt(SHAPES, 0, 4)).toBe(fqn(''));
   });
 
-  it('a name token starting here wins over a tighter range', () => {
+  it('a name token starting here wins over a tighter range; inside it, not at its start, it does not', () => {
     expect(lookup().symbolAt(ODD, 1, 2)).toBe('`odd.py`/f().');
     expect(lookup().symbolAt(ODD, 1, 5)).toBe('`odd.py`/m.');
+    expect(lookup().symbolAt(ODD, 1, 3)).toBe('`odd.py`/m.');
+  });
+
+  it('tightest: the latest start, by column on one row, before the earliest end', () => {
+    expect(lookup().symbolAt(ODD, 3, 5)).toBe('`odd.py`/q.');
+  });
+
+  it('tightest: of two ranges with one start, the earlier end', () => {
+    expect(lookup().symbolAt(UTIL, 0, 0)).toBe('`util.py`/helper().');
   });
 
   it('equal candidates: the first in node order, for a name token and for a range', () => {

@@ -65,6 +65,15 @@ describe('NullResolver (PASSTHROUGH: the control that resolves nothing)', () => 
     ]);
   });
 
+  it('INV-20: a token that is not cancelled changes nothing', async () => {
+    const r = new NullResolver();
+    await r.open(WORKSPACE);
+    const { resolutions } = await r.resolve(FILE, [A], {
+      token: { isCancellationRequested: false },
+    });
+    expect(resolutions).toStrictEqual([noResolver('a')]);
+  });
+
   it('status(): stopped until open, ready while open, stopped after close; never restarts', async () => {
     const r = new NullResolver();
     const stopped = { resolverId: 'null', state: 'stopped', restarts: 0 };

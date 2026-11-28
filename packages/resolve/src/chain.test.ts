@@ -98,6 +98,7 @@ describe('ChainResolver: identity', () => {
       host: 'host-accelerator',
       maxConcurrentFiles: 3,
     });
+    expect(new ChainResolver([py, host]).capabilities.host).toBe('host-accelerator');
     expect(new ChainResolver([]).capabilities).toEqual({
       extensions: [],
       kinds: [],
@@ -228,7 +229,16 @@ describe('ChainResolver: resolve', () => {
     const chain = new ChainResolver([l1]);
     await chain.open(WORKSPACE);
     const token: CancellationLike = { isCancellationRequested: true };
-    const { resolutions } = await chain.resolve(FILE, [A, B], { token });
+    const { resolutions, diagnostics } = await chain.resolve(FILE, [A, B], { token });
+    expect(diagnostics).toStrictEqual({
+      resolverId: 'chain(l1)',
+      filePath: FILE,
+      siteCount: 2,
+      backend: 'ready',
+      degraded: false,
+      elapsedMs: 0,
+      timedOutSites: 0,
+    });
     expect(resolutions).toStrictEqual([
       {
         refId: 'a',
@@ -264,11 +274,23 @@ describe('ChainResolver: resolve', () => {
         token.isCancellationRequested = true;
       },
       mangle: (rs) => rs.filter((r) => r.refId !== 'c'),
+      diagnostics: { backend: 'warming', elapsedMs: 4, timedOutSites: 1 },
     });
-    const l2 = link('l2', [at(A, ans('resolved')), at(C, ans('resolved'))]);
+    const l2 = link('l2', [at(A, ans('resolved')), at(C, ans('resolved'))], {
+      diagnostics: { backend: 'degraded', degraded: true, elapsedMs: 9, timedOutSites: 2 },
+    });
     const chain = new ChainResolver([l1, l2]);
     await chain.open(WORKSPACE);
-    const { resolutions } = await chain.resolve(FILE, [A, B, C], { token });
+    const { resolutions, diagnostics } = await chain.resolve(FILE, [A, B, C], { token });
+    expect(diagnostics).toStrictEqual({
+      resolverId: 'chain(l1>l2)',
+      filePath: FILE,
+      siteCount: 3,
+      backend: 'warming',
+      degraded: false,
+      elapsedMs: 4,
+      timedOutSites: 1,
+    });
     expect(resolutions.map((r) => [r.refId, r.status, r.resolvedBy, r.reason])).toEqual([
       ['a', 'dynamic', 'l1', undefined],
       ['b', 'resolved', 'l1', undefined],
@@ -304,6 +326,18 @@ describe('ChainResolver: diagnostics and status', () => {
     });
   });
 
+  it.each([
+    [true, false],
+    [false, true],
+  ])('degraded is any asked link: %s then %s is degraded', async (d1, d2) => {
+    const l1 = link('l1', [at(A, ans('unresolved', 'timeout'))], { diagnostics: { degraded: d1 } });
+    const l2 = link('l2', [], { diagnostics: { degraded: d2 } });
+    const chain = new ChainResolver([l1, l2]);
+    await chain.open(WORKSPACE);
+    const { diagnostics } = await chain.resolve(FILE, [A]);
+    expect([l2.calls.length, diagnostics.degraded]).toEqual([1, true]);
+  });
+
   it('a link never asked adds nothing to the diagnostics', async () => {
     const l1 = link('l1', [at(A, ans('resolved'))], { diagnostics: { elapsedMs: 2 } });
     const l2 = link('l2', [], {
@@ -337,12 +371,12 @@ describe('ChainResolver: diagnostics and status', () => {
   );
 
   it('status(): worst state, summed restarts, the first lastError', () => {
-    const l1 = link('l1', [], { status: { state: 'warming', restarts: 1 } });
+    const l1 = link('l1', [], { status: { state: 'starting', restarts: 1 } });
     const l2 = link('l2', [], {
       status: { state: 'ready', restarts: 2, lastError: { message: 'boom' } },
     });
     const l3 = link('l3', [], {
-      status: { state: 'starting', restarts: 0, lastError: { message: 'later' } },
+      status: { state: 'warming', restarts: 0, lastError: { message: 'later' } },
     });
     expect(new ChainResolver([l1, l2, l3]).status()).toStrictEqual({
       resolverId: 'chain(l1>l2>l3)',
@@ -350,6 +384,17 @@ describe('ChainResolver: diagnostics and status', () => {
       restarts: 3,
       lastError: { message: 'boom' },
     });
+  });
+
+  it.each([
+    ['ready', 'warming', 'warming'],
+    ['starting', 'warming', 'starting'],
+    ['starting', 'stopped', 'stopped'],
+    ['degraded', 'stopped', 'degraded'],
+  ] as const)('status(): %s then %s is %s', (s1, s2, expected) => {
+    const l1 = link('l1', [], { status: { state: s1 } });
+    const l2 = link('l2', [], { status: { state: s2 } });
+    expect(new ChainResolver([l1, l2]).status().state).toBe(expected);
   });
 
   it('status(): with no link reporting an error there is no lastError; no links is ready', () => {

@@ -157,21 +157,24 @@ export const CHAIN_CASES: readonly ChainCase[] = [
         resolvedBy: 'l1',
         confidence: 1,
       };
-      const early: Resolution = {
+      // l1 repeats a: the LAST copy (ambiguous, rank 3) counts, not the higher-ranked first one.
+      const late: Resolution = { ...ans('ambiguous'), refId: 'a', resolvedBy: 'l1' };
+      // l2 answers a, which it was not asked about: ignored.
+      const unasked: Resolution = {
         refId: 'a',
-        status: 'unresolved',
-        resolvedBy: 'l1',
-        confidence: 0,
+        status: 'resolved',
+        resolvedBy: 'l2',
+        confidence: 1,
       };
       const l1 = link(
         'l1',
         [at(A, ans('resolved')), at(B, ans('unresolved')), at(C, ans('dynamic'))],
         {
-          mangle: ([a, , c]) => (a && c ? [extra, c, early, a] : []),
+          mangle: ([a, , c]) => (a && c ? [extra, c, a, late] : []),
         },
       );
       const l2 = link('l2', [at(B, ans('ambiguous')), at(C, ans('resolved'))], {
-        mangle: (rs) => rs.filter((r) => r.refId !== 'd'),
+        mangle: (rs) => [...rs.filter((r) => r.refId !== 'd'), unasked],
       });
       const got = await answers(make, [l1, l2], [A, B, C, D]);
       return [
@@ -179,7 +182,7 @@ export const CHAIN_CASES: readonly ChainCase[] = [
           'INV-1',
           'answers',
           [
-            'a resolved l1 -',
+            'a ambiguous l1 -',
             'b ambiguous l2 -',
             'c resolved l2 -',
             'd unresolved <chain> no-resolver',
@@ -195,8 +198,8 @@ export const CHAIN_CASES: readonly ChainCase[] = [
     text: 'a host-accelerator kind no headless link declares throws capability-parity',
     run: async (make) =>
       throwsParity('INV-4a', make, [
-        link('host', [], caps(HOST, ['call'])),
         link('py', [], caps('headless', ['import'])),
+        link('host', [], caps(HOST, ['call'])),
       ]),
   },
   {
@@ -204,14 +207,15 @@ export const CHAIN_CASES: readonly ChainCase[] = [
     text: 'every kind of every host link needs a headless declarer; a host link never counts',
     run: async (make) =>
       throwsParity('INV-4b', make, [
-        link('host1', [], caps(HOST, ['call', 'receiver-type'])),
-        link('host2', [], caps(HOST, ['receiver-type'])),
         link('py', [], caps('headless', ['call'])),
+        link('host1', [], caps(HOST, ['call'])),
+        link('host2', [], caps(HOST, ['call', 'receiver-type'])),
+        link('host3', [], caps(HOST, ['receiver-type'])),
       ]),
   },
   {
     id: 'INV-4c',
-    text: 'parity holds whatever the headless link position, and a host link declaring nothing needs none',
+    text: 'parity holds whatever the link positions, split over headless links, and for a host link declaring nothing',
     run: async (make) => [
       ...constructs('INV-4c', make, [
         link('py', [], caps('headless', ['call', 'receiver-type'])),
@@ -222,6 +226,11 @@ export const CHAIN_CASES: readonly ChainCase[] = [
         link('py', [], caps('headless', ['import', 'call'])),
       ]),
       ...constructs('INV-4c', make, [link('host', [], caps(HOST, []))]),
+      ...constructs('INV-4c', make, [
+        link('host', [], caps(HOST, ['call', 'import'])),
+        link('py1', [], caps('headless', ['call'])),
+        link('py2', [], caps('headless', ['import'])),
+      ]),
     ],
   },
   {
