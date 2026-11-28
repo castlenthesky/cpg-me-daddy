@@ -1,7 +1,9 @@
 # packages/resolve: agent notes
 
-Status: `src/contract.ts` is C-RESOLVE (amended), types only, plus the `ProcessHost` / `SubprocessHandle` seam. REAL: `src/lsp/` (Content-Length framing and a JSON-RPC connection that never throws), the first piece of the U8 driver. Every `Resolver` is SEAT until U6c/U8/U9; see `docs/outline/07-milestones.yaml`.
-Layout and rules: `docs/outline/03-architecture.md` §2. Root `AGENTS.md` applies.
+Status: `src/contract.ts` is C-RESOLVE (amended), types only, plus the `ProcessHost` / `SubprocessHandle` seam and `ResolveReport`. REAL (U6c.1a): `ChainResolver` (`src/chain.ts`), `createDefinitionLookup` over a sealed set (`src/lookup.ts`), `applyResolutions` (`src/apply.ts`), `unresolved`/`statusRank` (`src/resolution.ts`); `NullResolver` (`src/null.ts`) is a PASSTHROUGH by design, the control that resolves nothing. REAL: `src/lsp/` (Content-Length framing and a JSON-RPC connection that never throws), the first piece of the U8 driver. PythonPathResolver is U6c.1b; the LSP resolver U8; see `docs/outline/07-milestones.yaml`.
+
+- `test/` holds the test doubles: `FixtureResolver` (a table-driven Resolver with `unmatched()`), `BrokenChain` (the archive's chain, which the chain suite must fail on INV-4 and INV-10c), the chain suite itself (`chain-contract.ts`) and hand-built extract output (`files.ts`). A resolve test may import one sibling (`@cpg/extract`), so it builds files by hand rather than parsing.
+  Layout and rules: `docs/outline/03-architecture.md` §2. Root `AGENTS.md` applies.
 
 - No host SDK and no I/O, except through the LSP driver's subprocess seam.
 - `src/contract.ts` holds only statement-level `import type` / `export type` from `@cpg/model` (check-deps rule `contract-types-only`). No runtime export, ever.
