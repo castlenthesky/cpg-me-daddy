@@ -348,9 +348,37 @@ export interface BuiltinTarget {
   readonly descriptors: readonly SymbolDescriptor[];
 }
 
+/** One name an import statement binds: one `import` ref site (I20). */
+export interface ImportBindingInfo {
+  /** The imported name's token, never the alias: where the ref site points (I20). */
+  readonly nameNode: SyntaxNode;
+  /** The imported name's segments (`['os', 'path']`, `['helper']`, `['*']`). */
+  readonly nameParts: readonly string[];
+  /** The ref site's `importBinding`, as RefSite defines it. */
+  readonly binding: NonNullable<RefSite['importBinding']>;
+  /** Whether the name is part of the file's exported surface when the import is module-level (decision 94). */
+  readonly exported: boolean;
+}
+
+/** One import statement as syntax (BMO-134): one IMPORT node, one ref site per binding. */
+export interface ImportInfo {
+  readonly emits: 'IMPORT';
+  /** `IMPORT.source_text`: the module the statement names. */
+  readonly sourceText: string;
+  /** `IMPORT.imported_names`: the names it takes from that module, as the module spells them. */
+  readonly importedNames: readonly string[];
+  /** `IMPORT.alias`: absent unless the adapter's rule gives one. */
+  readonly alias?: string;
+  /** `IMPORT.is_type_only`. */
+  readonly typeOnly: boolean;
+  /** In source order. */
+  readonly bindings: readonly ImportBindingInfo[];
+}
+
 /** Pass B's verdict on one node of an expression region; `undefined` means descend ordinarily. */
 export type ExpressionVerdict =
   | CallInfo
+  | ImportInfo
   | { readonly emits: 'none'; readonly descend: 'transparent' }
   | { readonly emits: 'none'; readonly descend: 'stop' };
 

@@ -2,8 +2,9 @@
 // f18ee71:packages/engine/src/extract/python.ts (classifyFunction, classifyClass, classifyAssignment,
 // paramInfo, the docstring helpers), plus `decorated_definition` (decision 107). The expression half
 // (Pass B calls, U6a.2-4a) from classifyExpressionPy, calleeShape, argInfos and localBindingsPy, with
-// resolveCallee's attribution REMOVED: a call is syntax, plus the builtin table's answer. IMPORT is
-// BMO-134, declared-not-emitted in the coverage table until then, never silent (I13).
+// resolveCallee's attribution REMOVED: a call is syntax, plus the builtin table's answer. The import
+// table (Pass B imports, BMO-134) classifies import_statement, import_from_statement and
+// future_import_statement through node types and fields (archive 21754b4 imports.ts).
 
 import type { WorkspacePath } from '@cpg/model';
 import type {
@@ -16,6 +17,8 @@ import type {
   DeclarationInfo,
   Disposition,
   ExpressionVerdict,
+  ImportBindingInfo,
+  ImportInfo,
   LanguageAdapter,
   MemberInfo,
   MethodInfo,
@@ -54,7 +57,7 @@ const PYTHON_COVERAGE: CoverageManifest = Object.freeze({
     ),
     MEMBER: emits('expression_statement'),
     CALL: emits('call', 'decorator'),
-    IMPORT: later('Pass B imports land in U6a.2-4b', 'BMO-134'),
+    IMPORT: emits('import_statement', 'import_from_statement', 'future_import_statement'),
     SYMBOL: emits(
       'module',
       'class_definition',
@@ -76,6 +79,9 @@ const PYTHON_COVERAGE: CoverageManifest = Object.freeze({
       'function_definition',
       'expression_statement',
       'decorated_definition',
+      'import_statement',
+      'import_from_statement',
+      'future_import_statement',
     ),
     HAS_PARAM: emits('function_definition', 'decorated_definition'),
     DEFINES: emits(
@@ -210,6 +216,27 @@ function paramInfo(node: SyntaxNode): Omit<ParamInfo, 'ordinal'> | undefined {
   }
 }
 
+function splatPrefix(node: SyntaxNode): '' | '*' | '**' {
+  const holder =
+    node.type === 'typed_parameter'
+      ? node.namedChildren[0]
+      : node.type === 'default_parameter' || node.type === 'typed_default_parameter'
+        ? node.childForFieldName('name')
+        : node;
+  if (holder?.type === 'list_splat_pattern') return '*';
+  if (holder?.type === 'dictionary_splat_pattern') return '**';
+  return '';
+}
+
+function paramSignature(node: SyntaxNode, name: string): string {
+  const type = node.childForFieldName('type')?.text;
+  const value = node.childForFieldName('value')?.text;
+  let result = `${splatPrefix(node)}${name}`;
+  if (type !== undefined) result += `: ${type}`;
+  if (value !== undefined) result += type !== undefined ? ` = ${value}` : `=${value}`;
+  return result;
+}
+
 /**
  * A `function_definition` (`name`, `parameters`, `body`, optional `return_type` fields; undefined
  * without a name or a parameters field):
@@ -222,10 +249,14 @@ function paramInfo(node: SyntaxNode): Omit<ParamInfo, 'ordinal'> | undefined {
  *   identifier is zero-width) yields no ParamInfo while still consuming its position, and each kept
  *   param gets its position as `ordinal` (decision 114). A `typeText` or `defaultText` whose text
  *   contains U+0000 is omitted (decision 115, C-EXTRACT I19).
- * - signature (archive): `<name>(<p>, ...)` over the kept params only, with `<p>` = `name` or
- *   `name: <type field text>` (read from the param node's `type` field, even when `typeText` was
- *   omitted), then ` -> <return_type text>` when there is one (`greet(name: str, times) -> str`),
- *   with every U+0000 character removed (decision 115, C-EXTRACT I19).
+ * - signature (stop-list 197): `<name>(<p>, ...)` walking `parameters`'s named children in order,
+ *   then ` -> <return_type text>` when there is one, with every U+0000 character removed (decision
+ *   115, C-EXTRACT I19): a `keyword_separator` writes `*`; a `positional_separator` writes `/`; a
+ *   kept param writes `*` for a `list_splat_pattern` or `**` for a `dictionary_splat_pattern` (the
+ *   param itself, a `typed_parameter`'s first named child, or a default parameter's `name` field),
+ *   then the name, then `: <type field text>` when the param has a `type` field, then ` = <value text>`
+ *   when it has both `type` and `value` fields or `=<value text>` when it has only `value` (read from
+ *   the raw fields, even when `typeText` or `defaultText` was omitted); anything else writes nothing.
  * - kind: in a TYPE_DECL `constructor` for `__init__`, else `method`; in the MODULE `function`.
  * - exported: the name has no leading `_`. async: the node's text starts with `async` and whitespace.
  * - docstringHead (archive; a class's too): the body's first named child is an `expression_statement`
@@ -240,25 +271,29 @@ function classifyFunction(node: SyntaxNode, container: ContainerKind): MethodInf
 
   const name = nameNode.text;
   const params: ParamInfo[] = [];
+  const sigParts: string[] = [];
   let position = 0;
   for (const child of paramsNode.namedChildren) {
+    if (child.type === 'keyword_separator') {
+      sigParts.push('*');
+      continue;
+    }
+    if (child.type === 'positional_separator') {
+      sigParts.push('/');
+      continue;
+    }
     const info = paramInfo(child);
     if (info === undefined) continue;
     const ordinal = position;
     position += 1;
     if (info.name === '') continue;
     params.push({ ...info, ordinal });
+    sigParts.push(paramSignature(child, info.name));
   }
 
   const returnType = node.childForFieldName('return_type')?.text;
-  const paramList = params
-    .map((param) => {
-      const type = param.node.childForFieldName('type')?.text;
-      return type !== undefined ? `${param.name}: ${type}` : param.name;
-    })
-    .join(', ');
   const signature =
-    `${name}(${paramList})${returnType !== undefined ? ` -> ${returnType}` : ''}`.replaceAll(
+    `${name}(${sigParts.join(', ')})${returnType !== undefined ? ` -> ${returnType}` : ''}`.replaceAll(
       '\u0000',
       '',
     );
@@ -314,14 +349,15 @@ function classifyClass(node: SyntaxNode): TypeDeclInfo | undefined {
  * An `expression_statement` whose first named child is an `assignment` with an `identifier` `left`
  * (`X = 1`, `X: int = 1`, `X: int`, the first name of `a = b = 1`): a MEMBER named by it, typeText its
  * `type` field (omitted when absent or containing U+0000; decision 115, C-EXTRACT I19), value its
- * `right` field when present. A tuple, attribute or augmented assignment, or any other statement, is
- * undefined.
+ * `right` field when present. A `left` identifier whose text is `''` (a MISSING identifier is
+ * zero-width) gives undefined (decision 118). A tuple, attribute or augmented assignment, or any
+ * other statement, is undefined.
  */
 function classifyAssignment(node: SyntaxNode): MemberInfo | undefined {
   const inner = node.namedChildren[0];
   if (inner?.type !== 'assignment') return undefined;
   const left = inner.childForFieldName('left');
-  if (left?.type !== 'identifier') return undefined;
+  if (left?.type !== 'identifier' || left.text === '') return undefined;
 
   const typeText = propertyText(inner.childForFieldName('type'));
   const value = inner.childForFieldName('right') ?? undefined;
@@ -435,9 +471,190 @@ function callInfo(
   };
 }
 
+const IMPORT_STATEMENTS: ReadonlySet<string> = new Set([
+  'import_statement',
+  'import_from_statement',
+  'future_import_statement',
+]);
+
+function dottedSegments(node: SyntaxNode): readonly string[] {
+  return node.namedChildren
+    .filter((child) => child.type === 'identifier' && child.text !== '')
+    .map((child) => child.text);
+}
+
+function countDots(text: string): number {
+  let count = 0;
+  for (const ch of text) {
+    if (ch === '.') count += 1;
+  }
+  return count;
+}
+
+function readNamedBinding(
+  child: SyntaxNode,
+): { nameNode: SyntaxNode; parts: readonly string[]; alias?: string } | undefined {
+  if (child.type === 'dotted_name') {
+    const parts = dottedSegments(child);
+    return parts.length === 0 ? undefined : { nameNode: child, parts };
+  }
+  if (child.type === 'aliased_import') {
+    const nameNode = child.childForFieldName('name');
+    const aliasNode = child.childForFieldName('alias');
+    if (nameNode?.type !== 'dotted_name' || aliasNode === null || aliasNode.text === '') {
+      return undefined;
+    }
+    const parts = dottedSegments(nameNode);
+    return parts.length === 0 ? undefined : { nameNode, parts, alias: aliasNode.text };
+  }
+  return undefined;
+}
+
+function classifyFromImport(
+  node: SyntaxNode,
+  module: string,
+  relativeDepth: number,
+  moduleNode: SyntaxNode | null,
+): ImportInfo | undefined {
+  const bindings: ImportBindingInfo[] = [];
+  const importedNames: string[] = [];
+  let lastAliased = false;
+
+  for (const child of node.namedChildren) {
+    if (
+      moduleNode !== null &&
+      child.type === moduleNode.type &&
+      child.startIndex === moduleNode.startIndex
+    ) {
+      continue;
+    }
+    if (child.type === 'wildcard_import') {
+      bindings.push({
+        nameNode: child,
+        nameParts: ['*'],
+        binding: { module, relativeDepth, imported: '*', local: '*' },
+        exported: isExported('*'),
+      });
+      importedNames.push('*');
+      lastAliased = false;
+      continue;
+    }
+    const entry = readNamedBinding(child);
+    if (entry === undefined) continue;
+    const imported = entry.parts.join('.');
+    const local = entry.alias ?? imported;
+    bindings.push({
+      nameNode: entry.nameNode,
+      nameParts: entry.parts,
+      binding: { module, relativeDepth, imported, local },
+      exported: isExported(local),
+    });
+    importedNames.push(imported);
+    lastAliased = entry.alias !== undefined;
+  }
+
+  if (bindings.length === 0) return undefined;
+  const alias = bindings.length === 1 && lastAliased ? bindings[0]?.binding.local : undefined;
+  return {
+    emits: 'IMPORT',
+    sourceText: `${'.'.repeat(relativeDepth)}${module}`,
+    importedNames,
+    ...(alias !== undefined ? { alias } : {}),
+    typeOnly: false,
+    bindings,
+  };
+}
+
+/**
+ * The import table (archive 21754b4 imports.ts, read through node types instead of its keyword split),
+ * for an `import_statement`, an `import_from_statement` or a `future_import_statement`; anything else
+ * is undefined:
+ * - A name's segments are the texts of its `dotted_name`'s `identifier` named children, so
+ *   `a . b` reads `a.b`; the dotted form is the segments joined with `.`.
+ * - `import_statement`: one binding per named child of type `dotted_name` or `aliased_import` (the
+ *   module is the `aliased_import`'s `name` field), in source order; every other child (a comment, a
+ *   line continuation, an ERROR) is none. Each binding: nameNode the module's `dotted_name`, nameParts
+ *   its segments, binding `{ module: dotted, relativeDepth: 0, local }` with no `imported` (a
+ *   whole-module import), local the `alias` field's text when aliased, else the first segment
+ *   (`import os.path` binds `os`). sourceText is the bindings' modules joined with `,` (`os`,
+ *   `os.path`, `a.b,d`); importedNames is `[]`.
+ * - `import_from_statement`: the `module_name` field is a `dotted_name` (relativeDepth 0, module its
+ *   dotted form) or a `relative_import` (relativeDepth the count of `.` in its `import_prefix` child's
+ *   text, module the dotted form of its `dotted_name` child, `''` without one). sourceText is
+ *   `.` repeated relativeDepth times, then module (`util`, `.`, `..pkg.sub`). One binding per named
+ *   child of type `dotted_name` or `aliased_import` other than the `module_name` node (told apart by
+ *   start index), in source order: nameNode the name's `dotted_name` (an `aliased_import`'s `name`
+ *   field), nameParts its segments, binding `{ module, relativeDepth, imported: dotted, local: the
+ *   alias field's text when aliased, else imported }`; a `wildcard_import` child is one binding in
+ *   its place with nameNode the wildcard node, nameParts `['*']`, imported and local `*`.
+ *   importedNames is each binding's `imported`, in order.
+ * - `future_import_statement`: as an `import_from_statement` whose module is `__future__` at
+ *   relativeDepth 0 (it has no `module_name` field), sourceText `__future__`.
+ * - Every binding: `exported` is true unless local starts with `_` (archive isExported; decision 94).
+ * - alias: present only when there is exactly one binding and it came from an `aliased_import`: that
+ *   binding's local. typeOnly: always false (Python has no type-only import).
+ * - A MISSING identifier (zero-width, text `''`) is no segment. A name left with no segment, or an
+ *   `aliased_import` whose alias is `''`, is no binding, and a statement left with no binding is
+ *   undefined, so `from m import ()` (recovered as one MISSING name) is no IMPORT: the MISSING-name
+ *   analogue of decisions 114 and 118 (sprint 42 reading S42-7).
+ */
+function classifyImport(node: SyntaxNode): ImportInfo | undefined {
+  if (node.type === 'import_statement') {
+    const bindings: ImportBindingInfo[] = [];
+    let lastAliased = false;
+    for (const child of node.namedChildren) {
+      const entry = readNamedBinding(child);
+      const first = entry?.parts[0];
+      if (entry === undefined || first === undefined) continue;
+      const dotted = entry.parts.join('.');
+      const local = entry.alias ?? first;
+      bindings.push({
+        nameNode: entry.nameNode,
+        nameParts: entry.parts,
+        binding: { module: dotted, relativeDepth: 0, local },
+        exported: isExported(local),
+      });
+      lastAliased = entry.alias !== undefined;
+    }
+    if (bindings.length === 0) return undefined;
+    const alias = bindings.length === 1 && lastAliased ? bindings[0]?.binding.local : undefined;
+    return {
+      emits: 'IMPORT',
+      sourceText: bindings.map((b) => b.binding.module).join(','),
+      importedNames: [],
+      ...(alias !== undefined ? { alias } : {}),
+      typeOnly: false,
+      bindings,
+    };
+  }
+
+  if (node.type === 'import_from_statement') {
+    const moduleNode = node.childForFieldName('module_name');
+    let relativeDepth = 0;
+    let module = '';
+    if (moduleNode?.type === 'dotted_name') {
+      module = dottedSegments(moduleNode).join('.');
+    } else if (moduleNode?.type === 'relative_import') {
+      const prefix = moduleNode.namedChildren.find((child) => child.type === 'import_prefix');
+      if (prefix !== undefined) relativeDepth = countDots(prefix.text);
+      const dottedChild = moduleNode.namedChildren.find((child) => child.type === 'dotted_name');
+      if (dottedChild !== undefined) module = dottedSegments(dottedChild).join('.');
+    }
+    return classifyFromImport(node, module, relativeDepth, moduleNode);
+  }
+
+  if (node.type === 'future_import_statement') {
+    return classifyFromImport(node, '__future__', 0, null);
+  }
+
+  return undefined;
+}
+
 /**
  * The expression table (archive python.ts classifyExpressionPy, calleeShape, argInfos; subgraph.ts's
  * receiver rule), sparse by design:
+ * - `import_statement`, `import_from_statement`, `future_import_statement`: the import table's ImportInfo
+ *   (classifyImport, BMO-134), never descended.
  * - `call` with a `function` field that is an `identifier` (bare) or an `attribute` whose `attribute`
  *   is an identifier: a CallInfo of kind `call`. Any other callee (a call, subscript, parenthesized
  *   expression) is undefined, so the walker descends it ordinarily.
@@ -464,6 +681,7 @@ function callInfo(
  * - anything else: undefined (descend ordinarily).
  */
 function classifyExpression(node: SyntaxNode): ExpressionVerdict | undefined {
+  if (IMPORT_STATEMENTS.has(node.type)) return classifyImport(node);
   if (TRANSPARENT.has(node.type)) return { emits: 'none', descend: 'transparent' };
   if (STOP.has(node.type)) return { emits: 'none', descend: 'stop' };
   const expression = node.type === 'decorator' ? node.namedChildren[0] : node;

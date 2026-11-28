@@ -1140,7 +1140,7 @@ describe('async, decorators, PEP 695 and string annotations', () => {
       'MEMBER file:q.py:MEMBER:x 4:0-4:12',
     ]);
     expect(propsOf(file, 'file:q.py:METHOD:g')['signature']).toBe(
-      'g(a: "Foo", b: \'list[int]\') -> "Bar"',
+      'g(a: "Foo", b: \'list[int]\' = None) -> "Bar"',
     );
     expect(propsOf(file, 'file:q.py:PARAM:g.a')).toEqual({
       name: 'a',
@@ -1320,7 +1320,8 @@ describe('large and deep files through parse and extract (I17)', () => {
 // is walk.ts's `params.length`, so it counts the PARAMs emitted; the signature lists them (python.ts).
 // Decision 115: a default or annotation whose text holds U+0000 is omitted (no `default`, no
 // `type_text`, on a PARAM or a MEMBER); the signature keeps each annotation as written with every
-// U+0000 dropped. Trees are PRECONDITIONS (the pinned grammar's input to extract).
+// U+0000 dropped. Sprint 42 (stop-list 197): the signature also keeps each default, a splat's stars and
+// the `*` and `/` separators (python.ts). Trees are PRECONDITIONS (the pinned grammar's input to extract).
 
 const param = (name: string, ordinal: number, more: Record<string, PropertyValue> = {}) => ({
   name,
@@ -1351,14 +1352,14 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(,*args):\n    pass\n',
       '(module (function_definition name: (identifier) parameters: (parameters (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
       'f',
-      'f(args)',
+      'f(*args)',
       param('args', 1),
     ),
     survivor(
       'def greet(name: str, times=1,, *args, **kwargs) -> str:\n    pass\n',
       '(module (function_definition name: (identifier) parameters: (parameters (typed_parameter (identifier) type: (type (identifier))) (default_parameter name: (identifier) value: (integer)) (MISSING identifier) (list_splat_pattern (identifier)) (dictionary_splat_pattern (identifier))) return_type: (type (identifier)) body: (block (pass_statement))))',
       'greet',
-      'greet(name: str, times, args, kwargs) -> str',
+      'greet(name: str, times=1, *args, **kwargs) -> str',
       param('name', 0, { type_text: 'str' }),
       param('times', 1, { default: '1' }),
       param('args', 3),
@@ -1369,7 +1370,7 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(a, *, ,*args):\n    pass\n',
       '(module (function_definition name: (identifier) parameters: (parameters (identifier) (keyword_separator) (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
       'f',
-      'f(a, args)',
+      'f(a, *, *args)',
       param('a', 0),
       param('args', 2),
     ),
@@ -1377,14 +1378,14 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(a=[1, \u0000]):\n    pass\n',
       "(module (function_definition name: (identifier) parameters: (parameters (default_parameter name: (identifier) value: (list (integer) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
       'f',
-      'f(a)',
+      'f(a=[1, ])',
       param('a', 0),
     ),
     survivor(
       'class C:\n    def m(self, a: Dict[str, \u0000] = {}):\n        pass\n',
       "(module (class_definition name: (identifier) body: (block (function_definition name: (identifier) parameters: (parameters (identifier) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (dictionary))) body: (block (pass_statement))))))",
       'C.m',
-      'm(self, a: Dict[str, ])',
+      'm(self, a: Dict[str, ] = {})',
       param('self', 0),
       param('a', 1, { default: '{}' }),
     ),
@@ -1393,7 +1394,7 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(a=[\u0000], b: int = 2, c: Dict[str, \u0000] = 3, d=4):\n    pass\n',
       "(module (function_definition name: (identifier) parameters: (parameters (default_parameter name: (identifier) value: (list (ERROR (UNEXPECTED '\\0')))) (typed_default_parameter name: (identifier) type: (type (identifier)) value: (integer)) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (integer)) (default_parameter name: (identifier) value: (integer))) body: (block (pass_statement))))",
       'f',
-      'f(a, b: int, c: Dict[str, ], d)',
+      'f(a=[], b: int = 2, c: Dict[str, ] = 3, d=4)',
       param('a', 0),
       param('b', 1, { type_text: 'int', default: '2' }),
       param('c', 2, { default: '3' }),
@@ -1414,7 +1415,7 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(e: int = [1, \u0000], g: Dict[str, \u0000] = [1, \u0000]):\n    pass\n',
       "(module (function_definition name: (identifier) parameters: (parameters (typed_default_parameter name: (identifier) type: (type (identifier)) value: (list (integer) (ERROR (UNEXPECTED '\\0')))) (typed_default_parameter name: (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))) value: (list (integer) (ERROR (UNEXPECTED '\\0'))))) body: (block (pass_statement))))",
       'f',
-      'f(e: int, g: Dict[str, ])',
+      'f(e: int = [1, ], g: Dict[str, ] = [1, ])',
       param('e', 0, { type_text: 'int' }),
       param('g', 1),
     ),
@@ -1423,7 +1424,7 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(a, /, b, (c, d), e, , g, *, ,*args):\n    pass\n',
       '(module (function_definition name: (identifier) parameters: (parameters (identifier) (positional_separator) (identifier) (tuple_pattern (identifier) (identifier)) (identifier) (ERROR) (identifier) (keyword_separator) (MISSING identifier) (list_splat_pattern (identifier))) body: (block (pass_statement))))',
       'f',
-      'f(a, b, e, g, args)',
+      'f(a, /, b, e, g, *, *args)',
       param('a', 0),
       param('b', 1),
       param('e', 2),
@@ -1434,7 +1435,7 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       'def f(a: Dict[str, \u0000], *args: Tuple[int, \u0000], **kw: Dict[str, \u0000]):\n    pass\n',
       "(module (function_definition name: (identifier) parameters: (parameters (typed_parameter (identifier) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0')))))) (typed_parameter (list_splat_pattern (identifier)) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0')))))) (typed_parameter (dictionary_splat_pattern (identifier)) type: (type (generic_type (identifier) (type_parameter (type (identifier)) (ERROR (UNEXPECTED '\\0'))))))) body: (block (pass_statement))))",
       'f',
-      'f(a: Dict[str, ], args: Tuple[int, ], kw: Dict[str, ])',
+      'f(a: Dict[str, ], *args: Tuple[int, ], **kw: Dict[str, ])',
       param('a', 0),
       param('args', 1),
       param('kw', 2),
@@ -1483,6 +1484,48 @@ describe('a MISSING param name and a NUL in a default or annotation (decisions 1
       expect(ids.map((x) => propsOf(file, `file:m.py:MEMBER:${x}`))).toStrictEqual(
         MEMBER_PROPS.slice(0, ids.length),
       );
+    });
+  }
+});
+
+// Decision 118 (sprint 41 stop_list_new 2, owner delegation): a MISSING or empty assignment target is no
+// MEMBER, and the rest of the file extracts as usual. The statement is then one Pass A did not declare,
+// so Pass B walks it in `$root` and its call counts (pass-b.ts). Before: classifyAssignment read a MEMBER
+// named '' and makeNodeId refused its scope, failing the whole file `internal` (5 of 1,600 fuzz inputs).
+// Trees are PRECONDITIONS; ranges are 0-based, counted by hand.
+const MISSING_TARGETS = [
+  {
+    text: 'x = 1\n:\n    b1 = f(x)\n',
+    tree: '(module (expression_statement (assignment left: (identifier) right: (integer))) (expression_statement (assignment left: (MISSING identifier) type: (type (identifier)) right: (call function: (identifier) arguments: (argument_list (identifier))))))',
+    nodes: ['MODULE file:m.py:MODULE:$root 0:0-3:0', 'MEMBER file:m.py:MEMBER:x 0:0-0:5'],
+    calls: ['file:m.py:CALL:$root:0 2:9-2:13 f'],
+    reaching: ['file:m.py:MEMBER:x -> file:m.py:CALL:$root:0 x'],
+  },
+  {
+    text: 'class K:\n    :\n        b = g()\n',
+    tree: '(module (class_definition name: (identifier) body: (block (expression_statement (assignment left: (MISSING identifier) type: (type (identifier)) right: (call function: (identifier) arguments: (argument_list)))))))',
+    nodes: ['MODULE file:m.py:MODULE:$root 0:0-3:0', 'TYPE_DECL file:m.py:TYPE_DECL:K 0:0-2:15'],
+    calls: ['file:m.py:CALL:$root:0 2:12-2:15 g'],
+    reaching: [],
+  },
+] as const;
+
+describe('a MISSING assignment target (decision 118)', () => {
+  for (const c of MISSING_TARGETS) {
+    it(`${JSON.stringify(c.text)}: ok, no MEMBER for it, its call still counted`, async () => {
+      const r = await run('m.py', c.text);
+      expect(r.tree).toBe(c.tree);
+      const file = okFile(r);
+      expect(problems(r, file)).toEqual([]);
+      expect(lines(file)).toEqual(c.nodes);
+      const calls = file.nodes.filter((n) => n.label === 'CALL');
+      expect(
+        calls.map((n) => `${n.id} ${fmt0(n.range)} ${String(n.properties['callee_name'])}`),
+      ).toEqual(c.calls);
+      const reaching = file.edges.filter((e) => e.type === 'REACHING_DEF');
+      expect(
+        reaching.map((e) => `${e.from.key} -> ${e.to.key} ${String(e.properties['variable'])}`),
+      ).toEqual(c.reaching);
     });
   }
 });

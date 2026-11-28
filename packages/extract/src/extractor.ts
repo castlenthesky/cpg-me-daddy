@@ -122,7 +122,7 @@ export function extractFile(request: ExtractRequest, adapter: LanguageAdapter): 
         lineCount: request.lineCount,
       },
       elementDigest: elementDigest(built),
-      interfaceHash: interfaceHash(built.nodes),
+      interfaceHash: interfaceHash(built.nodes, walk.reexports),
     };
 
     if (walk.truncation !== undefined) {

@@ -1,6 +1,7 @@
 // The Python declaration table on real trees (the pinned wasm grammar): what `classify` says about each
 // statement, from python.ts's contract (the archive's rules, decisions 107 and 113). Signatures follow the
-// archive's format; docstring heads, kinds, params and exported come from the source as written.
+// archive's format, plus defaults, splat stars and the `*` and `/` separators (stop-list 197, sprint 42);
+// docstring heads, kinds, params and exported come from the source as written.
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isWorkspacePath, type WorkspacePath } from '@cpg/model';
@@ -143,12 +144,12 @@ const fn = (over: Record<string, unknown>) => ({
 });
 
 describe('functions and methods', () => {
-  it('a module-level function: name, kind, archive signature, params, body', async () => {
+  it('a module-level function: name, kind, signature, params, body', async () => {
     expect(await classifyAt('def greet(name, times=1):\n    pass\n', 0)).toEqual(
       fn({
         name: 'greet',
         nameNode: 'greet identifier@0:4',
-        signature: 'greet(name, times)',
+        signature: 'greet(name, times=1)',
         params: [
           ['name', undefined, undefined, 'identifier@0:10'],
           ['times', undefined, '1', 'default_parameter@0:16'],
@@ -184,12 +185,12 @@ describe('functions and methods', () => {
     expect(await classifyAt(source, 0)).toMatchObject({ async });
   });
 
-  it('every parameter shape: typed, defaulted, both, splats, typed splats; separators are none', async () => {
+  it('every parameter shape: typed, defaulted, both, splats, typed splats; separators are no param', async () => {
     const source =
       "def f(a, b: int, c=2, d: str = 'x', /, *args: int, e, **kw):\n    pass\n" +
       'def g(*, k, **opts: dict) -> None:\n    pass\n';
     expect(await classifyAt(source, 0)).toMatchObject({
-      signature: 'f(a, b: int, c, d: str, args: int, e, kw)',
+      signature: "f(a, b: int, c=2, d: str = 'x', /, *args: int, e, **kw)",
       params: [
         ['a', undefined, undefined, 'identifier@0:6'],
         ['b', 'int', undefined, 'typed_parameter@0:9'],
@@ -201,12 +202,32 @@ describe('functions and methods', () => {
       ],
     });
     expect(await classifyAt(source, 1)).toMatchObject({
-      signature: 'g(k, opts: dict) -> None',
+      signature: 'g(*, k, **opts: dict) -> None',
       params: [
         ['k', undefined, undefined, 'identifier@2:9'],
         ['opts', 'dict', undefined, 'typed_parameter@2:12'],
       ],
     });
+  });
+
+  // Stop-list 197: the signature tells `b`, `*b`, `**b` and `b=1` apart, so interfaceHash does. Each
+  // param is normalized (PEP 8 spacing: `b=1` untyped, `b: int = 1` typed); defaults and annotations
+  // are their source text, a separator stands where it was written.
+  it.each([
+    ['def f(b):', 'f(b)'],
+    ['def f(*b):', 'f(*b)'],
+    ['def f(**b):', 'f(**b)'],
+    ['def f(b=1):', 'f(b=1)'],
+    ['def f(b = 1):', 'f(b=1)'],
+    ['def f(b:int=1):', 'f(b: int = 1)'],
+    ['def f(*b: int, **c: str):', 'f(*b: int, **c: str)'],
+    ['def f(b:int, * args:int, ** kw):', 'f(b: int, *args: int, **kw)'], // r2 (review 10)
+    ['def f(a, /):', 'f(a, /)'],
+    ['def f(*, a):', 'f(*, a)'],
+    ['def f(a=g(1, 2), b=[]):', 'f(a=g(1, 2), b=[])'],
+    ['def f(a={\n    "k": 1,\n}):', 'f(a={\n    "k": 1,\n})'],
+  ])('%j has the signature %j', async (def, signature) => {
+    expect(await classifyAt(`${def}\n    pass\n`, 0)).toMatchObject({ signature });
   });
 
   // r2 (review 9): only the six parameter shapes are params; a tuple pattern is none

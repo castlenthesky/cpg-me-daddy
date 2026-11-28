@@ -29,6 +29,8 @@ import type {
   ExtractRequest,
   Extractor,
   FileOwnedLabel,
+  ImportBindingInfo,
+  ImportInfo,
   LanguageAdapter,
   NodeElement,
   PropertyValue,
@@ -196,10 +198,25 @@ describe('the language adapter', () => {
     expectTypeOf<
       Extract<DeclarationInfo, { declares: 'TYPE_DECL' }>['headerErrors']
     >().toEqualTypeOf<readonly SyntaxNode[] | undefined>();
-    expectTypeOf<Exclude<ExpressionVerdict, CallInfo>>().toEqualTypeOf<
+    // BMO-134: an import statement's verdict is an ImportInfo, additive like CallInfo (decision 93).
+    expectTypeOf<Exclude<ExpressionVerdict, CallInfo | ImportInfo>>().toEqualTypeOf<
       | { readonly emits: 'none'; readonly descend: 'transparent' }
       | { readonly emits: 'none'; readonly descend: 'stop' }
     >();
+    expectTypeOf<ImportInfo>().toEqualTypeOf<{
+      readonly emits: 'IMPORT';
+      readonly sourceText: string;
+      readonly importedNames: readonly string[];
+      readonly alias?: string;
+      readonly typeOnly: boolean;
+      readonly bindings: readonly ImportBindingInfo[];
+    }>();
+    expectTypeOf<ImportBindingInfo>().toEqualTypeOf<{
+      readonly nameNode: SyntaxNode;
+      readonly nameParts: readonly string[];
+      readonly binding: NonNullable<RefSite['importBinding']>;
+      readonly exported: boolean;
+    }>();
   });
 
   it('classifies the direct children of a MODULE or a TYPE_DECL into the three declarations', () => {

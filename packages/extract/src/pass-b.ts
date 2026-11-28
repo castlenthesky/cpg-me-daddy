@@ -1,8 +1,9 @@
-// Pass B, the calls (U6a.2-4a, BMO-133). walk.ts's walkFile calls `walkCalls` once Pass A has completed
-// the file (I21). Adapted from archive f18ee71:packages/engine/src/extract/walk.ts (walkRegion,
-// resolveArg, the region queue) with resolveCallee REMOVED (U6a.2 acceptance): the walker resolves only a
-// bare name bound at the top of this file or in the adapter's builtin table, and emits a RefSite for
-// every call. IMPORTs are BMO-134.
+// Pass B, the calls (U6a.2-4a, BMO-133) and imports (U6a.2-4b, BMO-134). walk.ts's walkFile calls
+// `walkCalls` once Pass A has completed the file (I21). Adapted from archive
+// f18ee71:packages/engine/src/extract/walk.ts (walkRegion, resolveArg, the region queue) with
+// resolveCallee REMOVED (U6a.2 acceptance): the walker resolves only a bare name bound at the top of
+// this file or in the adapter's builtin table, emits a RefSite for every call and every bound import
+// name, and returns module-level exported import bindings as re-exports for interfaceHash.
 
 import { makeNodeId, makeSymbolFqn, MODULE_SCOPE, type SourceRange } from '@cpg/model';
 import type { ElementBuilder } from './builder';
@@ -11,9 +12,11 @@ import type {
   ContainerKind,
   DeclarationInfo,
   ExtractRequest,
+  ImportInfo,
   LanguageAdapter,
   SyntaxNode,
 } from './contract';
+import type { ReExport } from './digest';
 
 /** A name bound by a declaration Pass A emitted, and that declaration's node id. */
 export interface Binding {
@@ -36,6 +39,8 @@ export interface Declared {
 export interface ContainerChild {
   readonly node: SyntaxNode;
   readonly container: ContainerKind;
+  /** The id of the MODULE or TYPE_DECL whose container walk visited the child. */
+  readonly containerId: string;
   /** Absent when Pass A declared nothing for it: a statement or a compound statement's part, in `$root`. */
   readonly declared?: Declared;
 }
@@ -52,6 +57,10 @@ export interface PassBInput {
 interface Region {
   readonly scope: readonly [string, ...string[]];
   readonly enclosing: { readonly label: 'METHOD' | 'MODULE'; readonly id: string };
+  readonly lexicalContainer: {
+    readonly label: 'MODULE' | 'TYPE_DECL' | 'METHOD';
+    readonly id: string;
+  };
   readonly params: readonly Binding[];
   /** The module MEMBERs declared before this region, in source order. */
   readonly members: readonly Binding[];
@@ -123,7 +132,7 @@ const position = (node: SyntaxNode) => ({
  * name declared before the region (the METHOD, or the `$root` statement); else nothing. Properties
  * `{ variable }`; one edge per (source, CALL, variable).
  */
-export function walkCalls(input: PassBInput, builder: ElementBuilder): void {
+export function walkCalls(input: PassBInput, builder: ElementBuilder): readonly ReExport[] {
   const { request, adapter, moduleId, children } = input;
   const { path, revision_id } = request;
 
@@ -137,6 +146,69 @@ export function walkCalls(input: PassBInput, builder: ElementBuilder): void {
   }
 
   const ordinals = new Map<string, number>();
+  const reexports: ReExport[] = [];
+
+  /**
+   * Each ImportInfo, at the node it classified (an import statement), is one IMPORT, never descended:
+   * - id `makeNodeId({ form: 'scoped', path, kind: 'IMPORT', scope: region.scope, ordinal })`, the
+   *   ordinal counted per scope in pre-order exactly as a CALL's (decision 92), a count of its own
+   *   (an IMPORT and a CALL of one region each start at 0);
+   * - a NodeElement, tier `structural`, range the statement's, no nameRange, properties
+   *   `{ source_text: sourceText, imported_names: importedNames, alias?, is_type_only: typeOnly,
+   *   status: 'ready' }` (alias only when the ImportInfo has one);
+   * - then a DECLARES edge to it from its lexical container: the region's METHOD for a METHOD body,
+   *   else the MODULE or TYPE_DECL that Pass A visited the statement in (a compound statement is not
+   *   a scope, so an import in a class-level `if` is the class's);
+   * - then one ref site per binding, in order: id `<IMPORT id>#<k>` (k its 0-based index), nodeId the
+   *   IMPORT's id, filePath the path, kind `import`, position the start of its nameNode (the imported
+   *   name, never the alias: I20), its nameParts, importBinding its binding; no `declined` (the
+   *   resolver answers it, U6c);
+   * - a binding of an IMPORT that the MODULE DECLARES (module level, compound blocks included) whose
+   *   `exported` is true is a re-export: its binding joins the file's interfaceHash (decision 94).
+   */
+  function emitImport(node: SyntaxNode, info: ImportInfo, region: Region): void {
+    const base = makeNodeId({ form: 'scoped', path, kind: 'IMPORT', scope: region.scope });
+    const ordinal = ordinals.get(base) ?? 0;
+    ordinals.set(base, ordinal + 1);
+    const id = makeNodeId({ form: 'scoped', path, kind: 'IMPORT', scope: region.scope, ordinal });
+
+    builder.addNode({
+      label: 'IMPORT',
+      id,
+      file: path,
+      revision_id,
+      tier: 'structural',
+      range: nodeRange(node),
+      properties: {
+        source_text: info.sourceText,
+        imported_names: info.importedNames,
+        ...(info.alias !== undefined ? { alias: info.alias } : {}),
+        is_type_only: info.typeOnly,
+        status: 'ready',
+      },
+    });
+    builder.addEdge({
+      type: 'DECLARES',
+      from: { by: 'id', label: region.lexicalContainer.label, key: region.lexicalContainer.id },
+      to: { by: 'id', label: 'IMPORT', key: id },
+      properties: {},
+    });
+
+    for (const [index, entry] of info.bindings.entries()) {
+      builder.addRefSite({
+        id: `${id}#${String(index)}`,
+        nodeId: id,
+        filePath: path,
+        kind: 'import',
+        position: position(entry.nameNode),
+        nameParts: entry.nameParts,
+        importBinding: entry.binding,
+      });
+      if (region.lexicalContainer.label === 'MODULE' && entry.exported) {
+        reexports.push(entry.binding);
+      }
+    }
+  }
 
   function callsTarget(
     info: CallInfo,
@@ -237,6 +309,10 @@ export function walkCalls(input: PassBInput, builder: ElementBuilder): void {
   function visit(node: SyntaxNode, region: Region): void {
     if (node.type === 'ERROR') return;
     const verdict = adapter.classifyExpression?.(node);
+    if (verdict?.emits === 'IMPORT') {
+      emitImport(node, verdict, region);
+      return;
+    }
     if (verdict?.emits === 'CALL') {
       emitCall(node, verdict, region);
       const next =
@@ -251,37 +327,47 @@ export function walkCalls(input: PassBInput, builder: ElementBuilder): void {
   const members: Binding[] = [];
   const shadowOf = (root: SyntaxNode | undefined): ReadonlySet<string> =>
     new Set(root === undefined ? [] : (adapter.localBindings?.(root) ?? []));
-  const inRoot = (root: SyntaxNode | undefined): Region => ({
+  const inRoot = (
+    root: SyntaxNode | undefined,
+    container: ContainerKind,
+    containerId: string,
+  ): Region => ({
     scope: [MODULE_SCOPE],
     enclosing: { label: 'MODULE', id: moduleId },
+    lexicalContainer: { label: container, id: containerId },
     params: [],
     members,
     shadow: shadowOf(root),
   });
 
-  for (const { node, container, declared } of children) {
+  for (const { node, container, containerId, declared } of children) {
     if (declared === undefined) {
-      visit(node, inRoot(node));
+      visit(node, inRoot(node, container, containerId));
       continue;
     }
     const { info } = declared;
     if (info.declares === 'MEMBER') {
-      if (info.value !== undefined) visit(info.value, inRoot(info.value));
+      if (info.value !== undefined) visit(info.value, inRoot(info.value, container, containerId));
       if (container === 'MODULE') members.push({ name: info.name, id: declared.id });
       continue;
     }
     for (const part of node.namedChildren) {
       const verdict = adapter.classifyExpression?.(part);
-      if (verdict?.emits === 'CALL' && verdict.kind === 'decorator') visit(part, inRoot(undefined));
+      if (verdict?.emits === 'CALL' && verdict.kind === 'decorator') {
+        visit(part, inRoot(undefined, container, containerId));
+      }
     }
     if (info.declares === 'METHOD' && info.body !== undefined) {
       visit(info.body, {
         scope: declared.scope,
         enclosing: { label: 'METHOD', id: declared.id },
+        lexicalContainer: { label: 'METHOD', id: declared.id },
         params: declared.params,
         members,
         shadow: shadowOf(info.body),
       });
     }
   }
+
+  return reexports;
 }

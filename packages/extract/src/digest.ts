@@ -13,6 +13,9 @@ import type {
   SealExtractedFiles,
 } from './contract';
 
+/** A module-level import binding that is part of the file's exported surface (decision 94). */
+export type ReExport = NonNullable<RefSite['importBinding']>;
+
 function compareCodeUnits(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -79,21 +82,36 @@ export function elementDigest(elements: BuiltElements): string {
  * - the entries are sorted by their JSON text (UTF-16 code unit) and the hash is sha256 over the UTF-8
  *   of `JSON.stringify(sortedEntries)`. No exported node gives sha256 of `[]`.
  * Ranges, docstrings and revision_id do not enter: moving a function down the file changes nothing.
- * Re-exports join when IMPORT nodes exist (U6a.2-4, U6b); Python's `__all__` is a documented gap.
+ * Python's `__all__` is a documented gap.
+ *
+ * Each re-export (a module-level import binding Pass B found exported) is one more entry, sorted with
+ * the rest: `[local, 'reexport', source]`, where source is `.` repeated relativeDepth times, then
+ * module, then `:` and imported when imported is present (`from .core import Engine` gives
+ * `["Engine","reexport",".core:Engine"]`, `import os` gives `["os","reexport","os"]`). No id enters,
+ * so reordering the imports changes nothing.
  */
-export function interfaceHash(nodes: readonly NodeElement[]): string {
-  const sortedEntries = nodes
-    .filter((node) => node.properties['exported'] === true)
-    .map((node) => {
-      const kind = node.properties['kind'];
-      const signature = node.properties['signature'];
-      const entry: readonly [string, string | null, string | null] = [
-        node.id,
-        typeof kind === 'string' ? kind : null,
-        typeof signature === 'string' ? signature : null,
-      ];
-      return { entry, text: JSON.stringify(entry) };
-    })
+export function interfaceHash(
+  nodes: readonly NodeElement[],
+  reexports: readonly ReExport[] = [],
+): string {
+  const entries: (readonly [string, string | null, string | null])[] = [];
+  for (const node of nodes) {
+    if (node.properties['exported'] !== true) continue;
+    const kind = node.properties['kind'];
+    const signature = node.properties['signature'];
+    entries.push([
+      node.id,
+      typeof kind === 'string' ? kind : null,
+      typeof signature === 'string' ? signature : null,
+    ]);
+  }
+  for (const reexport of reexports) {
+    const prefix = `${'.'.repeat(reexport.relativeDepth)}${reexport.module}`;
+    const source = reexport.imported !== undefined ? `${prefix}:${reexport.imported}` : prefix;
+    entries.push([reexport.local, 'reexport', source]);
+  }
+  const sortedEntries = entries
+    .map((entry) => ({ entry, text: JSON.stringify(entry) }))
     .toSorted((a, b) => compareCodeUnits(a.text, b.text))
     .map((item) => item.entry);
   const digest = createHash('sha256').update(JSON.stringify(sortedEntries), 'utf8').digest('hex');
