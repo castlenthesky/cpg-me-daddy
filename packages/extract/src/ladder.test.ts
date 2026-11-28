@@ -285,11 +285,12 @@ describe('fixtures/ladder through the real grammar and extract', () => {
     const missing = wanted.filter(({ rung, w }) => !ofRung(rung).some((g) => holds([w], g)));
     expect(missing.map(({ rung, w }) => `${rung}: ${w.head} ${w.key}`)).toEqual([]);
     // Counted in the expected files: rungs 06 and 07 hold one IMPORT and its DECLARES each.
-    expect(wanted.map(({ rung, w }) => `${rung} ${w.head}`)).toEqual([
-      '06-import IMPORT',
+    // r2 (review 1): compared sorted, whatever order the directory listing gives.
+    expect(wanted.map(({ rung, w }) => `${rung} ${w.head}`).toSorted()).toEqual([
       '06-import DECLARES',
-      '07-package IMPORT',
+      '06-import IMPORT',
       '07-package DECLARES',
+      '07-package IMPORT',
     ]);
   });
 

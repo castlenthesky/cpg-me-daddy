@@ -131,6 +131,27 @@ const FIXTURE = lines(
   'import q as Q', // 20
 );
 
+/** r2 (review 2-5): nested classes, a repeated METHOD, and a class and an ERROR in a METHOD body. */
+const NESTED = lines(
+  'class Outer:', // 0
+  '    class Inner:', // 1
+  '        import x', // 2
+  '    import y', // 3
+  'class P:', // 4
+  '    @property', // 5
+  '    def v(self):', // 6
+  '        import a', // 7
+  '    @v.setter', // 8
+  '    def v(self, x):', // 9
+  '        import b', // 10
+  'def fn():', // 11
+  '    class Local:', // 12
+  '        import o', // 13
+  '    x = 1', // 14
+  '    import a )', // 15: (ERROR (import_statement ...)) in fn's block
+  '    import ok', // 16
+);
+
 describe('IMPORT nodes: one per statement Pass B walks, ordinals counted like CALL (decision 92)', () => {
   it('counts per region in pre-order, apart from CALL; never inside a nested def', async () => {
     const file = await extractOk(FIXTURE);
@@ -234,6 +255,34 @@ describe('IMPORT nodes: one per statement Pass B walks, ordinals counted like CA
       a: imp('fn', 1),
       b: imp('fn', 2),
     });
+  });
+
+  // r2 (review 2-5): a nested class's import is its own, a repeated METHOD continues its scope's count
+  // (as its CALLs do, pass-b.ts), and a class or an ERROR inside a METHOD body is not walked.
+  it('DECLARES from the nearest class; a repeated METHOD continues its count; a body class or ERROR is skipped', async () => {
+    const file = await extractOk(NESTED);
+    expect(nodesOf(file, 'IMPORT')).toEqual([
+      `${imp('$root', 0)} 3:8-3:16`,
+      `${imp('$root', 1)} 4:4-4:12`,
+      `${imp('P.v', 0)} 8:8-8:16`,
+      `${imp('P.v', 1)} 11:8-11:16`,
+      `${imp('fn', 0)} 17:4-17:13`,
+    ]);
+    const declares = file.edges.filter((e) => e.type === 'DECLARES' && e.to.label === 'IMPORT');
+    expect(declares.map((e) => `${e.from.key} -> ${e.to.key}`)).toEqual([
+      `${id('TYPE_DECL:Outer.Inner')} -> ${imp('$root', 0)}`,
+      `${id('TYPE_DECL:Outer')} -> ${imp('$root', 1)}`,
+      `${id('METHOD:P.v')} -> ${imp('P.v', 0)}`,
+      `${id('METHOD:P.v:1')} -> ${imp('P.v', 1)}`,
+      `${id('METHOD:fn')} -> ${imp('fn', 0)}`,
+    ]);
+    expect(importSites(file).map((s) => s.importBinding?.module)).toEqual([
+      'x',
+      'y',
+      'a',
+      'b',
+      'ok',
+    ]);
   });
 
   it('does not walk an import inside an ERROR, which takes no ordinal (decision 95)', async () => {

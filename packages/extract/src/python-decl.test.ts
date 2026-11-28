@@ -221,6 +221,7 @@ describe('functions and methods', () => {
     ['def f(b = 1):', 'f(b=1)'],
     ['def f(b:int=1):', 'f(b: int = 1)'],
     ['def f(*b: int, **c: str):', 'f(*b: int, **c: str)'],
+    ['def f(b:int, * args:int, ** kw):', 'f(b: int, *args: int, **kw)'], // r2 (review 10)
     ['def f(a, /):', 'f(a, /)'],
     ['def f(*, a):', 'f(*, a)'],
     ['def f(a=g(1, 2), b=[]):', 'f(a=g(1, 2), b=[])'],

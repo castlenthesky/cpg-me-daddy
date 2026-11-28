@@ -106,6 +106,9 @@ const ROWS: [string, unknown][] = [
   ['import numpy as np', info('numpy', [], [bind('numpy@0:7', 'numpy', 'numpy', 0, 'np')], 'np')],
   // exported follows the LOCAL name: `_private` bound as `pub` is exported.
   ['import _private as pub', info('_private', [], [bind('_private@0:7', '_private', '_private', 0, 'pub')], 'pub')],
+  // r2 (review 6): alias comes from `as`, and only for a sole binding, wherever the `as` is.
+  ['from m import a as a', info('m', ['a'], [bind('a@0:14', 'a', 'm', 0, 'a', 'a')], 'a')],
+  ['import a, b as c', info('a,b', [], [bind('a@0:7', 'a', 'a', 0, 'a'), bind('b@0:10', 'b', 'b', 0, 'c')])],
   // From-imports: imported as the module spells it, the token is the imported name, not the alias.
   ['from m import a', info('m', ['a'], [bind('a@0:14', 'a', 'm', 0, 'a', 'a')])],
   ['from m import a as b, _c', info('m', ['a', '_c'], [bind('a@0:14', 'a', 'm', 0, 'b', 'a'), bind('_c@0:22', '_c', 'm', 0, '_c', '_c', false)])],
@@ -119,11 +122,18 @@ const ROWS: [string, unknown][] = [
   ['from ..pkg.sub import y', info('..pkg.sub', ['y'], [bind('y@0:22', 'y', 'pkg.sub', 2, 'y', 'y')])],
   ['from ... import x', info('...', ['x'], [bind('x@0:16', 'x', '', 3, 'x', 'x')])],
   ['from . pkg import z', info('.pkg', ['z'], [bind('z@0:18', 'z', 'pkg', 1, 'z', 'z')])],
+  // r2 (review 7): the dots are counted, not the prefix's length (`. .` is two).
+  ['from . . import x', info('..', ['x'], [bind('x@0:16', 'x', '', 2, 'x', 'x')])],
+  // r2 (review 8): a line continuation before the module is no name; the module is the field.
+  ['from \\\n m import a', info('m', ['a'], [bind('a@1:10', 'a', 'm', 0, 'a', 'a')])],
   // Names are their identifiers joined by `.`, whatever the spacing.
   ['from a . b import c', info('a.b', ['c'], [bind('c@0:18', 'c', 'a.b', 0, 'c', 'c')])],
   // A wildcard is one binding at the `*`; `exported` (no leading underscore) holds for `*`.
   ['from m import *', info('m', ['*'], [bind('*@0:14', '*', 'm', 0, '*', '*')])],
   ['from __future__ import annotations', info('__future__', ['annotations'], [bind('annotations@0:23', 'annotations', '__future__', 0, 'annotations', 'annotations')])],
+  // r2 (review 9): a future import names every binding, aliased ones included.
+  ['from __future__ import annotations, division', info('__future__', ['annotations', 'division'], [bind('annotations@0:23', 'annotations', '__future__', 0, 'annotations', 'annotations'), bind('division@0:36', 'division', '__future__', 0, 'division', 'division')])],
+  ['from __future__ import annotations as ann', info('__future__', ['annotations'], [bind('annotations@0:23', 'annotations', '__future__', 0, 'ann', 'annotations')], 'ann')],
   // An ERROR inside the statement (`m.`) is no binding; the names around it still are.
   ['from m. import x', info('m', ['x'], [bind('x@0:15', 'x', 'm', 0, 'x', 'x')])],
 ];

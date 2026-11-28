@@ -232,6 +232,17 @@ describe('interfaceHash re-exports (decision 94, BMO-134)', () => {
     expect([interfaceHash([], [x, os]), interfaceHash([], [os, x])]).toEqual([want, want]);
   });
 
+  // r2 (review 11): re-exports sort WITH the node entries, by code unit (`Z` < `a` < `file:` < `z`).
+  it('sorts re-export and node entries together, by code unit', () => {
+    // [["Zed","reexport","z"],["abc","reexport","a:b"],
+    // ["file:main.py:METHOD:greet","function","greet()"],["zeta","reexport","..:zeta"]]
+    const want = 'sha256:5465effb1d09e459fbfadc257cf2cbbcf8d1695ccd3db6558e128bd52ff3433a';
+    const zed = reexport('Zed', 'z');
+    const abc = reexport('abc', 'a', 0, 'b');
+    const zeta = reexport('zeta', '', 2, 'zeta');
+    expect(interfaceHash([exportedFn('greet')], [zeta, abc, zed])).toBe(want);
+  });
+
   it.each([
     ['local', reexport('Motor', 'core', 1, 'Engine')],
     ['module', reexport('Engine', 'engine', 1, 'Engine')],
