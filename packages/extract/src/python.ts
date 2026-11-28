@@ -499,6 +499,22 @@ function localBindings(regionRoot: SyntaxNode): readonly string[] {
 }
 
 /**
+ * A compound statement (stop-list 196): `if_statement`, `for_statement`, `while_statement`,
+ * `try_statement`, `with_statement` and `match_statement` (`async for` and `async with` are the same
+ * types). Its named children in source order, where a `block` is replaced by its named children, and a
+ * clause (`elif_clause`, `else_clause`, `except_clause`, `finally_clause`, `case_clause`) or a
+ * `match_statement`'s own `block` (which holds its case clauses) by what this rule gives for it, in
+ * place. So a condition, a `with_clause`, a `for` target and iterable, an `except` value, a match
+ * subject, a case pattern and guard, a comment and an ERROR stay as they are. Anything else is
+ * undefined.
+ *
+ * SEAT (sprint 41 RED): the walker does not call it yet.
+ */
+function compoundChildren(_node: SyntaxNode): readonly SyntaxNode[] | undefined {
+  throw new Error('SEAT: compoundChildren (stop-list 196, sprint 41)');
+}
+
+/**
  * Total over the 14 labels and 15 edge types (I13), honest against the ladder both ways (I14). The
  * same frozen object on every call (the nodes and edges records frozen too): compiled in, never
  * configuration.
@@ -515,5 +531,6 @@ export const pythonAdapter: LanguageAdapter = {
   classify,
   classifyExpression,
   localBindings,
+  compoundChildren,
   coverage,
 };

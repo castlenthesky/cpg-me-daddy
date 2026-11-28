@@ -189,6 +189,13 @@ describe('the language adapter', () => {
     expectTypeOf<LanguageAdapter['localBindings']>().toEqualTypeOf<
       ((regionRoot: SyntaxNode) => readonly string[] | undefined) | undefined
     >();
+    // stop-list 196: what stands in for a compound statement; decision 117: a class header's ERRORs
+    expectTypeOf<LanguageAdapter['compoundChildren']>().toEqualTypeOf<
+      ((node: SyntaxNode) => readonly SyntaxNode[] | undefined) | undefined
+    >();
+    expectTypeOf<
+      Extract<DeclarationInfo, { declares: 'TYPE_DECL' }>['headerErrors']
+    >().toEqualTypeOf<readonly SyntaxNode[] | undefined>();
     expectTypeOf<Exclude<ExpressionVerdict, CallInfo>>().toEqualTypeOf<
       | { readonly emits: 'none'; readonly descend: 'transparent' }
       | { readonly emits: 'none'; readonly descend: 'stop' }

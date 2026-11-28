@@ -274,6 +274,12 @@ export interface TypeDeclInfo {
   readonly docstringHead?: string;
   /** Its own body, whose direct children are classified with container `TYPE_DECL`. */
   readonly body: SyntaxNode | undefined;
+  /**
+   * The ERROR nodes directly under the class node outside its body (its header), in source order;
+   * absent when there are none. Each is one UNKNOWN in this TYPE_DECL's scope, before its body's
+   * children (decision 117).
+   */
+  readonly headerErrors?: readonly SyntaxNode[];
 }
 
 export interface MethodInfo {
@@ -360,6 +366,13 @@ export interface LanguageAdapter {
   classifyExpression?(node: SyntaxNode): ExpressionVerdict | undefined;
   /** Every name a region binds locally, so REACHING_DEF can shadow an outer binding. */
   localBindings?(regionRoot: SyntaxNode): readonly string[] | undefined;
+  /**
+   * A compound statement (Python's if/for/while/try/with/match, stop-list 196): the nodes the walker
+   * visits in its place, in source order, as children of the same container one level deeper: each
+   * clause body's statements and every other part of it. Not a scope, so it changes no id frame.
+   * `undefined` for any other node.
+   */
+  compoundChildren?(node: SyntaxNode): readonly SyntaxNode[] | undefined;
   coverage(): CoverageManifest;
 }
 
