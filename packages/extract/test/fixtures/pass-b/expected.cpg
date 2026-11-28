@@ -1,0 +1,127 @@
+# Extract's own Pass B fixture (U6a.2-4a), not a ladder rung: the call hazards the ladder does not hold
+# yet (ladder README, "Not on the ladder yet": decorators, REACHING_DEF, builtin targets). Written by hand
+# from ws/ in the ladder's format (fixtures/ladder/README.md) and checked by
+# packages/extract/src/ladder.test.ts. It is the file's whole code tier as extract emits it; SOURCE_FILE
+# is the engine's (C-EXTRACT Q8). It holds no import (IMPORT is BMO-134).
+#
+# calls.py: a module MEMBER and its redefinition (REACHING_DEF takes the last one before the region,
+# "last match wins"); a nested def whose call is not descended (decision 92); a forward reference
+# (`compute` is called above its def: Pass A completes the file before Pass B, I21); builtin targets
+# (`print`, `len`, `str`: CALLS status external to the adapter's builtin table, I11); a decorator on a
+# function and on a method (CALL kind decorator, counted in $root: the region is the enclosing METHOD or
+# $root, decision 92); a lambda whose call counts in its METHOD; a local variable called (no CALLS, no
+# SYMBOL, I11); a receiver call (no CALLS: resolveCallee is gone); a constructor call (the class, ?Q4);
+# a class member's initializer and module statements, all in $root in source order.
+#
+# CALL ordinals per region, pre-order (decision 92):
+#   $root: @trace (22) 0, compute(RATE) in Box (29) 1, @trace on grow (31) 2, scale(RATE) (37) 3, print (38) 4
+#   scale: compute 0, print 1, later 2;  compute: len 0, str 1;  later: scale 0, run 1;  Box.grow: resize 0, Box 1
+# REACHING_DEF (archive rules): a bare-name argument (or a keyword argument's bare value) reaches its CALL
+# from the region METHOD's PARAM, else from the last module MEMBER of that name declared before the
+# region; a name the region assigns locally (`total`, `run`) reaches nothing.
+
+[structural]
+MODULE file:calls.py:MODULE:$root name=calls range=1:0-39:0
+MEMBER file:calls.py:MEMBER:RATE name=RATE range=1:0-1:8
+MEMBER file:calls.py:MEMBER:RATE:1 name=RATE range=2:0-2:8
+METHOD file:calls.py:METHOD:trace name=trace kind=function params_count=1 range=5:0-9:18 name_range=5:4-5:9
+PARAM file:calls.py:PARAM:trace.fn name=fn ordinal=0 range=5:10-5:12
+METHOD file:calls.py:METHOD:scale name=scale kind=function params_count=2 range=12:0-15:29 name_range=12:4-12:9
+PARAM file:calls.py:PARAM:scale.value name=value ordinal=0 range=12:10-12:15
+PARAM file:calls.py:PARAM:scale.factor name=factor ordinal=1 default=RATE range=12:17-12:28
+METHOD file:calls.py:METHOD:compute name=compute kind=function params_count=1 range=18:0-19:22 name_range=18:4-18:11
+PARAM file:calls.py:PARAM:compute.n name=n ordinal=0 range=18:12-18:13
+METHOD file:calls.py:METHOD:later name=later kind=function params_count=2 range=22:0-25:16 name_range=23:4-23:9
+PARAM file:calls.py:PARAM:later.a name=a ordinal=0 range=23:10-23:11
+PARAM file:calls.py:PARAM:later.b name=b ordinal=1 range=23:13-23:14
+TYPE_DECL file:calls.py:TYPE_DECL:Box name=Box kind=class range=28:0-34:20
+MEMBER file:calls.py:MEMBER:Box.size name=size range=29:4-29:24
+METHOD file:calls.py:METHOD:Box.grow name=grow kind=method params_count=2 range=31:4-34:20 name_range=32:8-32:12
+PARAM file:calls.py:PARAM:Box.grow.self name=self ordinal=0 range=32:13-32:17
+PARAM file:calls.py:PARAM:Box.grow.by name=by ordinal=1 range=32:19-32:21
+MEMBER file:calls.py:MEMBER:result name=result range=37:0-37:20
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:MEMBER:RATE
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:MEMBER:RATE:1
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:METHOD:trace
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:METHOD:scale
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:METHOD:compute
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:METHOD:later
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:TYPE_DECL:Box
+DECLARES file:calls.py:MODULE:$root -> file:calls.py:MEMBER:result
+DECLARES file:calls.py:TYPE_DECL:Box -> file:calls.py:MEMBER:Box.size
+DECLARES file:calls.py:TYPE_DECL:Box -> file:calls.py:METHOD:Box.grow
+HAS_PARAM file:calls.py:METHOD:trace -> file:calls.py:PARAM:trace.fn
+HAS_PARAM file:calls.py:METHOD:scale -> file:calls.py:PARAM:scale.value
+HAS_PARAM file:calls.py:METHOD:scale -> file:calls.py:PARAM:scale.factor
+HAS_PARAM file:calls.py:METHOD:compute -> file:calls.py:PARAM:compute.n
+HAS_PARAM file:calls.py:METHOD:later -> file:calls.py:PARAM:later.a
+HAS_PARAM file:calls.py:METHOD:later -> file:calls.py:PARAM:later.b
+HAS_PARAM file:calls.py:METHOD:Box.grow -> file:calls.py:PARAM:Box.grow.self
+HAS_PARAM file:calls.py:METHOD:Box.grow -> file:calls.py:PARAM:Box.grow.by
+
+CALL file:calls.py:CALL:scale:0 callee_name=compute receiver_text=null args_count=1 kind=call status=ready range=13:12-13:26
+CALL file:calls.py:CALL:scale:1 callee_name=print receiver_text=null args_count=2 kind=call status=ready range=14:4-14:24
+CALL file:calls.py:CALL:scale:2 callee_name=later receiver_text=null args_count=2 kind=call status=ready range=15:11-15:29
+CALL file:calls.py:CALL:compute:0 callee_name=len receiver_text=null args_count=1 kind=call status=ready range=19:11-19:22
+CALL file:calls.py:CALL:compute:1 callee_name=str receiver_text=null args_count=1 kind=call status=ready range=19:15-19:21
+CALL file:calls.py:CALL:later:0 callee_name=scale receiver_text=null args_count=1 kind=call status=ready range=24:18-24:26
+CALL file:calls.py:CALL:later:1 callee_name=run receiver_text=null args_count=0 kind=call status=ready range=25:11-25:16
+CALL file:calls.py:CALL:Box.grow:0 callee_name=resize receiver_text=self args_count=1 kind=call status=ready range=33:8-33:23
+CALL file:calls.py:CALL:Box.grow:1 callee_name=Box receiver_text=null args_count=0 kind=call status=ready range=34:15-34:20
+CALL file:calls.py:CALL:$root:0 callee_name=trace receiver_text=null args_count=0 kind=decorator status=ready range=22:0-22:6
+CALL file:calls.py:CALL:$root:1 callee_name=compute receiver_text=null args_count=1 kind=call status=ready range=29:11-29:24
+CALL file:calls.py:CALL:$root:2 callee_name=trace receiver_text=null args_count=0 kind=decorator status=ready range=31:4-31:10
+CALL file:calls.py:CALL:$root:3 callee_name=scale receiver_text=null args_count=1 kind=call status=ready range=37:9-37:20
+CALL file:calls.py:CALL:$root:4 callee_name=print receiver_text=null args_count=1 kind=call status=ready range=38:0-38:13
+IN_SCOPE file:calls.py:CALL:scale:0 -> file:calls.py:METHOD:scale
+IN_SCOPE file:calls.py:CALL:scale:1 -> file:calls.py:METHOD:scale
+IN_SCOPE file:calls.py:CALL:scale:2 -> file:calls.py:METHOD:scale
+IN_SCOPE file:calls.py:CALL:compute:0 -> file:calls.py:METHOD:compute
+IN_SCOPE file:calls.py:CALL:compute:1 -> file:calls.py:METHOD:compute
+IN_SCOPE file:calls.py:CALL:later:0 -> file:calls.py:METHOD:later
+IN_SCOPE file:calls.py:CALL:later:1 -> file:calls.py:METHOD:later
+IN_SCOPE file:calls.py:CALL:Box.grow:0 -> file:calls.py:METHOD:Box.grow
+IN_SCOPE file:calls.py:CALL:Box.grow:1 -> file:calls.py:METHOD:Box.grow
+IN_SCOPE file:calls.py:CALL:$root:0 -> file:calls.py:MODULE:$root
+IN_SCOPE file:calls.py:CALL:$root:1 -> file:calls.py:MODULE:$root
+IN_SCOPE file:calls.py:CALL:$root:2 -> file:calls.py:MODULE:$root
+IN_SCOPE file:calls.py:CALL:$root:3 -> file:calls.py:MODULE:$root
+IN_SCOPE file:calls.py:CALL:$root:4 -> file:calls.py:MODULE:$root
+REACHING_DEF file:calls.py:PARAM:scale.value -> file:calls.py:CALL:scale:0 variable=value
+REACHING_DEF file:calls.py:PARAM:scale.factor -> file:calls.py:CALL:scale:1 variable=factor
+REACHING_DEF file:calls.py:MEMBER:RATE:1 -> file:calls.py:CALL:scale:2 variable=RATE
+REACHING_DEF file:calls.py:PARAM:compute.n -> file:calls.py:CALL:compute:1 variable=n
+REACHING_DEF file:calls.py:PARAM:later.a -> file:calls.py:CALL:later:0 variable=a
+REACHING_DEF file:calls.py:PARAM:Box.grow.by -> file:calls.py:CALL:Box.grow:0 variable=by
+REACHING_DEF file:calls.py:MEMBER:RATE:1 -> file:calls.py:CALL:$root:1 variable=RATE
+REACHING_DEF file:calls.py:MEMBER:RATE:1 -> file:calls.py:CALL:$root:3 variable=RATE
+REACHING_DEF file:calls.py:MEMBER:result -> file:calls.py:CALL:$root:4 variable=result
+
+[symbols]
+DEFINES file:calls.py:MODULE:$root -> `calls.py`/
+DEFINES file:calls.py:MEMBER:RATE -> `calls.py`/RATE.
+DEFINES file:calls.py:MEMBER:RATE:1 -> `calls.py`/RATE.
+DEFINES file:calls.py:METHOD:trace -> `calls.py`/trace().
+DEFINES file:calls.py:METHOD:scale -> `calls.py`/scale().
+DEFINES file:calls.py:METHOD:compute -> `calls.py`/compute().
+DEFINES file:calls.py:METHOD:later -> `calls.py`/later().
+DEFINES file:calls.py:TYPE_DECL:Box -> `calls.py`/Box#
+DEFINES file:calls.py:MEMBER:Box.size -> `calls.py`/Box#size.
+DEFINES file:calls.py:METHOD:Box.grow -> `calls.py`/Box#grow().
+DEFINES file:calls.py:MEMBER:result -> `calls.py`/result.
+
+[resolution]
+# Same-file targets are `resolved`; a builtin is `external`, to the adapter's table's SYMBOL
+# (archive builtins/python-stdlib.ts: scheme `site`, package `python-stdlib`, a method descriptor).
+CALLS file:calls.py:CALL:scale:0 -> `calls.py`/compute(). status=resolved
+CALLS file:calls.py:CALL:scale:1 -> site:python-stdlib`print(). status=external
+CALLS file:calls.py:CALL:scale:2 -> `calls.py`/later(). status=resolved
+CALLS file:calls.py:CALL:compute:0 -> site:python-stdlib`len(). status=external
+CALLS file:calls.py:CALL:compute:1 -> site:python-stdlib`str(). status=external
+CALLS file:calls.py:CALL:later:0 -> `calls.py`/scale(). status=resolved
+CALLS file:calls.py:CALL:Box.grow:1 -> `calls.py`/Box# status=resolved    # ?Q4
+CALLS file:calls.py:CALL:$root:0 -> `calls.py`/trace(). status=resolved
+CALLS file:calls.py:CALL:$root:1 -> `calls.py`/compute(). status=resolved
+CALLS file:calls.py:CALL:$root:2 -> `calls.py`/trace(). status=resolved
+CALLS file:calls.py:CALL:$root:3 -> `calls.py`/scale(). status=resolved
+CALLS file:calls.py:CALL:$root:4 -> site:python-stdlib`print(). status=external

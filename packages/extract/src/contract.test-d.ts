@@ -8,10 +8,12 @@ import type {
   METHOD_KIND,
   NodeLabel,
   SourceRange,
+  SymbolDescriptor,
   TYPE_DECL_KIND,
   WorkspacePath,
 } from '@cpg/model';
 import type {
+  BuiltinTarget,
   CallInfo,
   ContainerKind,
   CoverageManifest,
@@ -207,6 +209,15 @@ describe('the language adapter', () => {
       (typeof METHOD_KIND)[number]
     >();
     expectTypeOf<CallInfo['kind']>().toEqualTypeOf<(typeof CALL_KIND)[number]>();
+  });
+
+  it("a call's builtin is the external fqn's parts (U6a.2-4a, I11)", () => {
+    expectTypeOf<CallInfo['builtin']>().toEqualTypeOf<BuiltinTarget | undefined>();
+    expectTypeOf<BuiltinTarget>().toEqualTypeOf<{
+      readonly scheme: string;
+      readonly package: string;
+      readonly descriptors: readonly SymbolDescriptor[];
+    }>();
   });
 });
 

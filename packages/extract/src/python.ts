@@ -1,7 +1,8 @@
 // The Python adapter: the MODULE tier (U6a.2-2) and the declaration half (U6a.2-3), ported from archive
 // f18ee71:packages/engine/src/extract/python.ts (classifyFunction, classifyClass, classifyAssignment,
 // paramInfo, the docstring helpers), plus `decorated_definition` (decision 107). The expression half
-// (Pass B) is U6a.2-4; what it adds is declared-not-emitted in the coverage table, never silent (I13).
+// (Pass B calls) is U6a.2-4a: `classifyExpression` and `localBindings` are SEAT until it lands; what it
+// adds is declared-not-emitted in the coverage table until then, never silent (I13).
 
 import type { WorkspacePath } from '@cpg/model';
 import type {
@@ -9,6 +10,7 @@ import type {
   CoverageManifest,
   DeclarationInfo,
   Disposition,
+  ExpressionVerdict,
   LanguageAdapter,
   MemberInfo,
   MethodInfo,
@@ -320,6 +322,52 @@ function classify(node: SyntaxNode, container: ContainerKind): DeclarationInfo |
 }
 
 /**
+ * SEAT (U6a.2-4a): returns undefined for every node until the implementation lands. Its contract, the
+ * expression table (archive python.ts classifyExpressionPy, calleeShape, argInfos; subgraph.ts's
+ * receiver rule), sparse by design:
+ * - `call` with a `function` field that is an `identifier` (bare) or an `attribute` whose `attribute`
+ *   is an identifier: a CallInfo of kind `call`. Any other callee (a call, subscript, parenthesized
+ *   expression) is undefined, so the walker descends it ordinarily.
+ *   - calleeName: the identifier's text, or the attribute's `attribute` text; nameNode: that token.
+ *   - receiverText: the attribute's `object` text as written (`a.b`, `f(x)`, `a[0]`); absent when bare.
+ *   - nameParts: the callee chain outermost first when every link is an identifier or an attribute of
+ *     identifiers (`['g', 'greet']`, `['a', 'b', 'c']`); for a computed receiver it is not settled.
+ *   - receiverNode: only when the `object` is an identifier or a chain of identifier attributes: the
+ *     chain's LAST identifier (`b` of `a.b.c()`, subgraph.ts receiverToken); absent for `f(x).g()`,
+ *     `a[0].g()` (the conservative receiver rule, 11-salvage.yaml).
+ *   - args: each named child of the `arguments` field in order; `identifier` is set for a bare
+ *     identifier, and for a `keyword_argument` whose `value` is a bare identifier (that value's text).
+ *   - builtin: for a bare callee whose name is in the builtin table, `{ scheme: 'site', package:
+ *     'python-stdlib', descriptors: [{ kind: 'method', name }] }` (archive builtins/python-stdlib.ts);
+ *     never for an attribute callee. The table is the archive's two frozen sets reconciled (11-salvage
+ *     row 60): f18ee71 builtins/python-stdlib.ts and 21754b4 pythonPath.ts PYTHON_BUILTINS, as a union.
+ * - `decorator`: a CallInfo of kind `decorator` for its expression (the decorator node's one named
+ *   child): an identifier or an identifier attribute is read as a callee as above, with args `[]` (no
+ *   argument list is written); a `call` expression (`@app.route("/")`) is read as that call (its
+ *   callee and args), and the walker then descends only its arguments. Anything else is undefined.
+ * - `lambda`: `{ emits: 'none', descend: 'transparent' }` (an inline callback: its calls count in the
+ *   enclosing region).
+ * - `function_definition`, `class_definition`, `decorated_definition`: `{ emits: 'none', descend:
+ *   'stop' }` (a nested named declaration is never descended, decision 92).
+ * - anything else: undefined (descend ordinarily).
+ */
+function classifyExpression(_node: SyntaxNode): ExpressionVerdict | undefined {
+  return undefined;
+}
+
+/**
+ * SEAT (U6a.2-4a): returns undefined until the implementation lands. Its contract (archive
+ * localBindingsPy): every name a region binds by a plain assignment whose `left` is an `identifier`
+ * (`x = 1`, `x: int = 1`), in source order, anywhere in the region's tree except inside a `lambda`, a
+ * `function_definition` or a `class_definition` (their own scopes); an assignment's right side is not
+ * searched. A tuple, attribute or augmented assignment binds nothing here (a documented gap, as are
+ * `for`, `with`, `except` and walrus binders). REACHING_DEF treats each as shadowing an outer binding.
+ */
+function localBindings(_regionRoot: SyntaxNode): readonly string[] | undefined {
+  return undefined;
+}
+
+/**
  * Total over the 14 labels and 15 edge types (I13), honest against the ladder both ways (I14). The
  * same frozen object on every call (the nodes and edges records frozen too): compiled in, never
  * configuration.
@@ -334,5 +382,7 @@ export const pythonAdapter: LanguageAdapter = {
   moduleRootType: 'module',
   moduleName,
   classify,
+  classifyExpression,
+  localBindings,
   coverage,
 };

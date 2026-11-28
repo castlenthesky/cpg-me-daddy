@@ -1,8 +1,9 @@
 // The Python adapter's module names, coverage table and registry (decision 96). Module names come
 // from the ladder (rungs 01, 06, 07). The coverage rows come from C-EXTRACT I13 and Q8, decisions 91,
-// 93 and 95, and the schema's ownership: what extract emits after Pass A (U6a.2-3) and from which
-// grammar node types, who owns what it never emits, and a tracking id for each label or edge a later
-// unit adds. The declaration table itself is python-decl.test.ts.
+// 93 and 95, and the schema's ownership: what extract emits after Pass A (U6a.2-3) and Pass B's calls
+// (U6a.2-4a) and from which grammar node types, who owns what it never emits, and a tracking id for each
+// label or edge a later unit adds (IMPORT: BMO-134). The declaration table is python-decl.test.ts, the
+// expression table python-calls.test.ts.
 import { isDeepStrictEqual } from 'node:util';
 import { EDGE_TYPES, isWorkspacePath, NODE_LABELS } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
@@ -49,7 +50,11 @@ const LATER = 'declared-not-emitted';
 
 // What a declaration is classified from, and what mints a SYMBOL (python.ts's table, decision 107).
 const DECLARED_FROM = ['class_definition', 'function_definition', 'expression_statement'];
-const SYMBOL_FROM = ['module', ...DECLARED_FROM, 'decorated_definition'];
+const DEFINES_FROM = ['module', ...DECLARED_FROM, 'decorated_definition'];
+// U6a.2-4a: what a CALL is classified from (python.ts's expression table); a builtin callee also mints
+// its external SYMBOL from one (I11), so SYMBOL comes from these too.
+const CALL_FROM = ['call', 'decorator'];
+const SYMBOL_FROM = [...DEFINES_FROM, ...CALL_FROM];
 
 // One row per label and edge type: 14 + 15 (I13).
 const NODE_ROWS: Record<string, object | typeof LATER> = {
@@ -67,7 +72,7 @@ const NODE_ROWS: Record<string, object | typeof LATER> = {
     'dictionary_splat_pattern',
   ),
   MEMBER: emits('expression_statement'),
-  CALL: LATER,
+  CALL: emits(...CALL_FROM),
   IMPORT: LATER,
   SYMBOL: emits(...SYMBOL_FROM),
   COMMUNITY: notMine('analysis-pass'),
@@ -79,9 +84,9 @@ const EDGE_ROWS: Record<string, object | typeof LATER> = {
   HAS_ENTRY: notMine('filesystem-tier'),
   DECLARES: emits(...DECLARED_FROM, 'decorated_definition'),
   HAS_PARAM: emits('function_definition', 'decorated_definition'),
-  DEFINES: emits(...SYMBOL_FROM),
-  CALLS: LATER,
-  IN_SCOPE: LATER,
+  DEFINES: emits(...DEFINES_FROM),
+  CALLS: emits(...CALL_FROM),
+  IN_SCOPE: emits(...CALL_FROM),
   IMPORTS: notMine('resolve-pass'),
   INHERITS_FROM: LATER,
   MEMBER_OF: notMine('analysis-pass'),
@@ -89,7 +94,7 @@ const EDGE_ROWS: Record<string, object | typeof LATER> = {
   TAGGED_BY: notMine('meta'),
   TARGETS: notMine('analysis-pass'),
   DEPENDS_ON: notMine('analysis-pass'),
-  REACHING_DEF: LATER,
+  REACHING_DEF: emits(...CALL_FROM),
   SOURCE_FILE: notMine('filesystem-tier'),
 };
 
@@ -132,9 +137,17 @@ describe('the python CoverageManifest (I13)', () => {
     ]);
   });
 
-  it('says what the MODULE tier and Pass A emit, who owns the rest, and tracks every later row', () => {
+  it('says what the MODULE tier, Pass A and Pass B calls emit, who owns the rest, and tracks every later row', () => {
     expect(mismatches(manifest.nodes, NODE_ROWS)).toEqual([]);
     expect(mismatches(manifest.edges, EDGE_ROWS)).toEqual([]);
+  });
+
+  it('tracks IMPORT to its own unit now that the calls have landed (BMO-134)', () => {
+    const row = manifest.nodes.IMPORT;
+    expect([row.state, row.state === LATER ? row.trackingId : undefined]).toEqual([
+      LATER,
+      'BMO-134',
+    ]);
   });
 
   it('is one frozen table, not configuration', () => {

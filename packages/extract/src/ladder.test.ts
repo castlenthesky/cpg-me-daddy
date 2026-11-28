@@ -1,10 +1,14 @@
-// Every Python file in fixtures/ladder, and in extract's own Pass A fixture (test/fixtures/pass-a, in
-// the ladder's format), parsed by the real wasm grammar and extracted. The expected lines were written
-// by hand from the source (ladder README), so this checks extract against an answer it did not produce:
-// - precision: everything extract emits is a fact of its rung, with the listed properties;
-// - recall at this tier (U6a.2-3): every MODULE, TYPE_DECL, METHOD, PARAM, MEMBER and UNKNOWN line of a
-//   .py file and every DECLARES, HAS_PARAM and DEFINES between them is emitted, and the Pass A
-//   fixture's and rung 01's whole code tier (SOURCE_FILE is the engine's, C-EXTRACT Q8);
+// Every Python file in fixtures/ladder, and in extract's own fixtures (test/fixtures/pass-a and
+// test/fixtures/pass-b, in the ladder's format), parsed by the real wasm grammar and extracted. The
+// expected lines were written by hand from the source (ladder README), so this checks extract against an
+// answer it did not produce:
+// - precision: everything extract emits is a fact of its rung, with the listed properties; a SYMBOL is
+//   a DEFINES target or a CALLS target (a builtin's, I11);
+// - recall at the Pass A tier (U6a.2-3): every MODULE, TYPE_DECL, METHOD, PARAM, MEMBER and UNKNOWN
+//   line of a .py file and every DECLARES, HAS_PARAM and DEFINES between them is emitted;
+// - recall at the Pass B tier (U6a.2-4a): every CALL, IN_SCOPE and REACHING_DEF line, and every CALLS
+//   line extract can know (I11: from a CALL with no receiver, to this file's SYMBOL or a builtin);
+// - the whole code tier of rung 01, rung 04 and both fixtures (SOURCE_FILE is the engine's, C-EXTRACT Q8);
 // - coverage is honest both ways (I14): the rows marked `emits` are exactly what the corpus shows.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -18,9 +22,11 @@ import { createExtractor } from './extractor';
 import { pythonAdapter } from './python';
 
 const LADDER = join(__dirname, '../../../fixtures/ladder');
-const PASS_A = join(__dirname, '../test/fixtures/pass-a');
-/** A rung's directory: a ladder rung, or `pass-a` for extract's own fixture. */
-const dirOf = (rung: string): string => (rung === 'pass-a' ? PASS_A : join(LADDER, rung));
+const FIXTURES = join(__dirname, '../test/fixtures');
+/** Extract's own fixtures, named like rungs. */
+const OWN = new Set(['pass-a', 'pass-b']);
+/** A rung's directory: a ladder rung, or one of extract's own fixtures. */
+const dirOf = (rung: string): string => (OWN.has(rung) ? join(FIXTURES, rung) : join(LADDER, rung));
 const WASM_DIR = join(dirname(require.resolve('@vscode/tree-sitter-wasm/package.json')), 'wasm');
 
 const registry = createLanguageRegistry();
@@ -116,7 +122,7 @@ function pythonFiles(dir: string): string[] {
   });
 }
 
-const RUNGS = [...readdirSync(LADDER).filter((rung) => /^\d\d-/.test(rung)), 'pass-a'];
+const RUNGS = [...readdirSync(LADDER).filter((rung) => /^\d\d-/.test(rung)), ...OWN];
 const extracted: Extracted[] = [];
 
 /** Parses `text` and extracts it, releasing the tree whatever happens. */
@@ -158,6 +164,38 @@ const passATier = (w: Fact) =>
   /^file:[^ ]*\.py:/.test(w.key) &&
   (PASS_A_LABELS.has(w.head) || (PASS_A_EDGES.has(w.head) && !w.key.includes(':IMPORT:')));
 
+const PASS_B_EDGES = new Set(['IN_SCOPE', 'REACHING_DEF']);
+/** A local SYMBOL fqn's file (`` `main.py`/helper(). `` -> `main.py`); undefined for an external one. */
+const fqnFile = (fqn: string): string | undefined => /^`((?:[^`]|``)*)`\//.exec(fqn)?.[1];
+/** A file-owned id's file (`file:main.py:CALL:main:0` -> `main.py`). */
+const idFile = (id: string): string => /^file:([^:]*):/.exec(id)?.[1] ?? '';
+
+/**
+ * A Pass B line of a .py file (U6a.2-4a): a CALL, an IN_SCOPE or REACHING_DEF edge, or a CALLS line
+ * extract can know (I11): its CALL, listed in the same rung, has no receiver_text, and its target is
+ * this file's SYMBOL or an external one. Rung 06/07's cross-file CALLS and rung 08's receiver call are
+ * the resolvers' (U6c, U8).
+ */
+function passBTier(w: Fact, rungFacts: readonly Fact[]): boolean {
+  if (!/^file:[^ ]*\.py:/.test(w.key)) return false;
+  if (w.head === 'CALL' || PASS_B_EDGES.has(w.head)) return true;
+  if (w.head !== 'CALLS') return false;
+  const [from = '', to = ''] = w.key.split(' -> ');
+  const call = rungFacts.find((f) => f.head === 'CALL' && f.key === from);
+  const receiver = call?.props.get('receiver_text');
+  if (call === undefined || (receiver !== undefined && receiver !== 'null')) return false;
+  const target = fqnFile(to);
+  return target === undefined || target === idFile(from);
+}
+
+/** A rung's DEFINES and CALLS targets: every SYMBOL extract may mint for it. */
+const symbolTargets = (want: readonly Fact[]): Set<string> =>
+  new Set(
+    want
+      .filter((w) => w.head === 'DEFINES' || w.head === 'CALLS')
+      .map((w) => w.key.split(' -> ')[1] ?? ''),
+  );
+
 const files = () =>
   extracted.flatMap((e) => (e.outcome.kind === 'ok' ? [{ ...e, file: e.outcome.file }] : []));
 
@@ -169,16 +207,18 @@ const ofRung = (rung: string): Fact[] =>
     .flatMap(({ file }) => emitted(file).facts);
 
 describe('fixtures/ladder through the real grammar and extract', () => {
-  it('extracts every Python file of rungs 01-09 and the Pass A fixture ok, syntax errors included', () => {
+  it('extracts every Python file of rungs 01-09 and both fixtures ok, syntax errors included', () => {
     expect(extracted.map((e) => `${e.rung}/${e.path} ${e.outcome.kind}`)).toEqual(
       expect.arrayContaining([
         '01-empty-module/main.py ok',
+        '04-local-call/main.py ok',
         '09-syntax-error/main.py ok',
         'pass-a/broken.py ok',
         'pass-a/decl.py ok',
+        'pass-b/calls.py ok',
       ]),
     );
-    expect(extracted.length).toBe(14);
+    expect(extracted.length).toBe(15);
     expect(extracted.filter((e) => e.outcome.kind !== 'ok')).toEqual([]);
   });
 
@@ -186,9 +226,7 @@ describe('fixtures/ladder through the real grammar and extract', () => {
     const problems = files().flatMap(({ rung, path, file }) => {
       const want = factsOf(rung);
       const { facts, symbols } = emitted(file);
-      const targets = new Set(
-        want.filter((w) => w.head === 'DEFINES').map((w) => w.key.split(' -> ')[1]),
-      );
+      const targets = symbolTargets(want);
       return [
         ...facts.filter((f) => !holds(want, f)).map((f) => `${rung}/${path}: ${f.head} ${f.key}`),
         ...symbols.filter((s) => !targets.has(s)).map((s) => `${rung}/${path}: SYMBOL ${s}`),
@@ -205,22 +243,48 @@ describe('fixtures/ladder through the real grammar and extract', () => {
     );
     const missing = wanted.filter(({ rung, w }) => !ofRung(rung).some((g) => holds([w], g)));
     expect(missing.map(({ rung, w }) => `${rung}: ${w.head} ${w.key}`)).toEqual([]);
-    // Counted in the expected files: rungs 01-09 hold 2+5+9+8+15+10+14+13+5, the fixture 82.
-    expect(wanted.filter(({ rung }) => rung !== 'pass-a').length).toBe(81);
-    expect(wanted.length).toBe(163);
+    // Counted in the expected files: rungs 01-09 hold 2+5+9+8+15+10+14+13+5, the Pass A fixture 82,
+    // the Pass B fixture 48 (19 nodes, 10 DECLARES, 8 HAS_PARAM, 11 DEFINES).
+    expect(wanted.filter(({ rung }) => !OWN.has(rung)).length).toBe(81);
+    expect(wanted.filter(({ rung }) => rung === 'pass-a').length).toBe(82);
+    expect(wanted.length).toBe(211);
   });
 
-  it("is the Pass A fixture's whole code tier, SOURCE_FILE aside, each SYMBOL once", () => {
-    const fixture = files().filter((f) => f.rung === 'pass-a');
-    expect(fixture.map((f) => f.path).toSorted()).toEqual(['broken.py', 'decl.py']);
-    const want = factsOf('pass-a');
+  it('emits every Pass B line of a .py file it can know, with its listed properties (U6a.2-4a)', () => {
+    const wanted = RUNGS.flatMap((rung) => {
+      const all = factsOf(rung);
+      return all.filter((w) => passBTier(w, all)).map((w) => ({ rung, w }));
+    });
+    const missing = wanted.filter(({ rung, w }) => !ofRung(rung).some((g) => holds([w], g)));
+    expect(missing.map(({ rung, w }) => `${rung}: ${w.head} ${w.key}`)).toEqual([]);
+    // Counted in the expected files: rungs 04, 06, 07, 08 hold 6 CALL + 6 IN_SCOPE + 3 CALLS (04's
+    // two, 08's constructor); the Pass A fixture 4 + 4 + 1 (property); the Pass B fixture 14 CALL,
+    // 14 IN_SCOPE, 9 REACHING_DEF, 12 CALLS.
+    const count = (pick: (rung: string) => boolean) =>
+      wanted.filter(({ rung }) => pick(rung)).length;
+    expect([
+      count((r) => !OWN.has(r)),
+      count((r) => r === 'pass-a'),
+      count((r) => r === 'pass-b'),
+    ]).toEqual([15, 9, 49]);
+  });
+
+  it.each([
+    ['pass-a', ['broken.py', 'decl.py']],
+    ['pass-b', ['calls.py']],
+    ['04-local-call', ['main.py']],
+  ])("is %s's whole code tier, SOURCE_FILE aside, each SYMBOL once", (rung, paths) => {
+    const fixture = files().filter((f) => f.rung === rung);
+    expect(fixture.map((f) => f.path).toSorted()).toEqual(paths);
+    const want = factsOf(rung).filter((w) => w.head !== 'SOURCE_FILE');
     const got = fixture.flatMap(({ file }) => emitted(file).facts);
     expect(got.map((f) => `${f.head} ${f.key}`).toSorted()).toEqual(
       want.map((w) => `${w.head} ${w.key}`).toSorted(),
     );
-    const targets = want.filter((w) => w.head === 'DEFINES').map((w) => w.key.split(' -> ')[1]);
+    expect(want.filter((w) => !got.some((g) => holds([w], g)))).toEqual([]);
+    // Each SYMBOL once (I7): no fixture here has two files minting the same fqn.
     expect(fixture.flatMap(({ file }) => emitted(file).symbols).toSorted()).toEqual(
-      [...new Set(targets)].toSorted(),
+      [...symbolTargets(want)].toSorted(),
     );
   });
 

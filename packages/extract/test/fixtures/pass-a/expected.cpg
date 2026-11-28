@@ -1,7 +1,10 @@
 # Extract's own Pass A fixture (U6a.2-3), not a ladder rung: the declaration hazards the ladder does not
 # hold yet. Written by hand from ws/ in the ladder's format (fixtures/ladder/README.md) and checked by
-# packages/extract/src/ladder.test.ts. It lists Pass A's facts only: decorator CALLs (decision 107's
-# other half) and every other call are Pass B (U6a.2-4), and SOURCE_FILE is the engine's (C-EXTRACT Q8).
+# packages/extract/src/ladder.test.ts. Since U6a.2-4a it is the files' whole code tier: decl.py's only
+# calls are its four decorators (decision 107's other half: each a CALL of kind decorator, counted in
+# $root in source order, decision 92, IN_SCOPE the MODULE), and SOURCE_FILE is the engine's (C-EXTRACT Q8).
+# `register` and `dataclass` are bound nowhere in the file and are not builtins, and `label.setter` has a
+# receiver, so only `property` gets a CALLS edge: external, to the adapter's builtin table (I11).
 #
 # decl.py: a module MEMBER and its redefinition, a decorated function (its range starts at the
 # decorator), splat and typed parameters, a nested def that is not descended (decision 92), an async
@@ -60,6 +63,14 @@ HAS_PARAM file:decl.py:METHOD:Greeter.__init__ -> file:decl.py:PARAM:Greeter.__i
 HAS_PARAM file:decl.py:METHOD:Greeter.label -> file:decl.py:PARAM:Greeter.label.self
 HAS_PARAM file:decl.py:METHOD:Greeter.label:1 -> file:decl.py:PARAM:Greeter.label.self:1
 HAS_PARAM file:decl.py:METHOD:Greeter.label:1 -> file:decl.py:PARAM:Greeter.label.value
+CALL file:decl.py:CALL:$root:0 callee_name=register receiver_text=null args_count=0 kind=decorator status=ready range=7:0-7:9
+CALL file:decl.py:CALL:$root:1 callee_name=dataclass receiver_text=null args_count=0 kind=decorator status=ready range=24:0-24:10
+CALL file:decl.py:CALL:$root:2 callee_name=property receiver_text=null args_count=0 kind=decorator status=ready range=34:4-34:13
+CALL file:decl.py:CALL:$root:3 callee_name=setter receiver_text=label args_count=0 kind=decorator status=ready range=38:4-38:17
+IN_SCOPE file:decl.py:CALL:$root:0 -> file:decl.py:MODULE:$root
+IN_SCOPE file:decl.py:CALL:$root:1 -> file:decl.py:MODULE:$root
+IN_SCOPE file:decl.py:CALL:$root:2 -> file:decl.py:MODULE:$root
+IN_SCOPE file:decl.py:CALL:$root:3 -> file:decl.py:MODULE:$root
 
 MODULE file:broken.py:MODULE:$root name=broken range=1:0-9:0
 MEMBER file:broken.py:MEMBER:x name=x range=1:0-1:5
@@ -96,3 +107,6 @@ DEFINES file:broken.py:MEMBER:x -> `broken.py`/x.
 DEFINES file:broken.py:TYPE_DECL:C -> `broken.py`/C#
 DEFINES file:broken.py:MEMBER:C.y -> `broken.py`/C#y.
 DEFINES file:broken.py:METHOD:C.m -> `broken.py`/C#m().
+
+[resolution]
+CALLS file:decl.py:CALL:$root:2 -> site:python-stdlib`property(). status=external
