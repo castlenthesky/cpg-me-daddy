@@ -167,10 +167,10 @@ describe('python.ts compoundChildren (stop-list 196) and headerErrors (decision 
   it('answers undefined for each clause of FORMS and for the match block, each on its own', async () => {
     const got = await withRoot(FORMS, (root) => {
       const [ifs, , , , trys, withs, , match] = root.namedChildren;
-      const block = match?.childForFieldName('body');
-      return [ifs, trys, withs, block]
-        .flatMap((s) => (s === block ? [s, ...(s?.namedChildren ?? [])] : (s?.namedChildren ?? [])))
-        .filter((c) => c !== undefined && (c.type.endsWith('_clause') || c === block))
+      const block = match?.childForFieldName('body') ?? undefined;
+      const parts = [ifs, trys, withs].flatMap((s) => s?.namedChildren ?? []);
+      return [...parts, ...(block ? [block, ...block.namedChildren] : [])]
+        .filter((c) => c.type.endsWith('_clause') || c === block)
         .map(
           (c) =>
             `${at(c)} ${pythonAdapter.compoundChildren?.(c) === undefined ? 'undefined' : 'defined'}`,
