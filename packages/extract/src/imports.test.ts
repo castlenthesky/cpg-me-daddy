@@ -292,6 +292,13 @@ describe('IMPORT nodes: one per statement Pass B walks, ordinals counted like CA
     expect(importSites(file).map((s) => s.importBinding?.module)).toEqual(['ok']);
   });
 
+  // Post-implementation (sabotage #7, #16): python.ts's reading S42-7, through the walker.
+  it('a statement that binds only a MISSING name is no IMPORT and takes no ordinal', async () => {
+    const file = await extractOk(lines('from m import ()', 'import ok'));
+    expect(nodesOf(file, 'IMPORT')).toEqual([`${imp('$root', 0)} 2:0-2:9`]);
+    expect(importSites(file).map((s) => s.importBinding)).toStrictEqual([whole('ok', 'ok')]);
+  });
+
   it('a truncated file has no IMPORT, no import site and no re-export (I21)', async () => {
     const outcome = await extractPy(lines('import a', 'import b'), { maxNodes: 2 });
     if (outcome.kind !== 'truncated') throw new Error(`expected truncated, got ${outcome.kind}`);

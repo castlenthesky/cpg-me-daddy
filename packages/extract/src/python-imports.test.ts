@@ -113,6 +113,8 @@ const ROWS: [string, unknown][] = [
   ['from m import a', info('m', ['a'], [bind('a@0:14', 'a', 'm', 0, 'a', 'a')])],
   ['from m import a as b, _c', info('m', ['a', '_c'], [bind('a@0:14', 'a', 'm', 0, 'b', 'a'), bind('_c@0:22', '_c', 'm', 0, '_c', '_c', false)])],
   ['from m import a as _b', info('m', ['a'], [bind('a@0:14', 'a', 'm', 0, '_b', 'a', false)], '_b')],
+  // Post-implementation (sabotage #9): a from-import's alias also needs a sole binding.
+  ['from m import a, b as c', info('m', ['a', 'b'], [bind('a@0:14', 'a', 'm', 0, 'a', 'a'), bind('b@0:17', 'b', 'm', 0, 'c', 'b')])],
   ['from m import (a,\n    # c\n    b,)', info('m', ['a', 'b'], [bind('a@0:15', 'a', 'm', 0, 'a', 'a'), bind('b@2:4', 'b', 'm', 0, 'b', 'b')])],
   ['from m import a\\\n  , b', info('m', ['a', 'b'], [bind('a@0:14', 'a', 'm', 0, 'a', 'a'), bind('b@1:4', 'b', 'm', 0, 'b', 'b')])],
   // The module name and the imported name are told apart by position, not by text.
@@ -138,9 +140,53 @@ const ROWS: [string, unknown][] = [
   ['from m. import x', info('m', ['x'], [bind('x@0:15', 'x', 'm', 0, 'x', 'x')])],
 ];
 
+/** A hand-built node at 0:0: `kids` are its named children, `fields` its named fields. */
+function fake(
+  type: string,
+  text: string,
+  kids: readonly SyntaxNode[] = [],
+  fields: Readonly<Record<string, SyntaxNode>> = {},
+): SyntaxNode {
+  return {
+    type,
+    text,
+    startPosition: { row: 0, column: 0 },
+    endPosition: { row: 0, column: text.length },
+    startIndex: 0,
+    endIndex: text.length,
+    namedChildren: kids,
+    childForFieldName: (name) => fields[name] ?? null,
+  };
+}
+const dotted = (name: string) => fake('dotted_name', name, [fake('identifier', name)]);
+
 describe('the import table (BMO-134; archive 21754b4 imports.ts)', () => {
   it.each(ROWS)('%j', async (source, want) => {
     expect(await classifyFirst(source, summary)).toStrictEqual(want);
+  });
+
+  // Post-implementation (sabotage #7, #16): python.ts's reading S42-7. A MISSING identifier is no
+  // segment, a name with none is no binding, a statement with no binding is no IMPORT. The trees are
+  // PRECONDITIONS: `(import_from_statement module_name: (dotted_name (identifier)) name: (dotted_name
+  // (MISSING identifier)))` and the same with `(relative_import (import_prefix))`.
+  it.each(['from m import ()', 'from . import (,)'])(
+    '%j (one MISSING name) is no import',
+    async (source) => {
+      expect(await classifyFirst(source, (v) => v)).toBeUndefined();
+    },
+  );
+
+  // Post-implementation (sabotage #17): an empty alias is a MISSING local name, so no binding. The real
+  // grammar gives an ERROR for `import a as`, so the tree is hand-built.
+  it('drops a binding whose alias is empty and keeps the others', () => {
+    const empty = fake('aliased_import', 'a as', [dotted('a'), fake('identifier', '')], {
+      name: dotted('a'),
+      alias: fake('identifier', ''),
+    });
+    const statement = fake('import_statement', 'import a as, b', [empty, dotted('b')]);
+    expect(summary(pythonAdapter.classifyExpression?.(statement))).toStrictEqual(
+      info('b', [], [bind('b@0:0', 'b', 'b', 0, 'b')]),
+    );
   });
 
   // A guard (passes at RED too): a statement that only mentions a module is no import.
