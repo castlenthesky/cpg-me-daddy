@@ -162,7 +162,7 @@ function buildParam(
   node: SyntaxNode,
   typeText?: string,
   defaultText?: string,
-): ParamInfo | undefined {
+): Omit<ParamInfo, 'ordinal'> | undefined {
   if (name === undefined) return undefined;
   return {
     name,
@@ -172,7 +172,7 @@ function buildParam(
   };
 }
 
-function paramInfo(node: SyntaxNode): ParamInfo | undefined {
+function paramInfo(node: SyntaxNode): Omit<ParamInfo, 'ordinal'> | undefined {
   switch (node.type) {
     case 'identifier':
       return buildParam(node.text, node);
@@ -227,9 +227,12 @@ function classifyFunction(node: SyntaxNode, container: ContainerKind): MethodInf
   if (nameNode === null || paramsNode === null) return undefined;
 
   const name = nameNode.text;
+  // PASSTHROUGH (sprint 40 RED): the ordinal is the param's index, as before; decision 114's
+  // positions (a MISSING name holds one) are the implementation.
   const params = paramsNode.namedChildren
     .map((param) => paramInfo(param))
-    .filter((param): param is ParamInfo => param !== undefined);
+    .filter((param): param is Omit<ParamInfo, 'ordinal'> => param !== undefined)
+    .map((param, ordinal): ParamInfo => ({ ...param, ordinal }));
 
   const returnType = node.childForFieldName('return_type')?.text;
   const paramList = params

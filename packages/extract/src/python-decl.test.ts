@@ -88,6 +88,52 @@ async function classifyAt(source: string, ...path: number[]): Promise<unknown> {
 const headOf = (got: unknown): unknown =>
   typeof got === 'object' && got !== null && 'docstringHead' in got ? got.docstringHead : undefined;
 
+/** A hand-built node at 0:0 (sprint 40): `kids` are its named children, `fields` its named fields. */
+function fake(
+  type: string,
+  text: string,
+  kids: readonly SyntaxNode[] = [],
+  fields: Readonly<Record<string, SyntaxNode>> = {},
+): SyntaxNode {
+  return {
+    type,
+    text,
+    startPosition: { row: 0, column: 0 },
+    endPosition: { row: 0, column: text.length },
+    startIndex: 0,
+    endIndex: text.length,
+    namedChildren: kids,
+    childForFieldName: (name) => fields[name] ?? null,
+  };
+}
+
+// Decision 114 in every param shape: the real grammar gave a MISSING name only as a bare identifier
+// (robustness.test.ts), so the other shapes are hand-built, each with an empty-named identifier.
+const EMPTY = fake('identifier', '');
+const INT = fake('type', 'int');
+const ONE = fake('integer', '1');
+const HOLES: readonly (readonly [string, SyntaxNode])[] = [
+  ['identifier', EMPTY],
+  ['typed_parameter', fake('typed_parameter', ': int', [EMPTY, INT], { type: INT })],
+  ['default_parameter', fake('default_parameter', '=1', [EMPTY, ONE], { name: EMPTY, value: ONE })],
+  [
+    'typed_default_parameter',
+    fake('typed_default_parameter', ': int=1', [EMPTY, INT, ONE], {
+      name: EMPTY,
+      type: INT,
+      value: ONE,
+    }),
+  ],
+  ['list_splat_pattern', fake('list_splat_pattern', '*', [EMPTY])],
+  ['dictionary_splat_pattern', fake('dictionary_splat_pattern', '**', [EMPTY])],
+  [
+    'typed splat',
+    fake('typed_parameter', '*: int', [fake('list_splat_pattern', '*', [EMPTY]), INT], {
+      type: INT,
+    }),
+  ],
+];
+
 const fn = (over: Record<string, unknown>) => ({
   declares: 'METHOD',
   kind: 'function',
@@ -178,6 +224,22 @@ describe('functions and methods', () => {
       params: [],
     });
   });
+
+  it.each(HOLES)(
+    'an empty name in a %s is no param; the next keeps its position (decision 114)',
+    (_shape, hole) => {
+      const z = fake('identifier', 'z');
+      const parameters = fake('parameters', '', [hole, z]);
+      const def = fake('function_definition', 'def f(z):', [], {
+        name: fake('identifier', 'f'),
+        parameters,
+      });
+      expect(pythonAdapter.classify(def, 'MODULE')).toMatchObject({
+        signature: 'f(z)',
+        params: [{ name: 'z', ordinal: 1, node: z }],
+      });
+    },
+  );
 
   it.each([
     ['"""Say hello.\n\n    More."""', 'Say hello.'],
