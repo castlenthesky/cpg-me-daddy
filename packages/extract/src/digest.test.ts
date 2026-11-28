@@ -208,6 +208,41 @@ describe('interfaceHash', () => {
   });
 });
 
+// BMO-134: each re-export is the entry [local, 'reexport', <dots><module>[:<imported>]] (digest.ts).
+const reexport = (local: string, module: string, relativeDepth = 0, imported?: string) => ({
+  module,
+  relativeDepth,
+  ...(imported !== undefined ? { imported } : {}),
+  local,
+});
+const ENGINE = reexport('Engine', 'core', 1, 'Engine');
+
+describe('interfaceHash re-exports (decision 94, BMO-134)', () => {
+  it('matches the oracle for a from-import beside a function', () => {
+    // [["Engine","reexport",".core:Engine"],["file:main.py:METHOD:greet","function","greet()"]]
+    const want = 'sha256:be289f406598bd0271574623069205f4a93e7f64f6f77808d0c384365e1bebc2';
+    expect(interfaceHash([exportedFn('greet')], [ENGINE])).toBe(want);
+  });
+
+  it('spells a whole-module import without `:` and a bare relative module as its dots', () => {
+    // [["os","reexport","os"],["x","reexport","..:x"]], sorted whatever the input order
+    const want = 'sha256:5520a4a1e3d7fa18da0bcaa7b3dc7d4445747ad5b9e138a0056511701aec322b';
+    const os = reexport('os', 'os');
+    const x = reexport('x', '', 2, 'x');
+    expect([interfaceHash([], [x, os]), interfaceHash([], [os, x])]).toEqual([want, want]);
+  });
+
+  it.each([
+    ['local', reexport('Motor', 'core', 1, 'Engine')],
+    ['module', reexport('Engine', 'engine', 1, 'Engine')],
+    ['relativeDepth', reexport('Engine', 'core', 2, 'Engine')],
+    ['imported', reexport('Engine', 'core', 1, 'Motor')],
+    ['imported absent', reexport('Engine', 'core', 1)],
+  ])('changes with its %s', (_what, changed) => {
+    expect(interfaceHash([], [changed])).not.toBe(interfaceHash([], [ENGINE]));
+  });
+});
+
 const fileAt = (path: string, siteIds: readonly string[] = []): ExtractedFile => ({
   path: wsPath(path),
   grammarId: 'python',

@@ -31,8 +31,9 @@ const FILES = 3;
 // U6a.3-3 (decision 110 reversed): the watch runs the code tier. U6a.2-3: each python file brings the
 // rung's Pass A lines ([structural] MODULE, METHOD, PARAM) and one SYMBOL per DEFINES target ([symbols]):
 // main.py 2 + 2, shapes/__init__.py 1 + 1, shapes/square.py 3 + 2. U6a.2-4a: main.py's CALL main:0 too
-// (`area(2)`, imported, so no CALLS and no SYMBOL, I11). IMPORT is BMO-134.
-const CODE_NODES = 5 + 2 + 5;
+// (`area(2)`, imported, so no CALLS and no SYMBOL, I11). BMO-134: main.py's IMPORT $root:0 (no SYMBOL:
+// its IMPORTS edge is the resolver's).
+const CODE_NODES = 6 + 2 + 5;
 const NODES = 5 + CODE_NODES;
 const STALE = 'shapes/square.py';
 /** A file the tests add: one more FILE node in a directory that is already there. */

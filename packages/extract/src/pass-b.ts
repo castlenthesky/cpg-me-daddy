@@ -11,6 +11,7 @@ import type {
   ContainerKind,
   DeclarationInfo,
   ExtractRequest,
+  ImportInfo,
   LanguageAdapter,
   SyntaxNode,
 } from './contract';
@@ -71,6 +72,29 @@ const position = (node: SyntaxNode) => ({
   row: node.startPosition.row,
   column: node.startPosition.column,
 });
+
+/**
+ * SEAT (BMO-134): emits nothing until the implementation lands. Each ImportInfo, at the node it
+ * classified (an import statement), is one IMPORT, never descended:
+ * - id `makeNodeId({ form: 'scoped', path, kind: 'IMPORT', scope: region.scope, ordinal })`, the
+ *   ordinal counted per scope in pre-order exactly as a CALL's (decision 92), a count of its own
+ *   (an IMPORT and a CALL of one region each start at 0);
+ * - a NodeElement, tier `structural`, range the statement's, no nameRange, properties
+ *   `{ source_text: sourceText, imported_names: importedNames, alias?, is_type_only: typeOnly,
+ *   status: 'ready' }` (alias only when the ImportInfo has one);
+ * - then a DECLARES edge to it from its lexical container: the region's METHOD for a METHOD body,
+ *   else the MODULE or TYPE_DECL that Pass A visited the statement in (a compound statement is not
+ *   a scope, so an import in a class-level `if` is the class's);
+ * - then one ref site per binding, in order: id `<IMPORT id>#<k>` (k its 0-based index), nodeId the
+ *   IMPORT's id, filePath the path, kind `import`, position the start of its nameNode (the imported
+ *   name, never the alias: I20), its nameParts, importBinding its binding; no `declined` (the
+ *   resolver answers it, U6c);
+ * - a binding of an IMPORT that the MODULE DECLARES (module level, compound blocks included) whose
+ *   `exported` is true is a re-export: its binding joins the file's interfaceHash (decision 94).
+ */
+function emitImport(_node: SyntaxNode, _info: ImportInfo, _region: Region): void {
+  // SEAT: no IMPORT until BMO-134's implementation.
+}
 
 /**
  * Runs only when Pass A finished the whole file (I21): walkFile does not call it after a budget hit, so a
@@ -237,6 +261,10 @@ export function walkCalls(input: PassBInput, builder: ElementBuilder): void {
   function visit(node: SyntaxNode, region: Region): void {
     if (node.type === 'ERROR') return;
     const verdict = adapter.classifyExpression?.(node);
+    if (verdict?.emits === 'IMPORT') {
+      emitImport(node, verdict, region);
+      return;
+    }
     if (verdict?.emits === 'CALL') {
       emitCall(node, verdict, region);
       const next =

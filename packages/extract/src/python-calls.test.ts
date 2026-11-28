@@ -60,7 +60,7 @@ function find(root: SyntaxNode, type: string, row: number, column: number): Synt
 
 /** A readable projection of a verdict: tokens as `text@row:col`, args as `[identifier, node]`. */
 function summary(verdict: ExpressionVerdict | undefined): unknown {
-  if (verdict === undefined || verdict.emits === 'none') return verdict;
+  if (verdict === undefined || verdict.emits !== 'CALL') return verdict;
   return {
     ...verdict,
     nameNode: at(verdict.nameNode),

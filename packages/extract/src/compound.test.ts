@@ -241,14 +241,17 @@ describe('Pass A through every compound form (stop-list 196)', () => {
       'MEMBER:V8 27:4-27:10',
       'MEMBER:V9 30:8-30:14',
       'METHOD:f3 32:8-32:22 name 32:12-32:14',
+      // BMO-134: Pass B's IMPORT for the try block's `import os`, in $root after Pass A's nodes.
+      'IMPORT:$root:0 11:4-11:13',
     ]);
   });
 
   it('DECLARES each from its container, never from a compound statement, and mints its SYMBOL', async () => {
     const file = await extractOk(EVERY_FORM);
     const declares = edgesOf(file, 'DECLARES');
+    // 14 declarations and (BMO-134) the MODULE's DECLARES to its IMPORT.
     expect([declares.length, declares.filter((e) => !e.startsWith('MODULE:$root -> '))]).toEqual([
-      14,
+      15,
       ['TYPE_DECL:K1 -> METHOD:K1.meth'],
     ]);
     const kind = (fqn: string) =>

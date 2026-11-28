@@ -8,6 +8,8 @@
 //   line of a .py file and every DECLARES, HAS_PARAM and DEFINES between them is emitted;
 // - recall at the Pass B tier (U6a.2-4a): every CALL, IN_SCOPE and REACHING_DEF line, and every CALLS
 //   line extract can know (I11: from a CALL with no receiver, to this file's SYMBOL or a builtin);
+// - recall of Pass B's imports (BMO-134): every IMPORT line and every DECLARES to one, the node half of
+//   rungs 06 and 07 (their IMPORTS lines are the resolver's, U6c);
 // - the whole code tier of rung 01, rung 04 and both fixtures (SOURCE_FILE is the engine's, C-EXTRACT Q8);
 // - coverage is honest both ways (I14): the rows marked `emits` are exactly what the corpus shows.
 import { createHash } from 'node:crypto';
@@ -164,6 +166,11 @@ const passATier = (w: Fact) =>
   /^file:[^ ]*\.py:/.test(w.key) &&
   (PASS_A_LABELS.has(w.head) || (PASS_A_EDGES.has(w.head) && !w.key.includes(':IMPORT:')));
 
+/** A Pass B import line of a .py file (BMO-134): an IMPORT, or a DECLARES to one. */
+const importTier = (w: Fact) =>
+  /^file:[^ ]*\.py:/.test(w.key) &&
+  (w.head === 'IMPORT' || (w.head === 'DECLARES' && w.key.includes(':IMPORT:')));
+
 const PASS_B_EDGES = new Set(['IN_SCOPE', 'REACHING_DEF']);
 /** A local SYMBOL fqn's file (`` `main.py`/helper(). `` -> `main.py`); undefined for an external one. */
 const fqnFile = (fqn: string): string | undefined => /^`((?:[^`]|``)*)`\//.exec(fqn)?.[1];
@@ -267,6 +274,23 @@ describe('fixtures/ladder through the real grammar and extract', () => {
       count((r) => r === 'pass-a'),
       count((r) => r === 'pass-b'),
     ]).toEqual([15, 9, 49]);
+  });
+
+  it('emits every IMPORT line of a .py file and its DECLARES, with its listed properties (BMO-134)', () => {
+    const wanted = RUNGS.flatMap((rung) =>
+      factsOf(rung)
+        .filter(importTier)
+        .map((w) => ({ rung, w })),
+    );
+    const missing = wanted.filter(({ rung, w }) => !ofRung(rung).some((g) => holds([w], g)));
+    expect(missing.map(({ rung, w }) => `${rung}: ${w.head} ${w.key}`)).toEqual([]);
+    // Counted in the expected files: rungs 06 and 07 hold one IMPORT and its DECLARES each.
+    expect(wanted.map(({ rung, w }) => `${rung} ${w.head}`)).toEqual([
+      '06-import IMPORT',
+      '06-import DECLARES',
+      '07-package IMPORT',
+      '07-package DECLARES',
+    ]);
   });
 
   it.each([

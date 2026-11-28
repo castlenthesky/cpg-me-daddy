@@ -16,6 +16,7 @@ import type {
   DeclarationInfo,
   Disposition,
   ExpressionVerdict,
+  ImportInfo,
   LanguageAdapter,
   MemberInfo,
   MethodInfo,
@@ -435,9 +436,50 @@ function callInfo(
   };
 }
 
+const IMPORT_STATEMENTS: ReadonlySet<string> = new Set([
+  'import_statement',
+  'import_from_statement',
+  'future_import_statement',
+]);
+
+/**
+ * SEAT (BMO-134): answers `undefined` until the implementation lands. The import table (archive
+ * 21754b4 imports.ts, read through node types instead of its keyword split), for an `import_statement`,
+ * an `import_from_statement` or a `future_import_statement`; anything else is undefined:
+ * - A name's segments are the texts of its `dotted_name`'s `identifier` named children, so
+ *   `a . b` reads `a.b`; the dotted form is the segments joined with `.`.
+ * - `import_statement`: one binding per named child of type `dotted_name` or `aliased_import` (the
+ *   module is the `aliased_import`'s `name` field), in source order; every other child (a comment, a
+ *   line continuation, an ERROR) is none. Each binding: nameNode the module's `dotted_name`, nameParts
+ *   its segments, binding `{ module: dotted, relativeDepth: 0, local }` with no `imported` (a
+ *   whole-module import), local the `alias` field's text when aliased, else the first segment
+ *   (`import os.path` binds `os`). sourceText is the bindings' modules joined with `,` (`os`,
+ *   `os.path`, `a.b,d`); importedNames is `[]`.
+ * - `import_from_statement`: the `module_name` field is a `dotted_name` (relativeDepth 0, module its
+ *   dotted form) or a `relative_import` (relativeDepth the count of `.` in its `import_prefix` child's
+ *   text, module the dotted form of its `dotted_name` child, `''` without one). sourceText is
+ *   `.` repeated relativeDepth times, then module (`util`, `.`, `..pkg.sub`). One binding per named
+ *   child of type `dotted_name` or `aliased_import` other than the `module_name` node (told apart by
+ *   start index), in source order: nameNode the name's `dotted_name` (an `aliased_import`'s `name`
+ *   field), nameParts its segments, binding `{ module, relativeDepth, imported: dotted, local: the
+ *   alias field's text when aliased, else imported }`; a `wildcard_import` child is one binding in
+ *   its place with nameNode the wildcard node, nameParts `['*']`, imported and local `*`.
+ *   importedNames is each binding's `imported`, in order.
+ * - `future_import_statement`: as an `import_from_statement` whose module is `__future__` at
+ *   relativeDepth 0 (it has no `module_name` field), sourceText `__future__`.
+ * - Every binding: `exported` is true unless local starts with `_` (archive isExported; decision 94).
+ * - alias: present only when there is exactly one binding and it came from an `aliased_import`: that
+ *   binding's local. typeOnly: always false (Python has no type-only import).
+ */
+function classifyImport(_node: SyntaxNode): ImportInfo | undefined {
+  return undefined;
+}
+
 /**
  * The expression table (archive python.ts classifyExpressionPy, calleeShape, argInfos; subgraph.ts's
  * receiver rule), sparse by design:
+ * - `import_statement`, `import_from_statement`, `future_import_statement`: the import table's ImportInfo
+ *   (classifyImport, BMO-134), never descended.
  * - `call` with a `function` field that is an `identifier` (bare) or an `attribute` whose `attribute`
  *   is an identifier: a CallInfo of kind `call`. Any other callee (a call, subscript, parenthesized
  *   expression) is undefined, so the walker descends it ordinarily.
@@ -464,6 +506,7 @@ function callInfo(
  * - anything else: undefined (descend ordinarily).
  */
 function classifyExpression(node: SyntaxNode): ExpressionVerdict | undefined {
+  if (IMPORT_STATEMENTS.has(node.type)) return classifyImport(node);
   if (TRANSPARENT.has(node.type)) return { emits: 'none', descend: 'transparent' };
   if (STOP.has(node.type)) return { emits: 'none', descend: 'stop' };
   const expression = node.type === 'decorator' ? node.namedChildren[0] : node;

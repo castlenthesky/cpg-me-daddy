@@ -1,9 +1,10 @@
 // The Python adapter's module names, coverage table and registry (decision 96). Module names come
 // from the ladder (rungs 01, 06, 07). The coverage rows come from C-EXTRACT I13 and Q8, decisions 91,
-// 93 and 95, and the schema's ownership: what extract emits after Pass A (U6a.2-3) and Pass B's calls
-// (U6a.2-4a) and from which grammar node types, who owns what it never emits, and a tracking id for each
-// label or edge a later unit adds (IMPORT: BMO-134). The declaration table is python-decl.test.ts, the
-// expression table python-calls.test.ts.
+// 93 and 95, and the schema's ownership: what extract emits after Pass A (U6a.2-3), Pass B's calls
+// (U6a.2-4a) and its imports (BMO-134) and from which grammar node types, who owns what it never emits,
+// and a tracking id for each label or edge a later unit adds. The declaration table is
+// python-decl.test.ts, the expression table python-calls.test.ts, the import table
+// python-imports.test.ts.
 import { isDeepStrictEqual } from 'node:util';
 import { EDGE_TYPES, isWorkspacePath, NODE_LABELS } from '@cpg/model';
 import { describe, expect, it } from 'vitest';
@@ -55,6 +56,8 @@ const DEFINES_FROM = ['module', ...DECLARED_FROM, 'decorated_definition'];
 // its external SYMBOL from one (I11), so SYMBOL comes from these too.
 const CALL_FROM = ['call', 'decorator'];
 const SYMBOL_FROM = [...DEFINES_FROM, ...CALL_FROM];
+// BMO-134: an IMPORT, and the DECLARES to it, come from the three import statements (python.ts).
+const IMPORT_FROM = ['import_statement', 'import_from_statement', 'future_import_statement'];
 
 // One row per label and edge type: 14 + 15 (I13).
 const NODE_ROWS: Record<string, object | typeof LATER> = {
@@ -73,7 +76,7 @@ const NODE_ROWS: Record<string, object | typeof LATER> = {
   ),
   MEMBER: emits('expression_statement'),
   CALL: emits(...CALL_FROM),
-  IMPORT: LATER,
+  IMPORT: emits(...IMPORT_FROM),
   SYMBOL: emits(...SYMBOL_FROM),
   COMMUNITY: notMine('analysis-pass'),
   TAG: notMine('meta'),
@@ -82,7 +85,7 @@ const NODE_ROWS: Record<string, object | typeof LATER> = {
 };
 const EDGE_ROWS: Record<string, object | typeof LATER> = {
   HAS_ENTRY: notMine('filesystem-tier'),
-  DECLARES: emits(...DECLARED_FROM, 'decorated_definition'),
+  DECLARES: emits(...DECLARED_FROM, 'decorated_definition', ...IMPORT_FROM),
   HAS_PARAM: emits('function_definition', 'decorated_definition'),
   DEFINES: emits(...DEFINES_FROM),
   CALLS: emits(...CALL_FROM),
@@ -137,17 +140,9 @@ describe('the python CoverageManifest (I13)', () => {
     ]);
   });
 
-  it('says what the MODULE tier, Pass A and Pass B calls emit, who owns the rest, and tracks every later row', () => {
+  it('says what the MODULE tier, Pass A and Pass B emit, who owns the rest, and tracks every later row', () => {
     expect(mismatches(manifest.nodes, NODE_ROWS)).toEqual([]);
     expect(mismatches(manifest.edges, EDGE_ROWS)).toEqual([]);
-  });
-
-  it('tracks IMPORT to its own unit now that the calls have landed (BMO-134)', () => {
-    const row = manifest.nodes.IMPORT;
-    expect([row.state, row.state === LATER ? row.trackingId : undefined]).toEqual([
-      LATER,
-      'BMO-134',
-    ]);
   });
 
   it('is one frozen table, not configuration', () => {
