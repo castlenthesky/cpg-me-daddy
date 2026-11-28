@@ -285,7 +285,9 @@ function classifyFunction(node: SyntaxNode, container: ContainerKind): MethodInf
 
 /**
  * A `class_definition`: undefined without a `name`; else `{ declares: 'TYPE_DECL', name, kind:
- * 'class', exported (no leading `_`), structural: true, docstringHead?, body: the body field }`.
+ * 'class', exported (no leading `_`), structural: true, docstringHead?, body: the body field,
+ * headerErrors? }`, where `headerErrors` holds the ERROR-typed nodes among the class's own named
+ * children in source order and is present only when there is at least one (decision 117).
  */
 function classifyClass(node: SyntaxNode): TypeDeclInfo | undefined {
   const nameNode = node.childForFieldName('name');
@@ -294,6 +296,7 @@ function classifyClass(node: SyntaxNode): TypeDeclInfo | undefined {
   const name = nameNode.text;
   const body = node.childForFieldName('body');
   const head = leadingDocstring(body);
+  const headerErrors = node.namedChildren.filter((child) => child.type === 'ERROR');
 
   return {
     declares: 'TYPE_DECL',
@@ -303,6 +306,7 @@ function classifyClass(node: SyntaxNode): TypeDeclInfo | undefined {
     structural: true,
     ...(head !== undefined ? { docstringHead: head } : {}),
     body: body ?? undefined,
+    ...(headerErrors.length > 0 ? { headerErrors } : {}),
   };
 }
 
@@ -498,6 +502,30 @@ function localBindings(regionRoot: SyntaxNode): readonly string[] {
   return names;
 }
 
+const COMPOUND_STATEMENTS: ReadonlySet<string> = new Set([
+  'if_statement',
+  'for_statement',
+  'while_statement',
+  'try_statement',
+  'with_statement',
+  'match_statement',
+]);
+const COMPOUND_CLAUSES: ReadonlySet<string> = new Set([
+  'elif_clause',
+  'else_clause',
+  'except_clause',
+  'finally_clause',
+  'case_clause',
+]);
+
+function expandCompound(node: SyntaxNode): readonly SyntaxNode[] {
+  return node.namedChildren.flatMap((child) => {
+    if (child.type === 'block' && node.type !== 'match_statement') return child.namedChildren;
+    if (child.type === 'block' || COMPOUND_CLAUSES.has(child.type)) return expandCompound(child);
+    return [child];
+  });
+}
+
 /**
  * A compound statement (stop-list 196): `if_statement`, `for_statement`, `while_statement`,
  * `try_statement`, `with_statement` and `match_statement` (`async for` and `async with` are the same
@@ -507,11 +535,9 @@ function localBindings(regionRoot: SyntaxNode): readonly string[] {
  * place. So a condition, a `with_clause`, a `for` target and iterable, an `except` value, a match
  * subject, a case pattern and guard, a comment and an ERROR stay as they are. Anything else is
  * undefined.
- *
- * SEAT (sprint 41 RED): the walker does not call it yet.
  */
-function compoundChildren(_node: SyntaxNode): readonly SyntaxNode[] | undefined {
-  throw new Error('SEAT: compoundChildren (stop-list 196, sprint 41)');
+function compoundChildren(node: SyntaxNode): readonly SyntaxNode[] | undefined {
+  return COMPOUND_STATEMENTS.has(node.type) ? expandCompound(node) : undefined;
 }
 
 /**
