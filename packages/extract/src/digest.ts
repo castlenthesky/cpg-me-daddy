@@ -84,29 +84,34 @@ export function elementDigest(elements: BuiltElements): string {
  * Ranges, docstrings and revision_id do not enter: moving a function down the file changes nothing.
  * Python's `__all__` is a documented gap.
  *
- * SEAT (BMO-134): `reexports` is ignored until the implementation lands. Each re-export (a module-level
- * import binding Pass B found exported) is one more entry, sorted with the rest:
- * `[local, 'reexport', source]`, where source is `.` repeated relativeDepth times, then module, then
- * `:` and imported when imported is present (`from .core import Engine` gives
+ * Each re-export (a module-level import binding Pass B found exported) is one more entry, sorted with
+ * the rest: `[local, 'reexport', source]`, where source is `.` repeated relativeDepth times, then
+ * module, then `:` and imported when imported is present (`from .core import Engine` gives
  * `["Engine","reexport",".core:Engine"]`, `import os` gives `["os","reexport","os"]`). No id enters,
  * so reordering the imports changes nothing.
  */
 export function interfaceHash(
   nodes: readonly NodeElement[],
-  _reexports: readonly ReExport[] = [],
+  reexports: readonly ReExport[] = [],
 ): string {
-  const sortedEntries = nodes
-    .filter((node) => node.properties['exported'] === true)
-    .map((node) => {
-      const kind = node.properties['kind'];
-      const signature = node.properties['signature'];
-      const entry: readonly [string, string | null, string | null] = [
-        node.id,
-        typeof kind === 'string' ? kind : null,
-        typeof signature === 'string' ? signature : null,
-      ];
-      return { entry, text: JSON.stringify(entry) };
-    })
+  const entries: (readonly [string, string | null, string | null])[] = [];
+  for (const node of nodes) {
+    if (node.properties['exported'] !== true) continue;
+    const kind = node.properties['kind'];
+    const signature = node.properties['signature'];
+    entries.push([
+      node.id,
+      typeof kind === 'string' ? kind : null,
+      typeof signature === 'string' ? signature : null,
+    ]);
+  }
+  for (const reexport of reexports) {
+    const prefix = `${'.'.repeat(reexport.relativeDepth)}${reexport.module}`;
+    const source = reexport.imported !== undefined ? `${prefix}:${reexport.imported}` : prefix;
+    entries.push([reexport.local, 'reexport', source]);
+  }
+  const sortedEntries = entries
+    .map((entry) => ({ entry, text: JSON.stringify(entry) }))
     .toSorted((a, b) => compareCodeUnits(a.text, b.text))
     .map((item) => item.entry);
   const digest = createHash('sha256').update(JSON.stringify(sortedEntries), 'utf8').digest('hex');

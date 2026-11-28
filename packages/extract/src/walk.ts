@@ -2,7 +2,7 @@
 // f18ee71:packages/engine/src/extract/walk.ts (extractDeclarations, walkContainer, emitTypeDecl,
 // emitMethod, emitMember, defineSymbol): ids come from `makeNodeId` with the `$root` frame and no
 // module frame in children's scopes (decision 92), fqns from `makeSymbolFqn` (decisions 90, 91), and
-// resolveCallee is gone (U6a.2 acceptance). Pass B's calls are pass-b.ts (U6a.2-4a); imports BMO-134.
+// resolveCallee is gone (U6a.2 acceptance). Pass B's calls and imports are pass-b.ts (U6a.2-4a, BMO-134).
 
 import {
   makeNodeId,
@@ -12,7 +12,6 @@ import {
   type SymbolDescriptor,
 } from '@cpg/model';
 import type { ElementBuilder } from './builder';
-import { type Binding, type ContainerChild, type Declared, walkCalls } from './pass-b';
 import type {
   ContainerKind,
   ExtractOutcome,
@@ -23,6 +22,8 @@ import type {
   SyntaxNode,
   TypeDeclInfo,
 } from './contract';
+import type { ReExport } from './digest';
+import { type Binding, type ContainerChild, type Declared, walkCalls } from './pass-b';
 
 /** The truncation report of an `ExtractOutcome` of kind `truncated`. */
 type Truncation = Extract<ExtractOutcome, { kind: 'truncated' }>['truncation'];
@@ -30,6 +31,8 @@ type Truncation = Extract<ExtractOutcome, { kind: 'truncated' }>['truncation'];
 export interface WalkResult {
   /** AST nodes the walker visited, the root included. */
   readonly astNodesVisited: number;
+  /** Module-level exported import bindings for `interfaceHash`; empty when Pass B did not run. */
+  readonly reexports: readonly ReExport[];
   /** Present iff a budget limit stopped the walk (I17). */
   readonly truncation?: Truncation;
 }
@@ -124,7 +127,8 @@ function unknownScope(containerScope: readonly string[]): readonly [string, ...s
  *
  * 4. Pass B (pass-b.ts walkCalls) runs only when Pass A completed the file (I21), over every container
  *    child Pass A visited except an ERROR and a compound statement, in pre-order, each with what Pass A
- *    declared for it.
+ *    declared for it; it emits CALLs and IMPORTs (with their edges and ref sites) and returns the
+ *    module-level exported import bindings for `interfaceHash`.
  */
 export function walkFile(
   request: ExtractRequest,
@@ -244,6 +248,7 @@ export function walkFile(
     visited.push({
       node,
       container: ctx.containerKind,
+      containerId: ctx.parentId,
       declared: { info, id, scope, params: [] },
     });
 
@@ -417,7 +422,7 @@ export function walkFile(
           if (truncated !== undefined) return truncated;
           continue;
         }
-        visited.push({ node: child, container: ctx.containerKind });
+        visited.push({ node: child, container: ctx.containerKind, containerId: ctx.parentId });
         continue;
       }
 
@@ -431,6 +436,7 @@ export function walkFile(
           visited.push({
             node: child,
             container: ctx.containerKind,
+            containerId: ctx.parentId,
             declared: emitMethod(child, info, ctx),
           });
           break;
@@ -438,6 +444,7 @@ export function walkFile(
           visited.push({
             node: child,
             container: ctx.containerKind,
+            containerId: ctx.parentId,
             declared: emitMember(child, info, ctx),
           });
           break;
@@ -448,7 +455,7 @@ export function walkFile(
 
   if (root.type === 'ERROR') {
     emitUnknown(root, []);
-    return { astNodesVisited };
+    return { astNodesVisited, reexports: [] };
   }
 
   const truncation = walkContainer(root.namedChildren, {
@@ -459,7 +466,7 @@ export function walkFile(
     depth: 0,
   });
 
-  if (truncation !== undefined) return { astNodesVisited, truncation };
-  walkCalls({ request, adapter, moduleId, children: visited }, builder);
-  return { astNodesVisited };
+  if (truncation !== undefined) return { astNodesVisited, reexports: [], truncation };
+  const reexports = walkCalls({ request, adapter, moduleId, children: visited }, builder);
+  return { astNodesVisited, reexports };
 }
