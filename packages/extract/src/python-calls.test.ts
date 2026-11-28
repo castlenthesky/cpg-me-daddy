@@ -160,13 +160,28 @@ describe('a call', () => {
     },
   );
 
-  it.each(['print', 'len', 'str', 'isinstance', 'range'])(
-    'a bare call to the builtin %s carries the table’s target',
-    async (name) => {
-      const got = await verdictAt(`${name}(x)\n`, 'call', 0, 0);
-      expect(got).toEqual(expect.objectContaining({ calleeName: name, builtin: builtin(name) }));
-    },
-  );
+  it.each([
+    // In both archive sets.
+    'print',
+    'len',
+    'str',
+    'isinstance',
+    'range',
+    // Only in 21754b4 pythonPath.ts PYTHON_BUILTINS: the table is the union (11-salvage row 60).
+    'all',
+    'any',
+    'chr',
+    'divmod',
+    'hex',
+    'object',
+    'oct',
+    'ord',
+    'pow',
+    'slice',
+  ])('a bare call to the builtin %s carries the table’s target', async (name) => {
+    const got = await verdictAt(`${name}(x)\n`, 'call', 0, 0);
+    expect(got).toEqual(expect.objectContaining({ calleeName: name, builtin: builtin(name) }));
+  });
 
   it.each([
     ['x.print()\n', 'print'],
@@ -181,6 +196,14 @@ describe('a call', () => {
       });
       const info = got?.emits === 'CALL' ? got : undefined;
       expect([info?.calleeName, info?.builtin]).toEqual([name, undefined]);
+    },
+  );
+
+  it.each(['make()()\n', 'handlers[0]()\n', '(f)()\n'])(
+    'a computed callee %j is no CALL (undefined: descended ordinarily)',
+    async (source) => {
+      // find() takes the outermost call at 0:0, the one whose callee is a call, subscript or parens.
+      expect(await verdictAt(source, 'call', 0, 0)).toBeUndefined();
     },
   );
 });
@@ -217,6 +240,34 @@ describe('a decorator (U6a.2 acceptance: a CALL of kind decorator)', () => {
         nameParts: ['property'],
         nameNode: 'property@10:1',
         builtin: builtin('property'),
+      }),
+    );
+  });
+
+  it('a decorator that is a call is read as that call: its callee, receiver and arguments', async () => {
+    // `@app.route("/")`: `app` 1, `route` 5, `"/"` 11
+    expect(await verdictAt('@app.route("/")\ndef f():\n    pass\n', 'decorator', 0, 0)).toEqual(
+      call({
+        kind: 'decorator',
+        calleeName: 'route',
+        receiverText: 'app',
+        nameParts: ['app', 'route'],
+        nameNode: 'route@0:5',
+        receiverNode: 'app@0:1',
+        args: [[undefined, 'string@"/"@0:11']],
+      }),
+    );
+  });
+
+  it('a bare decorator call: its callee and its arguments (trace is no builtin)', async () => {
+    // `@trace(level())`: `trace` 1, `level()` 7; trace is not a builtin
+    expect(await verdictAt('@trace(level())\ndef f():\n    pass\n', 'decorator', 0, 0)).toEqual(
+      call({
+        kind: 'decorator',
+        calleeName: 'trace',
+        nameParts: ['trace'],
+        nameNode: 'trace@0:1',
+        args: [[undefined, 'call@level()@0:7']],
       }),
     );
   });

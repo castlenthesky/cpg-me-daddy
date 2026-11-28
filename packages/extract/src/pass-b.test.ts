@@ -470,6 +470,45 @@ describe('CALLS (I11): resolved only for a same-file target, external only from 
     expect(edgesOf(file, 'CALLS')).toEqual([`${call('main', 0)} -> \`main.py\`/len(). resolved`]);
     expect(file.symbols.filter((s) => s.origin !== 'local')).toEqual([]);
   });
+
+  it('never attributes a receiver call, even to a top-level name or to a method of its own class', async () => {
+    // pass-b.ts: a receiver call never gets CALLS, whatever its name (resolveCallee and its
+    // `local-this` rule are REMOVED, U6a.2 acceptance).
+    const file = await extractOk(
+      lines(
+        'def helper():',
+        '    pass',
+        '',
+        '',
+        'class Shape:',
+        '    def greet(self):',
+        '        pass',
+        '',
+        '    def run(self):',
+        '        self.greet()',
+        '',
+        '',
+        'def main(o):',
+        '    o.helper()',
+        '    o.Shape()',
+      ),
+    );
+    expect(callsOf(file)).toEqual([
+      `${call('Shape.run', 0)} greet`,
+      `${call('main', 0)} helper`,
+      `${call('main', 1)} Shape`,
+    ]);
+    expect(edgesOf(file, 'CALLS')).toEqual([]);
+  });
+
+  it('never attributes a call to a top-level MEMBER (only a METHOD or TYPE_DECL is a target)', async () => {
+    const file = await extractOk(lines('handler = make()', '', '', 'def main():', '    handler()'));
+    expect(callsOf(file)).toEqual([`${call('$root', 0)} make`, `${call('main', 0)} handler`]);
+    expect(edgesOf(file, 'CALLS')).toEqual([]);
+    expect(file.symbols.map((s) => s.fqn).toSorted()).toEqual(
+      ['`main.py`/', '`main.py`/handler.', '`main.py`/main().'].toSorted(),
+    );
+  });
 });
 
 describe('REACHING_DEF: a binding reaches the CALL that takes it as an argument (last match wins)', () => {
@@ -532,6 +571,26 @@ describe('REACHING_DEF: a binding reaches the CALL that takes it as an argument 
         },
       ]),
     );
+  });
+
+  it("prefers the region METHOD's PARAM to an earlier module MEMBER of the same name", async () => {
+    const file = await extractOk(lines('X = 1', '', '', 'def f(X):', '    g(X)'));
+    expect(edgesOf(file, 'REACHING_DEF')).toEqual([`file:main.py:PARAM:f.X -> ${call('f', 0)} X`]);
+  });
+
+  it('never reaches from a class-level MEMBER (only module MEMBERs are sources)', async () => {
+    const file = await extractOk(
+      lines('class K:', '    size = 1', '', '', 'def f():', '    g(size)'),
+    );
+    expect(edgesOf(file, 'REACHING_DEF')).toEqual([]);
+  });
+
+  it("reaches a MEMBER's own initializer from the earlier MEMBER, not from itself", async () => {
+    // "Declared before the $root statement": the initializer runs before its own binding exists.
+    const file = await extractOk(lines('X = 1', 'X = wrap(X)'));
+    expect(edgesOf(file, 'REACHING_DEF')).toEqual([
+      `file:main.py:MEMBER:X -> ${call('$root', 0)} X`,
+    ]);
   });
 });
 
@@ -614,12 +673,116 @@ describe('decorators: a decorated function gets a METHOD and a CALL of kind deco
         nodeId: call('$root', 3),
         filePath: 'main.py',
         kind: 'call',
-        position: { row: 15, column: 6 },
+        // `    @m.setter`: `@` 4, `m` 5, `.` 6, `setter` 7 (I20: the last segment)
+        position: { row: 15, column: 7 },
         nameParts: ['m', 'setter'],
       },
       { ...recv, kind: 'receiver' },
       { ...recv, kind: 'receiver-type' },
     ]);
+  });
+
+  it('reads a decorator that is a call as that call, and counts only the calls in its arguments', async () => {
+    // python.ts: `@trace(level())` is ONE CALL of kind decorator (trace's callee and args), then the
+    // walker descends only its arguments. `@` 0, `trace` 1, `level` 7; the decorator ends at 15.
+    const file = await extractOk(lines('@trace(level())', 'def f():', '    pass'));
+    expect(
+      file.nodes
+        .filter((n) => n.label === 'CALL')
+        .map((n) =>
+          [
+            n.id,
+            n.properties['callee_name'],
+            n.properties['kind'],
+            n.properties['args_count'],
+            formatRange(n.range),
+          ].join(' '),
+        )
+        .toSorted(),
+    ).toEqual([
+      `${call('$root', 0)} trace decorator 1 1:0-1:15`,
+      `${call('$root', 1)} level call 0 1:7-1:14`,
+    ]);
+    expect(sitesOf(file).map((s) => [s.nodeId, s.kind, s.position, s.nameParts])).toEqual([
+      [call('$root', 0), 'call', { row: 0, column: 1 }, ['trace']],
+      [call('$root', 1), 'call', { row: 0, column: 7 }, ['level']],
+    ]);
+  });
+
+  it("gives a property's getter and setter calls unique ids, each IN_SCOPE its own METHOD", async () => {
+    // Pass A ids the two METHODs `K.m` and `K.m:1` (walk.ts: a repeat takes an ordinal, and "its
+    // descendants follow the same rule"); I7 forbids two `CALL:K.m:0`, so the CALL scope `K.m` keeps one
+    // counter across both bodies, in source order (see the open question in the PR).
+    const file = await extractOk(
+      lines(
+        'class K:',
+        '    @property',
+        '    def m(self):',
+        '        return load()',
+        '',
+        '    @m.setter',
+        '    def m(self, v):',
+        '        store(v)',
+      ),
+    );
+    expect(callsOf(file)).toEqual([
+      `${call('$root', 0)} property`,
+      `${call('$root', 1)} setter`,
+      `${call('K.m', 0)} load`,
+      `${call('K.m', 1)} store`,
+    ]);
+    expect(edgesOf(file, 'IN_SCOPE')).toEqual([
+      `${call('$root', 0)} -> ${MOD}`,
+      `${call('$root', 1)} -> ${MOD}`,
+      `${call('K.m', 0)} -> file:main.py:METHOD:K.m`,
+      `${call('K.m', 1)} -> file:main.py:METHOD:K.m:1`,
+    ]);
+    expect(edgesOf(file, 'REACHING_DEF')).toEqual([
+      `file:main.py:PARAM:K.m.v -> ${call('K.m', 1)} v`,
+    ]);
+  });
+});
+
+describe('what the $root region holds, and what no region descends (decision 92, decision 95)', () => {
+  it('walks a compound module statement whole, and a class-body statement, in $root', async () => {
+    // Decision 92: a call no METHOD encloses is in $root, whatever statement holds it.
+    const file = await extractOk(
+      lines(
+        'def main():',
+        '    pass',
+        '',
+        '',
+        'if __name__ == "__main__":',
+        '    main()',
+        '',
+        '',
+        'class K:',
+        '    setup()',
+      ),
+    );
+    expect(callsOf(file)).toEqual([`${call('$root', 0)} main`, `${call('$root', 1)} setup`]);
+    expect(edgesOf(file, 'IN_SCOPE')).toEqual([
+      `${call('$root', 0)} -> ${MOD}`,
+      `${call('$root', 1)} -> ${MOD}`,
+    ]);
+    expect(edgesOf(file, 'CALLS')).toEqual([`${call('$root', 0)} -> \`main.py\`/main(). resolved`]);
+  });
+
+  it('does not descend an ERROR node: its call is neither emitted nor counted', async () => {
+    // The pinned grammar reads `b() )` as an ERROR holding the call `b()`, between two statements.
+    const file = await extractOk(lines('a()', 'b() )', 'c()'));
+    expect(callsOf(file)).toEqual([`${call('$root', 0)} a`, `${call('$root', 1)} c`]);
+    expect(file.nodes.filter((n) => n.label === 'UNKNOWN').map((n) => n.id)).toEqual([
+      'file:main.py:UNKNOWN:$root:0',
+    ]);
+  });
+
+  it('emits no CALL for a computed callee and gives it no ordinal, but counts the calls inside it', async () => {
+    // python.ts: a callee that is a call or a subscript is undefined, so the walker descends it.
+    const file = await extractOk(
+      lines('def main():', '    make()()', '    handlers[0]()', '    done()'),
+    );
+    expect(callsOf(file)).toEqual([`${call('main', 0)} make`, `${call('main', 1)} done`]);
   });
 });
 
