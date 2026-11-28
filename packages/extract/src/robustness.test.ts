@@ -476,6 +476,21 @@ describe('syntax errors through the real grammar (decision 95, C-PARSE I22)', ()
     });
   });
 
+  it('an unterminated docstring leaves no docstring_head: the body opens with a name, not a string', async () => {
+    const r = await run('m.py', 'def f():\n    """doc\n    pass\n');
+    // walk.ts's METHOD properties; python.ts: a docstring is a body whose first named child is an
+    // expression_statement holding a `string`. Here that statement holds the identifier `doc`.
+    expect(propsOf(okFile(r), 'file:m.py:METHOD:f')).toEqual({
+      name: 'f',
+      kind: 'function',
+      signature: 'f()',
+      params_count: 0,
+      exported: true,
+      async: false,
+      status: 'ready',
+    });
+  });
+
   // A stray comma in a parameter list: the grammar inserts a zero-width MISSING identifier (the only
   // MISSING-identifier inputs found; every MISSING name attempt became an ERROR). PRECONDITIONS, input.
   const MISSING_IDENT = [
@@ -992,6 +1007,15 @@ describe('async, decorators, PEP 695 and string annotations', () => {
     expect(propsOf(file, 'file:g.py:METHOD:f')['signature']).toBe('f(x: T) -> T');
     expect(propsOf(file, 'file:g.py:PARAM:f.x')['type_text']).toBe('T');
     expect(propsOf(file, 'file:g.py:MEMBER:Box.item')['type_text']).toBe('T');
+  });
+
+  it('a sync def that mentions `async ` in its body is not async (the text must START with it)', async () => {
+    const r = await run('a.py', 'def helper():\n    """Wraps an async call."""\n    pass\n');
+    // python.ts: async is "the node's text starts with `async` and whitespace".
+    expect(propsOf(okFile(r), 'file:a.py:METHOD:helper')).toMatchObject({
+      async: false,
+      docstring_head: 'Wraps an async call.',
+    });
   });
 
   it('string-literal annotations are kept as written, quotes included', async () => {
