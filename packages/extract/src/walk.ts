@@ -2,7 +2,7 @@
 // f18ee71:packages/engine/src/extract/walk.ts (extractDeclarations, walkContainer, emitTypeDecl,
 // emitMethod, emitMember, defineSymbol): ids come from `makeNodeId` with the `$root` frame and no
 // module frame in children's scopes (decision 92), fqns from `makeSymbolFqn` (decisions 90, 91), and
-// resolveCallee is gone (U6a.2 acceptance). Pass B (calls, imports, ref sites) is U6a.2-4.
+// resolveCallee is gone (U6a.2 acceptance). Pass B's calls are pass-b.ts (U6a.2-4a); imports BMO-134.
 
 import {
   makeNodeId,
@@ -12,6 +12,7 @@ import {
   type SymbolDescriptor,
 } from '@cpg/model';
 import type { ElementBuilder } from './builder';
+import { type Binding, type ContainerChild, type Declared, walkCalls } from './pass-b';
 import type {
   ContainerKind,
   ExtractOutcome,
@@ -106,6 +107,9 @@ function unknownScope(containerScope: readonly string[]): readonly [string, ...s
  * `astNodesVisited` exceed `maxNodes` (limit `maxNodes`), checked in that order. Only container
  * children count as visited (never a parameter or a body). The truncation names the limit, its value,
  * and the child's type and 0-based range; the whole walk stops there and what was built stays.
+ *
+ * 4. Pass B (pass-b.ts walkCalls) runs only when Pass A completed the file (I21), over every container
+ *    child Pass A visited except an ERROR, in pre-order, each with what Pass A declared for it.
  */
 export function walkFile(
   request: ExtractRequest,
@@ -153,6 +157,8 @@ export function walkFile(
   const maxNodes = budget?.maxNodes;
   const idCounts = new Map<string, number>();
   const unknownCounts = new Map<string, number>();
+  /** Pass B's input: every container child Pass A visited but an ERROR, in pre-order. */
+  const visited: ContainerChild[] = [];
 
   function mintId(
     kind: 'TYPE_DECL' | 'METHOD' | 'MEMBER' | 'PARAM',
@@ -205,6 +211,11 @@ export function walkFile(
       { kind: 'type', name: info.name },
     ];
     const id = mintId('TYPE_DECL', scope);
+    visited.push({
+      node,
+      container: ctx.containerKind,
+      declared: { info, id, scope, params: [] },
+    });
 
     builder.addNode({
       label: 'TYPE_DECL',
@@ -240,7 +251,7 @@ export function walkFile(
     });
   }
 
-  function emitMethod(node: SyntaxNode, info: MethodInfo, ctx: ContainerContext): void {
+  function emitMethod(node: SyntaxNode, info: MethodInfo, ctx: ContainerContext): Declared {
     const scope = appendScope(ctx.scope, info.name);
     const descriptors: readonly SymbolDescriptor[] = [
       ...ctx.descriptors,
@@ -280,9 +291,11 @@ export function walkFile(
       ctx.containerKind === 'TYPE_DECL' ? 'method' : 'function',
     );
 
+    const params: Binding[] = [];
     for (const [ordinal, param] of info.params.entries()) {
       const paramScope = appendScope(scope, param.name);
       const paramId = mintId('PARAM', paramScope);
+      params.push({ name: param.name, id: paramId });
       builder.addNode({
         label: 'PARAM',
         id: paramId,
@@ -304,9 +317,10 @@ export function walkFile(
         properties: {},
       });
     }
+    return { info, id, scope, params };
   }
 
-  function emitMember(node: SyntaxNode, info: MemberInfo, ctx: ContainerContext): void {
+  function emitMember(node: SyntaxNode, info: MemberInfo, ctx: ContainerContext): Declared {
     const scope = appendScope(ctx.scope, info.name);
     const descriptors: readonly SymbolDescriptor[] = [
       ...ctx.descriptors,
@@ -334,6 +348,7 @@ export function walkFile(
       properties: {},
     });
     defineSymbol('MEMBER', id, descriptors, 'variable');
+    return { info, id, scope, params: [] };
   }
 
   function walkContainer(
@@ -377,7 +392,10 @@ export function walkFile(
       }
 
       const info = adapter.classify(child, ctx.containerKind);
-      if (info === undefined) continue;
+      if (info === undefined) {
+        visited.push({ node: child, container: ctx.containerKind });
+        continue;
+      }
 
       switch (info.declares) {
         case 'TYPE_DECL': {
@@ -386,10 +404,18 @@ export function walkFile(
           break;
         }
         case 'METHOD':
-          emitMethod(child, info, ctx);
+          visited.push({
+            node: child,
+            container: ctx.containerKind,
+            declared: emitMethod(child, info, ctx),
+          });
           break;
         case 'MEMBER':
-          emitMember(child, info, ctx);
+          visited.push({
+            node: child,
+            container: ctx.containerKind,
+            declared: emitMember(child, info, ctx),
+          });
           break;
       }
     }
@@ -404,5 +430,7 @@ export function walkFile(
     depth: 0,
   });
 
-  return truncation === undefined ? { astNodesVisited } : { astNodesVisited, truncation };
+  if (truncation !== undefined) return { astNodesVisited, truncation };
+  walkCalls({ request, adapter, moduleId, children: visited }, builder);
+  return { astNodesVisited };
 }

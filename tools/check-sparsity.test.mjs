@@ -33,11 +33,11 @@ const pyFiles = (dir) =>
     .map((d) => join(d.parentPath, d.name));
 
 /**
- * U6a.2-3: the code tier's nodes in the ladder, from its hand-written answer: the [structural] node
- * lines of python files whose label Pass A emits (CALL and IMPORT are Pass B's, U6a.2-4).
+ * U6a.2-3 and U6a.2-4a: the code tier's nodes in the ladder, from its hand-written answer: the
+ * [structural] node lines of python files whose label Pass A or Pass B's calls emit (IMPORT is BMO-134).
  */
-const PASS_A = new Set(['MODULE', 'TYPE_DECL', 'METHOD', 'PARAM', 'MEMBER', 'UNKNOWN']);
-function passANodes(ladder) {
+const EMITTED = new Set(['MODULE', 'TYPE_DECL', 'METHOD', 'PARAM', 'MEMBER', 'UNKNOWN', 'CALL']);
+function codeNodes(ladder) {
   let count = 0;
   for (const rung of readdirSync(ladder).filter((name) => /^\d\d-/.test(name))) {
     let section = '';
@@ -46,7 +46,7 @@ function passANodes(ladder) {
       const header = /^\[(\w+)\]$/.exec(line);
       if (header) section = header[1];
       const [label = '', id = ''] = line.split(/\s+/);
-      if (!header && section === 'structural' && PASS_A.has(label) && /\.py:/.test(id)) count += 1;
+      if (!header && section === 'structural' && EMITTED.has(label) && /\.py:/.test(id)) count += 1;
     }
   }
   return count;
@@ -81,13 +81,14 @@ describe('check-sparsity on the ladder through the built bin', () => {
     () => {
       const files = pyFiles(LADDER);
       const total = files.reduce((sum, f) => sum + loc(readFileSync(f, 'utf8')), 0);
-      const nodes = passANodes(LADDER);
+      const nodes = codeNodes(LADDER);
       const r = run([]);
       expect([r.status, r.stderr]).toEqual([0, '']);
       expect(lines(r.stdout)).toEqual([
         `check-sparsity: ${nodes} nodes / ${total} LOC = ${(nodes / total).toFixed(3)} n/LOC over ${files.length} files (bar 1.5)`,
       ]);
-      expect([files.length, nodes]).toEqual([12, 33]);
+      // 33 Pass A lines and the 6 CALL lines of rungs 04 (2), 06 (1), 07 (1) and 08 (2).
+      expect([files.length, nodes]).toEqual([12, 39]);
     },
   );
 

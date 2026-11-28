@@ -1,14 +1,21 @@
 // The Python adapter: the MODULE tier (U6a.2-2) and the declaration half (U6a.2-3), ported from archive
 // f18ee71:packages/engine/src/extract/python.ts (classifyFunction, classifyClass, classifyAssignment,
 // paramInfo, the docstring helpers), plus `decorated_definition` (decision 107). The expression half
-// (Pass B) is U6a.2-4; what it adds is declared-not-emitted in the coverage table, never silent (I13).
+// (Pass B calls, U6a.2-4a) from classifyExpressionPy, calleeShape, argInfos and localBindingsPy, with
+// resolveCallee's attribution REMOVED: a call is syntax, plus the builtin table's answer. IMPORT is
+// BMO-134, declared-not-emitted in the coverage table until then, never silent (I13).
 
 import type { WorkspacePath } from '@cpg/model';
 import type {
+  ArgInfo,
+  BuiltinTarget,
+  CallInfo,
+  CallKind,
   ContainerKind,
   CoverageManifest,
   DeclarationInfo,
   Disposition,
+  ExpressionVerdict,
   LanguageAdapter,
   MemberInfo,
   MethodInfo,
@@ -46,14 +53,16 @@ const PYTHON_COVERAGE: CoverageManifest = Object.freeze({
       'dictionary_splat_pattern',
     ),
     MEMBER: emits('expression_statement'),
-    CALL: later('Pass B calls land in U6a.2-4', 'U6a.2-4'),
-    IMPORT: later('Pass B imports land in U6a.2-4', 'U6a.2-4'),
+    CALL: emits('call', 'decorator'),
+    IMPORT: later('Pass B imports land in U6a.2-4b', 'BMO-134'),
     SYMBOL: emits(
       'module',
       'class_definition',
       'function_definition',
       'expression_statement',
       'decorated_definition',
+      'call',
+      'decorator',
     ),
     COMMUNITY: notMine('analysis-pass'),
     TAG: notMine('meta'),
@@ -76,8 +85,8 @@ const PYTHON_COVERAGE: CoverageManifest = Object.freeze({
       'expression_statement',
       'decorated_definition',
     ),
-    CALLS: later('Pass B same-file CALLS (decision 93) land in U6a.2-4', 'U6a.2-4'),
-    IN_SCOPE: later('Pass B call scopes land in U6a.2-4', 'U6a.2-4'),
+    CALLS: emits('call', 'decorator'),
+    IN_SCOPE: emits('call', 'decorator'),
     IMPORTS: notMine('resolve-pass'),
     INHERITS_FROM: later(
       'per-file inheritance with a SYMBOL endpoint; no unit scheduled',
@@ -88,7 +97,7 @@ const PYTHON_COVERAGE: CoverageManifest = Object.freeze({
     TAGGED_BY: notMine('meta'),
     TARGETS: notMine('analysis-pass'),
     DEPENDS_ON: notMine('analysis-pass'),
-    REACHING_DEF: later('Pass B sparse data-flow lands in U6a.2-4', 'U6a.2-4'),
+    REACHING_DEF: emits('call', 'decorator'),
     SOURCE_FILE: notMine('filesystem-tier'),
   }),
 });
@@ -320,6 +329,151 @@ function classify(node: SyntaxNode, container: ContainerKind): DeclarationInfo |
 }
 
 /**
+ * The builtin table: archive f18ee71 builtins/python-stdlib.ts and 21754b4 pythonPath.ts
+ * PYTHON_BUILTINS reconciled as a union (11-salvage row 60). Compiled in, never configuration.
+ */
+const PYTHON_BUILTINS: ReadonlySet<string> = new Set(
+  [
+    'abs all any bool bytes callable chr classmethod dict dir divmod enumerate filter float format',
+    'frozenset getattr hasattr hash hex id input int isinstance issubclass iter len list map max min',
+    'next object oct open ord pow print property range repr reversed round set setattr slice sorted',
+    'staticmethod str sum super tuple type vars zip',
+  ]
+    .join(' ')
+    .split(' '),
+);
+
+const TRANSPARENT = new Set(['lambda']);
+const STOP = new Set(['function_definition', 'class_definition', 'decorated_definition']);
+
+/** An identifier, or a chain of identifier attributes: its names outermost first and its last token. */
+function nameChain(node: SyntaxNode): { parts: readonly string[]; last: SyntaxNode } | undefined {
+  if (node.type === 'identifier') return { parts: [node.text], last: node };
+  if (node.type !== 'attribute') return undefined;
+  const object = node.childForFieldName('object');
+  const attribute = node.childForFieldName('attribute');
+  if (object === null || attribute?.type !== 'identifier') return undefined;
+  const inner = nameChain(object);
+  return inner === undefined
+    ? undefined
+    : { parts: [...inner.parts, attribute.text], last: attribute };
+}
+
+/** A `keyword_argument` is checked by its `value`; anything else as it is. */
+function argInfo(node: SyntaxNode): ArgInfo {
+  const value = node.type === 'keyword_argument' ? node.childForFieldName('value') : node;
+  return value?.type === 'identifier' ? { node, identifier: value.text } : { node };
+}
+
+/** A callee read as a CallInfo, or undefined when it is not a name (a call, subscript or parens). */
+function callInfo(
+  callee: SyntaxNode,
+  kind: CallKind,
+  argList: SyntaxNode | null,
+): CallInfo | undefined {
+  const args = (argList?.namedChildren ?? []).map(argInfo);
+  if (callee.type === 'identifier') {
+    const name = callee.text;
+    const builtin: BuiltinTarget | undefined = PYTHON_BUILTINS.has(name)
+      ? { scheme: 'site', package: 'python-stdlib', descriptors: [{ kind: 'method', name }] }
+      : undefined;
+    return {
+      emits: 'CALL',
+      kind,
+      calleeName: name,
+      nameParts: [name],
+      nameNode: callee,
+      args,
+      ...(builtin !== undefined ? { builtin } : {}),
+    };
+  }
+  if (callee.type !== 'attribute') return undefined;
+  const object = callee.childForFieldName('object');
+  const attribute = callee.childForFieldName('attribute');
+  if (object === null || attribute?.type !== 'identifier') return undefined;
+  // The conservative receiver rule (subgraph.ts, kept by 11-salvage.yaml): a receiver token only for
+  // a name chain, never for `f(x).g()` or `a[0].g()`, whose nameParts are the last segment alone.
+  const receiver = nameChain(object);
+  return {
+    emits: 'CALL',
+    kind,
+    calleeName: attribute.text,
+    receiverText: object.text,
+    nameParts: [...(receiver?.parts ?? []), attribute.text],
+    nameNode: attribute,
+    ...(receiver !== undefined ? { receiverNode: receiver.last } : {}),
+    args,
+  };
+}
+
+/**
+ * The expression table (archive python.ts classifyExpressionPy, calleeShape, argInfos; subgraph.ts's
+ * receiver rule), sparse by design:
+ * - `call` with a `function` field that is an `identifier` (bare) or an `attribute` whose `attribute`
+ *   is an identifier: a CallInfo of kind `call`. Any other callee (a call, subscript, parenthesized
+ *   expression) is undefined, so the walker descends it ordinarily.
+ *   - calleeName: the identifier's text, or the attribute's `attribute` text; nameNode: that token.
+ *   - receiverText: the attribute's `object` text as written (`a.b`, `f(x)`, `a[0]`); absent when bare.
+ *   - nameParts: the callee chain outermost first when every link is an identifier or an attribute of
+ *     identifiers (`['g', 'greet']`, `['a', 'b', 'c']`); for a computed receiver the last segment alone.
+ *   - receiverNode: only when the `object` is an identifier or a chain of identifier attributes: the
+ *     chain's LAST identifier (`b` of `a.b.c()`, subgraph.ts receiverToken); absent for `f(x).g()`,
+ *     `a[0].g()` (the conservative receiver rule, 11-salvage.yaml).
+ *   - args: each named child of the `arguments` field in order; `identifier` is set for a bare
+ *     identifier, and for a `keyword_argument` whose `value` is a bare identifier (that value's text).
+ *   - builtin: for a bare callee whose name is in the builtin table, `{ scheme: 'site', package:
+ *     'python-stdlib', descriptors: [{ kind: 'method', name }] }` (archive builtins/python-stdlib.ts);
+ *     never for an attribute callee.
+ * - `decorator`: a CallInfo of kind `decorator` for its expression (the decorator node's one named
+ *   child): an identifier or an identifier attribute is read as a callee as above, with args `[]` (no
+ *   argument list is written); a `call` expression (`@app.route("/")`) is read as that call (its
+ *   callee and args), and the walker then descends only its arguments. Anything else is undefined.
+ * - `lambda`: `{ emits: 'none', descend: 'transparent' }` (an inline callback: its calls count in the
+ *   enclosing region).
+ * - `function_definition`, `class_definition`, `decorated_definition`: `{ emits: 'none', descend:
+ *   'stop' }` (a nested named declaration is never descended, decision 92).
+ * - anything else: undefined (descend ordinarily).
+ */
+function classifyExpression(node: SyntaxNode): ExpressionVerdict | undefined {
+  if (TRANSPARENT.has(node.type)) return { emits: 'none', descend: 'transparent' };
+  if (STOP.has(node.type)) return { emits: 'none', descend: 'stop' };
+  const expression = node.type === 'decorator' ? node.namedChildren[0] : node;
+  const kind: CallKind = node.type === 'decorator' ? 'decorator' : 'call';
+  if (expression?.type === 'call') {
+    const callee = expression.childForFieldName('function');
+    return callee === null
+      ? undefined
+      : callInfo(callee, kind, expression.childForFieldName('arguments'));
+  }
+  return node.type === 'decorator' && expression !== undefined
+    ? callInfo(expression, kind, null)
+    : undefined;
+}
+
+/**
+ * Every name a region binds by a plain assignment whose `left` is an `identifier` (`x = 1`,
+ * `x: int = 1`), in source order, anywhere in the region's tree except inside a `lambda`, a
+ * `function_definition` or a `class_definition` (their own scopes); an assignment's right side is not
+ * searched (archive localBindingsPy). A tuple, attribute or augmented assignment binds nothing here (a
+ * documented gap, as are `for`, `with`, `except` and walrus binders). REACHING_DEF treats each as
+ * shadowing an outer binding.
+ */
+function localBindings(regionRoot: SyntaxNode): readonly string[] {
+  const names: string[] = [];
+  const visit = (node: SyntaxNode): void => {
+    if (node.type === 'assignment') {
+      const left = node.childForFieldName('left');
+      if (left?.type === 'identifier') names.push(left.text);
+      return;
+    }
+    if (TRANSPARENT.has(node.type) || STOP.has(node.type)) return;
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(regionRoot);
+  return names;
+}
+
+/**
  * Total over the 14 labels and 15 edge types (I13), honest against the ladder both ways (I14). The
  * same frozen object on every call (the nodes and edges records frozen too): compiled in, never
  * configuration.
@@ -334,5 +488,7 @@ export const pythonAdapter: LanguageAdapter = {
   moduleRootType: 'module',
   moduleName,
   classify,
+  classifyExpression,
+  localBindings,
   coverage,
 };

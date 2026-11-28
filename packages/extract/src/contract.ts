@@ -14,6 +14,7 @@ import type {
   METHOD_KIND,
   NodeLabel,
   SourceRange,
+  SymbolDescriptor,
   TYPE_DECL_KIND,
   WorkspacePath,
 } from '@cpg/model';
@@ -320,6 +321,19 @@ export interface CallInfo {
   /** The receiver's token, for its receiver site (declined `receiver-unknown` in v1, I12). */
   readonly receiverNode?: SyntaxNode;
   readonly args: readonly ArgInfo[];
+  /**
+   * The adapter's builtin table's answer for a bare callee (U6a.2-4a, additive per decision 93): the
+   * walker mints this external SYMBOL and a CALLS `external` edge only when no top-level declaration
+   * of this file binds the name (I11: external only from the adapter's builtin table).
+   */
+  readonly builtin?: BuiltinTarget;
+}
+
+/** A builtin's SYMBOL, as `makeSymbolFqn`'s external parts (archive builtins/python-stdlib.ts). */
+export interface BuiltinTarget {
+  readonly scheme: string;
+  readonly package: string;
+  readonly descriptors: readonly SymbolDescriptor[];
 }
 
 /** Pass B's verdict on one node of an expression region; `undefined` means descend ordinarily. */
