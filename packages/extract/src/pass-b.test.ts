@@ -777,6 +777,29 @@ describe('what the $root region holds, and what no region descends (decision 92,
     ]);
   });
 
+  it('does not descend an ERROR node inside a METHOD body either (sabotage gap)', async () => {
+    // The pinned grammar puts the ERROR holding `b()` in main's block, between two statements.
+    const file = await extractOk(lines('def main():', '    a()', '    b() )', '    c()'));
+    expect(callsOf(file)).toEqual([`${call('main', 0)} a`, `${call('main', 1)} c`]);
+  });
+
+  it('attributes no class nested in a class: only a top-level TYPE_DECL is a target (sabotage gap)', async () => {
+    // pass-b.ts: CALLS resolved only to a top-level METHOD or TYPE_DECL of the file.
+    const file = await extractOk(
+      lines(
+        'class Outer:',
+        '    class Inner:',
+        '        pass',
+        '',
+        '',
+        'def main():',
+        '    Inner()',
+      ),
+    );
+    expect(callsOf(file)).toEqual([`${call('main', 0)} Inner`]);
+    expect(edgesOf(file, 'CALLS')).toEqual([]);
+  });
+
   it('emits no CALL for a computed callee and gives it no ordinal, but counts the calls inside it', async () => {
     // python.ts: a callee that is a call or a subscript is undefined, so the walker descends it.
     const file = await extractOk(
