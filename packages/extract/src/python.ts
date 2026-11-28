@@ -148,6 +148,12 @@ function isExported(name: string): boolean {
   return !name.startsWith('_');
 }
 
+/** A node's text as a property value, or `undefined` when absent or containing U+0000 (decision 115, I19). */
+function propertyText(node: SyntaxNode | null): string | undefined {
+  if (node === null || node.text.includes('\u0000')) return undefined;
+  return node.text;
+}
+
 /** Extracts the parameter identifier name from an identifier or a splat pattern. */
 function paramName(node: SyntaxNode | null | undefined): string | undefined {
   if (node?.type === 'identifier') return node.text;
@@ -180,21 +186,21 @@ function paramInfo(node: SyntaxNode): Omit<ParamInfo, 'ordinal'> | undefined {
       return buildParam(
         paramName(node.namedChildren[0]),
         node,
-        node.childForFieldName('type')?.text,
+        propertyText(node.childForFieldName('type')),
       );
     case 'default_parameter':
       return buildParam(
         paramName(node.childForFieldName('name')),
         node,
         undefined,
-        node.childForFieldName('value')?.text,
+        propertyText(node.childForFieldName('value')),
       );
     case 'typed_default_parameter':
       return buildParam(
         paramName(node.childForFieldName('name')),
         node,
-        node.childForFieldName('type')?.text,
-        node.childForFieldName('value')?.text,
+        propertyText(node.childForFieldName('type')),
+        propertyText(node.childForFieldName('value')),
       );
     case 'list_splat_pattern':
     case 'dictionary_splat_pattern':
@@ -211,9 +217,15 @@ function paramInfo(node: SyntaxNode): Omit<ParamInfo, 'ordinal'> | undefined {
  *   (the name of its first named child, an identifier or a splat, with typeText its `type`);
  *   `default_parameter` and `typed_default_parameter` (`name`, with typeText `type` and defaultText
  *   `value` when present); `list_splat_pattern` and `dictionary_splat_pattern` (the identifier inside,
- *   no stars). Anything else (`/`, `*`, a tuple pattern) is no param.
- * - signature (archive): `<name>(<p>, ...)` with `<p>` = `name` or `name: typeText`, then
- *   ` -> <return_type text>` when there is one: `greet(name: str, times) -> str`.
+ *   no stars). Anything else (`/`, `*`, a tuple pattern, an ERROR) is no param and takes no position.
+ *   Every other child takes the next 0-based position; a param whose name is `''` (a MISSING
+ *   identifier is zero-width) yields no ParamInfo while still consuming its position, and each kept
+ *   param gets its position as `ordinal` (decision 114). A `typeText` or `defaultText` whose text
+ *   contains U+0000 is omitted (decision 115, C-EXTRACT I19).
+ * - signature (archive): `<name>(<p>, ...)` over the kept params only, with `<p>` = `name` or
+ *   `name: <type field text>` (read from the param node's `type` field, even when `typeText` was
+ *   omitted), then ` -> <return_type text>` when there is one (`greet(name: str, times) -> str`),
+ *   with every U+0000 character removed (decision 115, C-EXTRACT I19).
  * - kind: in a TYPE_DECL `constructor` for `__init__`, else `method`; in the MODULE `function`.
  * - exported: the name has no leading `_`. async: the node's text starts with `async` and whitespace.
  * - docstringHead (archive; a class's too): the body's first named child is an `expression_statement`
@@ -227,20 +239,29 @@ function classifyFunction(node: SyntaxNode, container: ContainerKind): MethodInf
   if (nameNode === null || paramsNode === null) return undefined;
 
   const name = nameNode.text;
-  // PASSTHROUGH (sprint 40 RED): the ordinal is the param's index, as before; decision 114's
-  // positions (a MISSING name holds one) are the implementation.
-  const params = paramsNode.namedChildren
-    .map((param) => paramInfo(param))
-    .filter((param): param is Omit<ParamInfo, 'ordinal'> => param !== undefined)
-    .map((param, ordinal): ParamInfo => ({ ...param, ordinal }));
+  const params: ParamInfo[] = [];
+  let position = 0;
+  for (const child of paramsNode.namedChildren) {
+    const info = paramInfo(child);
+    if (info === undefined) continue;
+    const ordinal = position;
+    position += 1;
+    if (info.name === '') continue;
+    params.push({ ...info, ordinal });
+  }
 
   const returnType = node.childForFieldName('return_type')?.text;
   const paramList = params
-    .map((param) =>
-      param.typeText !== undefined ? `${param.name}: ${param.typeText}` : param.name,
-    )
+    .map((param) => {
+      const type = param.node.childForFieldName('type')?.text;
+      return type !== undefined ? `${param.name}: ${type}` : param.name;
+    })
     .join(', ');
-  const signature = `${name}(${paramList})${returnType !== undefined ? ` -> ${returnType}` : ''}`;
+  const signature =
+    `${name}(${paramList})${returnType !== undefined ? ` -> ${returnType}` : ''}`.replaceAll(
+      '\u0000',
+      '',
+    );
 
   const isAsync = /^async\s/.test(node.text);
   const kind =
@@ -288,8 +309,9 @@ function classifyClass(node: SyntaxNode): TypeDeclInfo | undefined {
 /**
  * An `expression_statement` whose first named child is an `assignment` with an `identifier` `left`
  * (`X = 1`, `X: int = 1`, `X: int`, the first name of `a = b = 1`): a MEMBER named by it, typeText its
- * `type` field, value its `right` field, each when present. A tuple, attribute or augmented
- * assignment, or any other statement, is undefined.
+ * `type` field (omitted when absent or containing U+0000; decision 115, C-EXTRACT I19), value its
+ * `right` field when present. A tuple, attribute or augmented assignment, or any other statement, is
+ * undefined.
  */
 function classifyAssignment(node: SyntaxNode): MemberInfo | undefined {
   const inner = node.namedChildren[0];
@@ -297,7 +319,7 @@ function classifyAssignment(node: SyntaxNode): MemberInfo | undefined {
   const left = inner.childForFieldName('left');
   if (left?.type !== 'identifier') return undefined;
 
-  const typeText = inner.childForFieldName('type')?.text;
+  const typeText = propertyText(inner.childForFieldName('type'));
   const value = inner.childForFieldName('right') ?? undefined;
 
   return {
